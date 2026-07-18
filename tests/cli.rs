@@ -17,7 +17,10 @@ fn status_json_reports_base_ref() {
         .args(["status", "--json"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"base_ref\""));
+        .stdout(predicate::str::contains("\"base_ref\""))
+        // The resolved baseline commit is reported (this repo is a git repo, so
+        // it resolves to a 40-char SHA; the key is present regardless).
+        .stdout(predicate::str::contains("\"base_commit\""));
 }
 
 #[test]

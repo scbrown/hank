@@ -310,22 +310,31 @@ impl Cli {
         let root = std::env::current_dir()?;
         let config = HankConfig::load(&root)?;
         let tenant = self.tenant.as_deref().unwrap_or("(single-tenant)");
+        // Resolve the configured base ref to a concrete commit (None outside a
+        // repo / unresolved ref — degrade, never fail).
+        let base_commit = crate::git::resolve_commit(&root, &config.base_ref);
 
         if self.json {
             let out = serde_json::json!({
                 "base_ref": config.base_ref,
+                "base_commit": base_commit,
                 "tenant": tenant,
                 "tiers": tier_availability(),
                 "quipu": { "enabled": config.quipu.enabled, "branch_model": config.quipu.branch_model },
             });
             println!("{}", serde_json::to_string_pretty(&out)?);
         } else {
+            let commit = base_commit.as_deref().map_or_else(
+                || "(unresolved — not a git repo or ref absent)".to_string(),
+                |c| c[..c.len().min(12)].to_string(),
+            );
             println!("{}", "hank status".bold());
-            println!("  base ref  : {}", config.base_ref);
-            println!("  tenant    : {tenant}");
-            println!("  tiers     : {}", tier_availability().join(", "));
+            println!("  base ref    : {}", config.base_ref);
+            println!("  base commit : {commit}");
+            println!("  tenant      : {tenant}");
+            println!("  tiers       : {}", tier_availability().join(", "));
             println!(
-                "  quipu     : enabled={} branch_model={}",
+                "  quipu       : enabled={} branch_model={}",
                 config.quipu.enabled, config.quipu.branch_model
             );
         }
