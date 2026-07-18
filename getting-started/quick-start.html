@@ -197,6 +197,13 @@ hank completions bash &gt; hank.bash
 </code></pre>
 <p>Every command accepts the global flags <code>--json</code>, <code>--quiet</code>, <code>--verbose</code>,
 <code>--tenant &lt;id&gt;</code>, and <code>--config &lt;path&gt;</code>.</p>
+<h2 id="call-graph-and-blast-radius"><a class="header" href="#call-graph-and-blast-radius">Call graph and blast radius</a></h2>
+<pre><code class="language-bash"># Direct callers and callees of a symbol
+hank callers authenticate src
+
+# Blast radius: what changing a symbol transitively affects
+hank impact authenticate src --hops 5 --json
+</code></pre>
 <h2 id="the-mcp-server"><a class="header" href="#the-mcp-server">The MCP server</a></h2>
 <p>Built with the <code>mcp</code> feature, <code>hank serve</code> exposes <code>hank_status</code>,
 <code>hank_symbols</code>, <code>hank_references</code>, and <code>hank_analyze</code> over MCP:</p>
@@ -205,10 +212,10 @@ cargo run --features mcp -- serve --http  # streamable-HTTP at :3040/mcp
 </code></pre>
 <p>See the <a href="../reference/mcp-tools.html">MCP Tools reference</a>.</p>
 <h2 id="what-works-today"><a class="header" href="#what-works-today">What works today</a></h2>
-<p><code>analyze</code>, <code>refs</code>, and <code>status</code> do real tree-sitter extraction, and the four
-MCP tools above are live. <code>callers</code>, <code>impact</code>, <code>verify</code>, and <code>promote</code> are
-declared with their final shape and print a phase notice until their engines
-land — see the <a href="../design/specification.html">Specification</a>.</p>
+<p><code>analyze</code>, <code>refs</code>, <code>status</code>, the call-graph commands <code>callers</code>/<code>impact</code>, and the
+seven MCP tools are live. <code>verify</code> and <code>promote</code> are declared with their final
+shape and print a phase notice until their engines land — see the
+<a href="../design/specification.html">Specification</a>.</p>
 
                     </main>
 
