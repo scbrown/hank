@@ -31,6 +31,11 @@ pub struct FileStructure {
     pub symbols: Vec<Symbol>,
     /// Intra-file call sites (caller/callee by name).
     pub calls: Vec<CallSite>,
+    /// Candidate module-name references from `use` / `mod` declarations. These
+    /// are the path segments seen in imports (best-effort, by name — the
+    /// tree-sitter tier); the exporter resolves them to sibling modules by
+    /// matching module stems (§9.2 `bobbin:imports`, [`Tier::TreeSitter`]).
+    pub import_refs: Vec<String>,
 }
 
 /// Walk `path` for Rust source files, honoring `.gitignore`.
@@ -69,6 +74,7 @@ pub fn extract_structure(source: &str, language: &str) -> Result<FileStructure> 
     let bytes = source.as_bytes();
     let mut symbols = Vec::new();
     let mut calls = Vec::new();
+    let mut import_refs = Vec::new();
     // Each frame carries the name of the nearest enclosing function, so a call
     // site can be attributed to its caller.
     let mut stack: Vec<(Node, Option<String>)> = vec![(tree.root_node(), None)];
@@ -108,6 +114,22 @@ pub fn extract_structure(source: &str, language: &str) -> Result<FileStructure> 
             }
         }
 
+        // A `use ...;` names the modules this file depends on; a bodiless
+        // `mod foo;` pulls in a sibling file module. Collect the path segments
+        // as best-effort module-name references (resolved in the exporter).
+        match node.kind() {
+            "use_declaration" => collect_path_idents(node, bytes, &mut import_refs),
+            "mod_item" if node.child_by_field_name("body").is_none() => {
+                if let Some(name) = node
+                    .child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(bytes).ok())
+                {
+                    import_refs.push(name.to_string());
+                }
+            }
+            _ => {}
+        }
+
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             stack.push((child, inner.clone()));
@@ -115,7 +137,35 @@ pub fn extract_structure(source: &str, language: &str) -> Result<FileStructure> 
     }
 
     symbols.sort_by_key(|symbol| symbol.start_line);
-    Ok(FileStructure { symbols, calls })
+    import_refs.sort();
+    import_refs.dedup();
+    Ok(FileStructure {
+        symbols,
+        calls,
+        import_refs,
+    })
+}
+
+/// Collect every `identifier` under `node` into `out` — used to harvest the
+/// path segments of a `use` declaration (`crate::graph::reachable` →
+/// `graph`, `reachable`, …). Over-collects the imported item name too, which is
+/// harmless: only segments that match a sibling module stem become edges.
+fn collect_path_idents(node: Node, bytes: &[u8], out: &mut Vec<String>) {
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "identifier" {
+            if let Ok(text) = n.utf8_text(bytes) {
+                // `crate` / `self` / `super` are path anchors, not modules.
+                if !matches!(text, "crate" | "self" | "super") {
+                    out.push(text.to_string());
+                }
+            }
+        }
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
 }
 
 /// Best-effort name of the function invoked by a `call_expression`'s callee.
@@ -204,6 +254,32 @@ fn caller() { helper(); other::thing(); }
             .collect();
         assert!(calls.contains(&("caller", "helper")));
         assert!(calls.contains(&("caller", "thing")));
+    }
+
+    #[test]
+    fn extracts_import_refs() {
+        let source = "\
+use crate::graph::reachable;
+use std::collections::HashMap;
+mod extract;
+fn f() {}
+";
+        let structure = extract_structure(source, "rust").unwrap();
+        // `use` path segments and the bodiless `mod` name are collected; path
+        // anchors (`crate`) are dropped.
+        assert!(structure.import_refs.contains(&"graph".to_string()));
+        assert!(structure.import_refs.contains(&"collections".to_string()));
+        assert!(structure.import_refs.contains(&"extract".to_string()));
+        assert!(!structure.import_refs.contains(&"crate".to_string()));
+    }
+
+    #[test]
+    fn inline_mod_is_not_an_import() {
+        // A `mod foo { ... }` with a body defines a symbol, not a file import.
+        let source = "mod inner { fn g() {} }";
+        let structure = extract_structure(source, "rust").unwrap();
+        assert!(!structure.import_refs.contains(&"inner".to_string()));
+        assert!(structure.symbols.iter().any(|s| s.name == "inner"));
     }
 
     #[test]

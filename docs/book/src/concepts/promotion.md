@@ -9,10 +9,15 @@ what's in flight. Uncommitted churn never pollutes the governed graph.
 ## Export — the governed projection
 
 `hank export` is the projection Hank promotes: the **precise, typed referential
-structure** (modules, symbols, `definedIn`/`calls`, and — as the markdown
-extractor lands — `Document`/`Section` + `references`), emitted as RDF Turtle in
-the `bobbin:` ontology. This is **not** Bobbin's chunking; it is structure for
-reasoning and governance.
+structure** (modules, symbols, `definedIn`/`calls`/`imports`, and — as the
+markdown extractor lands — `Document`/`Section` + `references`), emitted as RDF
+Turtle in the `bobbin:` ontology. This is **not** Bobbin's chunking; it is
+structure for reasoning and governance.
+
+Module dependencies (`bobbin:imports`, `CodeModule → CodeModule`) are resolved
+from `use`/`mod` declarations at the tree-sitter tier — best-effort by module
+stem, so they over-connect on shared names like any tree-sitter-tier fact; the
+`lsp` tier refines them.
 
 ```bash
 hank export src --repo myrepo --format turtle   # dump the referential graph

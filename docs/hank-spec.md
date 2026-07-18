@@ -1011,7 +1011,7 @@ criterion; every phase must keep the `quipu` feature compiling both on and off
 - [x] Intra-procedural data dependence (FR-8, first slice): `src/dataflow.rs`, `hank dataflow` (CLI) and `hank_dataflow` (MCP).
 - [x] Reconcile structural reachable set with Bobbin co-change (FR-11): `src/reconcile.rs`, `hank impact --cochange` (CLI) and the `cochange` param on `hank_impact` (MCP), partitioning into corroborated / structural-only / co-change-only.
 - [x] Edit-reactive harness hook (FR-30, prototype): `hank hook post-edit` emits a synchronous cross-file blast-radius advisory as Claude Code `PostToolUse` context (builds transiently until the Phase-3 resident daemon lands).
-- [x] Referential-structure export (FR-34, code side): `hank export --format turtle` emits `CodeModule`/`CodeSymbol` + `definedIn`/`calls` as Turtle in the `bobbin:` ontology (the substrate under Phase-4 promotion; doc→code references and `--to quipu` fold in later).
+- [x] Referential-structure export (FR-34, code side): `hank export --format turtle` emits `CodeModule`/`CodeSymbol` + `definedIn`/`calls`/`imports` as Turtle in the `bobbin:` ontology (the substrate under Phase-4 promotion; doc→code references and `--to quipu` fold in later).
 - [ ] *Deferred to the `cpg` feature (post-exit):* deeper CPG — control dependence + inter-procedural taint (FR-7, remainder of FR-8).
 - **Exit (met):** structural blast radius, reconciled with history, served to agents and Bobbin. Co-change mining stays in Bobbin; Hank reconciles a supplied co-change set (the routing rule).
 
