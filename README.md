@@ -43,11 +43,12 @@ hank status
   quipu     : enabled=false branch_model=named_graph
 ```
 
-> **Status:** Phase 1 complete, Phase 2 underway. `analyze`, `refs`, `status`,
-> the call-graph commands `callers`/`impact`, and intra-procedural `dataflow` do
-> real work, and an MCP server (`hank serve`, `--features mcp`) exposes eight
-> `hank_*` tools including `hank_impact` (blast radius) and `hank_dataflow`.
-> `verify` and `promote` land per the [phasing](docs/hank-spec.md#12-milestones--phasing).
+> **Status:** Phases 1 and 2 complete. `analyze`, `refs`, `status`, the
+> call-graph commands `callers`/`impact` (with `--cochange` reconciliation), and
+> intra-procedural `dataflow` do real work, and an MCP server (`hank serve`,
+> `--features mcp`) exposes eight `hank_*` tools. `verify` and `promote` land per
+> the [phasing](docs/hank-spec.md#12-milestones--phasing); Phase 3 (multi-tenancy)
+> is next.
 
 ## 🤔 Why Hank?
 

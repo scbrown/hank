@@ -65,6 +65,32 @@ fn callers_lists_direct_callers() {
 }
 
 #[test]
+fn impact_reconciles_with_cochange() {
+    let dir = project_with(
+        "a.rs",
+        "fn leaf() {}\nfn mid() { leaf(); }\nfn top() { mid(); }\n",
+    );
+    // Co-change set: a.rs is corroborated (also structural); other.rs is not.
+    std::fs::write(dir.path().join("cochange.json"), "[\"a.rs\", \"other.rs\"]").unwrap();
+
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args([
+            "impact",
+            "leaf",
+            dir.path().to_str().unwrap(),
+            "--cochange",
+            dir.path().join("cochange.json").to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"reconciliation\""))
+        .stdout(predicate::str::contains("\"corroborated\""))
+        .stdout(predicate::str::contains("other.rs"));
+}
+
+#[test]
 fn dataflow_traces_dependence() {
     let dir = project_with(
         "a.rs",

@@ -127,6 +127,13 @@ pub struct ImpactRequest {
     /// Maximum hops to follow (default 5).
     #[schemars(description = "Maximum hops to follow (default 5)")]
     pub hops: Option<u32>,
+
+    /// Historical co-change file set to reconcile against (FR-11). Supplied by
+    /// Bobbin; when present the response includes a `reconciliation`.
+    #[schemars(
+        description = "Co-changed file paths (from Bobbin) to reconcile against the structural impact"
+    )]
+    pub cochange: Option<Vec<String>>,
 }
 
 /// One reached symbol in a call-graph response.
@@ -157,6 +164,17 @@ pub struct NeighborsResponse {
     pub neighbors: Vec<ReachItem>,
 }
 
+/// The three-way reconciliation of structural vs. historical coupling (FR-11).
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ReconciliationItem {
+    /// In both — corroborated, real coupling.
+    pub corroborated: Vec<String>,
+    /// Structural but never co-changed — new/unexercised coupling.
+    pub structural_only: Vec<String>,
+    /// Co-changed but structurally unexplained — possible refactoring smell.
+    pub cochange_only: Vec<String>,
+}
+
 /// Response for `hank_impact`.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct ImpactResponse {
@@ -170,6 +188,10 @@ pub struct ImpactResponse {
     pub count: usize,
     /// The transitively affected symbols (callers).
     pub reachable: Vec<ReachItem>,
+    /// Distinct files in the structural impact set.
+    pub structural_files: Vec<String>,
+    /// Reconciliation against the supplied co-change set, if any.
+    pub reconciliation: Option<ReconciliationItem>,
 }
 
 /// Request for `hank_dataflow` — intra-procedural data dependence.

@@ -79,11 +79,15 @@ impl CodeGraph {
             let Ok(structure) = extract_structure(&source, "rust") else {
                 continue;
             };
-            let rel = file
-                .strip_prefix(root)
-                .unwrap_or(&file)
-                .display()
-                .to_string();
+            // Relative to the build root; fall back to the file name when the
+            // root *is* the file (strip yields an empty path).
+            let rel = match file.strip_prefix(root) {
+                Ok(p) if !p.as_os_str().is_empty() => p.display().to_string(),
+                _ => file.file_name().map_or_else(
+                    || file.display().to_string(),
+                    |n| n.to_string_lossy().into_owned(),
+                ),
+            };
             for symbol in structure.symbols {
                 let idx = graph.add_node(SymbolNode {
                     name: symbol.name.clone(),

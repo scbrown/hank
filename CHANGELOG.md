@@ -23,6 +23,11 @@ All notable changes to this project will be documented in this file.
   data-dependence extraction, `DependsOn`/`FlowsInto` flow queries, the
   `hank dataflow` CLI command, and the `hank_dataflow` MCP tool (eight tools
   total).
+- Phase-2 exit (FR-11): reconcile the structural blast radius against a
+  caller-supplied co-change set (`src/reconcile.rs`), partitioning files into
+  corroborated / structural-only / co-change-only. Exposed via
+  `hank impact --cochange` (CLI) and the `cochange` parameter on `hank_impact`
+  (MCP). Co-change mining stays in Bobbin. **Phase 2 complete.**
 - Docs published to the `gh-pages` branch via `peaceiris/actions-gh-pages`.
 - Project tooling matched to Bobbin and Quipu: `just` recipes, pre-commit,
   clippy lint policy, markdownlint/Vale/Prettier, mdBook, CI, and release-plz.

@@ -841,9 +841,9 @@ criterion; every phase must keep the `quipu` feature compiling both on and off
 - [x] `hank_impact`, `hank_callers`, `hank_callees` (MCP) and `hank callers` / `hank impact` (CLI).
 - [x] Resolve the JVM/Rust CPG decision (§14.1): **Rust-native traversals** (Joern not adopted).
 - [x] Intra-procedural data dependence (FR-8, first slice): `src/dataflow.rs`, `hank dataflow` (CLI) and `hank_dataflow` (MCP).
-- [ ] Deeper CPG: control dependence + inter-procedural taint (FR-7, remainder of FR-8), behind the `cpg` feature.
-- [ ] Reconcile structural reachable set with Bobbin co-change (FR-11).
-- **Exit:** structural blast radius, reconciled with history, served to agents and Bobbin.
+- [x] Reconcile structural reachable set with Bobbin co-change (FR-11): `src/reconcile.rs`, `hank impact --cochange` (CLI) and the `cochange` param on `hank_impact` (MCP), partitioning into corroborated / structural-only / co-change-only.
+- [ ] *Deferred to the `cpg` feature (post-exit):* deeper CPG — control dependence + inter-procedural taint (FR-7, remainder of FR-8).
+- **Exit (met):** structural blast radius, reconciled with history, served to agents and Bobbin. Co-change mining stays in Bobbin; Hank reconciles a supplied co-change set (the routing rule).
 
 ### Phase 3 — Multi-tenancy *(the hard phase)*
 

@@ -15,16 +15,19 @@ use rmcp::model::{
 use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler};
 use serde::Serialize;
 
+use std::collections::BTreeSet;
+
 use super::tools::{
     AnalyzeRequest, AnalyzeResponse, DataflowRequest, DataflowResponse, DepEdgeItem, FlowStepItem,
-    ImpactRequest, ImpactResponse, NeighborsRequest, NeighborsResponse, ReachItem, RefItem,
-    ReferencesRequest, ReferencesResponse, StatusResponse, SymbolItem, SymbolsRequest,
-    SymbolsResponse,
+    ImpactRequest, ImpactResponse, NeighborsRequest, NeighborsResponse, ReachItem,
+    ReconciliationItem, RefItem, ReferencesRequest, ReferencesResponse, StatusResponse, SymbolItem,
+    SymbolsRequest, SymbolsResponse,
 };
 use crate::config::HankConfig;
 use crate::dataflow::{Dataflow, FlowDir};
 use crate::extract::{extract_symbols, rust_files};
 use crate::graph::{CodeGraph, Dir, Reached};
+use crate::reconcile::reconcile;
 
 /// Hank's MCP server. Resolves requests against the analysis root for a tenant.
 #[derive(Clone)]
@@ -198,12 +201,24 @@ impl HankMcpServer {
         let graph = CodeGraph::build(&base).map_err(internal)?;
         let found = graph.has_symbol(&req.symbol);
         let reachable = graph.reachable(&req.symbol, Dir::Callers, hops);
+        let structural_files: BTreeSet<String> = reachable.iter().map(|r| r.file.clone()).collect();
+        let reconciliation = req.cochange.as_ref().map(|cochange| {
+            let cochange_set: BTreeSet<String> = cochange.iter().cloned().collect();
+            let recon = reconcile(&structural_files, &cochange_set);
+            ReconciliationItem {
+                corroborated: recon.corroborated,
+                structural_only: recon.structural_only,
+                cochange_only: recon.cochange_only,
+            }
+        });
         let response = ImpactResponse {
             symbol: req.symbol.clone(),
             found,
             hops,
             count: reachable.len(),
             reachable: reachable.iter().map(reach_item).collect(),
+            structural_files: structural_files.into_iter().collect(),
+            reconciliation,
         };
         json_result(&response)
     }
@@ -341,56 +356,4 @@ fn tier_availability() -> Vec<String> {
         tiers.push("cpg".to_string());
     }
     tiers
-}
-
-/// Serve over stdio (the default agent transport).
-pub async fn run_stdio(root: PathBuf, tenant: Option<String>) -> Result<()> {
-    use rmcp::transport::stdio;
-    use rmcp::ServiceExt;
-
-    let server = HankMcpServer::new(root, tenant);
-    let service = server.serve(stdio()).await?;
-    service.waiting().await?;
-    Ok(())
-}
-
-/// Serve over streamable-HTTP (network-accessible; for the broker and remote agents).
-pub async fn run_http(
-    root: PathBuf,
-    tenant: Option<String>,
-    bind: String,
-    port: u16,
-) -> Result<()> {
-    use std::sync::Arc;
-    use std::time::Duration;
-
-    use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
-    use rmcp::transport::streamable_http_server::tower::StreamableHttpService;
-    use rmcp::transport::StreamableHttpServerConfig;
-    use tokio_util::sync::CancellationToken;
-
-    let ct = CancellationToken::new();
-    let service: StreamableHttpService<HankMcpServer, LocalSessionManager> =
-        StreamableHttpService::new(
-            move || Ok::<_, std::io::Error>(HankMcpServer::new(root.clone(), tenant.clone())),
-            Arc::new(LocalSessionManager::default()),
-            StreamableHttpServerConfig {
-                stateful_mode: true,
-                sse_keep_alive: Some(Duration::from_secs(15)),
-                cancellation_token: ct.child_token(),
-            },
-        );
-
-    let router = axum::Router::new().nest_service("/mcp", service);
-    let addr = format!("{bind}:{port}");
-    eprintln!("Hank MCP server listening on http://{addr}/mcp");
-
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, router)
-        .with_graceful_shutdown(async move {
-            tokio::signal::ctrl_c().await.ok();
-            ct.cancel();
-        })
-        .await?;
-    Ok(())
 }

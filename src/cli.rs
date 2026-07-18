@@ -87,6 +87,10 @@ enum Commands {
         /// Maximum hops to follow.
         #[arg(long, default_value_t = 5)]
         hops: u32,
+        /// Reconcile against a co-change file set (FR-11): a JSON array of
+        /// paths, or a newline-separated list. Supplied by Bobbin.
+        #[arg(long)]
+        cochange: Option<PathBuf>,
     },
     /// Intra-procedural data dependence within a function.
     Dataflow {
@@ -145,9 +149,19 @@ impl Cli {
             Commands::Callers { symbol, path } => {
                 cli_cmds::callers(self.json, self.quiet, symbol, path)
             }
-            Commands::Impact { symbol, path, hops } => {
-                cli_cmds::impact(self.json, self.quiet, symbol, path, *hops)
-            }
+            Commands::Impact {
+                symbol,
+                path,
+                hops,
+                cochange,
+            } => cli_cmds::impact(
+                self.json,
+                self.quiet,
+                symbol,
+                path,
+                *hops,
+                cochange.as_deref(),
+            ),
             Commands::Dataflow {
                 function,
                 path,

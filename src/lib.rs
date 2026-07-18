@@ -20,6 +20,7 @@ pub mod extract;
 pub mod graph;
 #[cfg(feature = "mcp")]
 pub mod mcp;
+pub mod reconcile;
 mod render;
 pub mod types;
 

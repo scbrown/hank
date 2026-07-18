@@ -3,12 +3,14 @@
 //! These live outside `cli.rs` to keep that file small; they take the two
 //! output flags they need (`json`, `quiet`) rather than the whole `Cli`.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use colored::Colorize;
 
 use crate::dataflow::{Dataflow, FlowDir};
 use crate::graph::{CodeGraph, Dir};
+use crate::reconcile::reconcile;
 use crate::render::{print_reached, reached_json};
 
 /// `hank callers` — direct callers and callees of a symbol.
@@ -34,50 +36,109 @@ pub(crate) fn callers(json: bool, quiet: bool, symbol: &str, path: &Path) -> any
     Ok(())
 }
 
-/// `hank impact` — the blast radius (transitive callers) of a symbol.
+/// `hank impact` — the blast radius (transitive callers) of a symbol,
+/// optionally reconciled against a caller-supplied co-change set (FR-11).
 pub(crate) fn impact(
     json: bool,
     quiet: bool,
     symbol: &str,
     path: &Path,
     hops: u32,
+    cochange: Option<&Path>,
 ) -> anyhow::Result<()> {
     let graph = CodeGraph::build(path)?;
     if !graph.has_symbol(symbol) {
         return not_found(json, quiet, symbol, "call graph");
     }
     let reached = graph.reachable(symbol, Dir::Callers, hops);
+    let structural_files: BTreeSet<String> = reached.iter().map(|r| r.file.clone()).collect();
+    let cochange_set = cochange.map(read_cochange).transpose()?;
 
     if json {
-        let out = serde_json::json!({
+        let mut out = serde_json::json!({
             "symbol": symbol,
             "hops": hops,
             "direction": "callers",
             "count": reached.len(),
             "reachable": reached_json(&reached),
+            "structural_files": structural_files.iter().collect::<Vec<_>>(),
         });
+        if let Some(cochange_set) = &cochange_set {
+            let recon = reconcile(&structural_files, cochange_set);
+            out["reconciliation"] = serde_json::json!({
+                "corroborated": recon.corroborated,
+                "structural_only": recon.structural_only,
+                "cochange_only": recon.cochange_only,
+            });
+        }
         println!("{}", serde_json::to_string_pretty(&out)?);
-    } else if reached.is_empty() {
+        return Ok(());
+    }
+
+    if reached.is_empty() {
         if !quiet {
             println!("nothing calls {symbol} (blast radius empty)");
         }
-    } else {
+        return Ok(());
+    }
+    println!(
+        "{} {} symbol(s) affected by changing {symbol}:",
+        "impact".green().bold(),
+        reached.len()
+    );
+    for item in &reached {
         println!(
-            "{} {} symbol(s) affected by changing {symbol}:",
-            "impact".green().bold(),
-            reached.len()
+            "  {}:{} {} (hop {})",
+            item.file,
+            item.start_line,
+            item.name.cyan(),
+            item.distance
         );
-        for item in &reached {
-            println!(
-                "  {}:{} {} (hop {})",
-                item.file,
-                item.start_line,
-                item.name.cyan(),
-                item.distance
-            );
-        }
+    }
+    if let Some(cochange_set) = &cochange_set {
+        let recon = reconcile(&structural_files, cochange_set);
+        println!(
+            "\nreconciled with {} co-changed file(s):",
+            cochange_set.len()
+        );
+        print_bucket("corroborated (real coupling)", &recon.corroborated, quiet);
+        print_bucket(
+            "structural only (new/unexercised)",
+            &recon.structural_only,
+            quiet,
+        );
+        print_bucket(
+            "co-change only (refactoring smell)",
+            &recon.cochange_only,
+            quiet,
+        );
     }
     Ok(())
+}
+
+/// Read a co-change file: a JSON array of paths or a newline-separated list.
+fn read_cochange(path: &Path) -> anyhow::Result<BTreeSet<String>> {
+    let text = std::fs::read_to_string(path)?;
+    if let Ok(list) = serde_json::from_str::<Vec<String>>(&text) {
+        return Ok(list.into_iter().collect());
+    }
+    Ok(text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+/// Print one reconciliation bucket.
+fn print_bucket(label: &str, files: &[String], quiet: bool) {
+    if files.is_empty() {
+        if !quiet {
+            println!("  {label}: (none)");
+        }
+        return;
+    }
+    println!("  {}: {}", label.bold(), files.join(", "));
 }
 
 /// `hank dataflow` — intra-procedural data dependence within a function.
