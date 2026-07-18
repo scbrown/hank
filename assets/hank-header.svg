@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 200" fill="none">
+  <defs>
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#E07A5F"/>
+      <stop offset="50%" style="stop-color:#F2CC8F"/>
+      <stop offset="100%" style="stop-color:#81B29A"/>
+    </linearGradient>
+    <linearGradient id="coilGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3D85C6;stop-opacity:0.4"/>
+      <stop offset="50%" style="stop-color:#9B72AA"/>
+      <stop offset="100%" style="stop-color:#3D85C6;stop-opacity:0.4"/>
+    </linearGradient>
+  </defs>
+  <style>
+    .title { font-family: 'Courier New', Courier, monospace; font-size: 76px; font-weight: bold; fill: url(#textGrad); }
+    .sub { font-family: 'Courier New', Courier, monospace; font-size: 16px; fill: #81B29A; letter-spacing: 2px; }
+    .coil { stroke: url(#coilGrad); stroke-width: 2.5; fill: none; }
+    .dot { fill: #9B72AA; }
+  </style>
+  <!-- HANK wordmark -->
+  <text x="410" y="92" text-anchor="middle" class="title">HANK</text>
+  <!-- Coiled skein line under the wordmark -->
+  <path d="M 150 122 Q 230 104, 310 122 T 470 122 T 630 122 Q 690 122, 700 120" class="coil"/>
+  <path d="M 150 132 Q 230 150, 310 132 T 470 132 T 630 132 Q 690 132, 700 134" class="coil" opacity="0.5"/>
+  <circle cx="150" cy="122" r="3.5" class="dot"/>
+  <circle cx="410" cy="122" r="3.5" class="dot"/>
+  <circle cx="700" cy="120" r="3.5" class="dot"/>
+  <!-- Taglines -->
+  <text x="410" y="168" text-anchor="middle" class="sub">structure · dataflow · blast radius</text>
+  <text x="410" y="190" text-anchor="middle" class="sub" opacity="0.7">live · per-tenant · in-memory</text>
+</svg>

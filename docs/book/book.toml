@@ -1,0 +1,19 @@
+[book]
+title = "Hank — Live Code Structure"
+authors = ["Steve Brown"]
+description = "In-memory, multi-tenant code-analysis engine for the Bobbin × Quipu stack"
+src = "src"
+language = "en"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "coal"
+preferred-dark-theme = "coal"
+git-repository-url = "https://github.com/scbrown/hank"
+edit-url-template = "https://github.com/scbrown/hank/edit/main/docs/book/{path}"
+site-url = "/hank/"
+
+[output.html.search]
+enable = true

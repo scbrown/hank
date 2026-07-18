@@ -1,0 +1,167 @@
+[package]
+name = "hank"
+version = "0.1.0"
+edition = "2021"
+description = "In-memory, multi-tenant code-analysis engine — the structural signal for the Bobbin × Quipu stack"
+authors = ["Steve Brown"]
+license = "MIT"
+repository = "https://github.com/scbrown/hank"
+homepage = "https://github.com/scbrown/hank"
+documentation = "https://docs.rs/hank"
+keywords = ["code-analysis", "call-graph", "dataflow", "tree-sitter", "mcp"]
+categories = ["development-tools", "command-line-utilities"]
+exclude = [
+    ".github/",
+    ".vale/",
+    ".vale.ini",
+    ".pre-commit-config.yaml",
+    ".markdownlint-cli2.yaml",
+    ".prettierrc.yaml",
+    "docs/",
+    "assets/",
+    "cliff.toml",
+    "justfile",
+    "CONTRIBUTING.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md",
+    "CHANGELOG.md",
+    "release-plz.toml",
+    "scripts/",
+]
+
+[[bin]]
+name = "hank"
+path = "src/main.rs"
+
+# ── Core stack (always built) ─────────────────────────────────────────
+# Serving side mirrors Bobbin; graph + promotion side borrows Quipu's crates,
+# so the three tools build against a coherent dependency set. See
+# docs/hank-spec.md §8 for the full rationale and version pins.
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization / config
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Tree-sitter (fast structural extraction — always-on breadth)
+tree-sitter = "0.25"
+tree-sitter-rust = "0.24"
+
+# In-memory graph
+petgraph = "0.7"
+
+# File-watch (incremental, event-driven overlays)
+notify = "6"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+walkdir = "2"
+ignore = "0.4"
+glob = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"       # content-hash structural sharing (FR-15)
+hex = "0.4"
+colored = "3"
+indicatif = "0.17"
+
+# ── Optional / feature-gated (land per phase — see docs/hank-spec.md §12) ──
+# MCP + HTTP serving (Phase 1). schemars generates the tool JSON schemas.
+rmcp = { version = "0.12", features = ["server", "transport-io", "transport-streamable-http-server", "axum"], optional = true }
+schemars = { version = "1.0", optional = true }
+axum = { version = "0.8", optional = true }
+tower = { version = "0.5", optional = true }
+tower-http = { version = "0.6", features = ["cors", "trace"], optional = true }
+
+# Extra tree-sitter grammars (Bobbin's full language set).
+tree-sitter-typescript = { version = "0.23", optional = true }
+tree-sitter-python = { version = "0.25", optional = true }
+tree-sitter-go = { version = "0.23", optional = true }
+tree-sitter-java = { version = "0.23", optional = true }
+tree-sitter-cpp = { version = "0.23", optional = true }
+
+# Quipu promotion (Phase 4). RDF/Turtle emission + SHACL validation before write.
+# quipu is pinned by rev (not branch): Cargo.lock is gitignored, so a branch dep
+# would float to tip on a fresh CI checkout — mirroring Bobbin's discipline. Wire
+# a concrete rev when Phase 4 starts; `default-features = false` keeps Quipu's
+# onnx/shacl off unless Hank opts in.
+oxrdf = { version = "0.3", optional = true }
+oxttl = { version = "0.2", optional = true }
+oxrdfio = { version = "0.2", optional = true }
+rudof_lib = { version = "0.2.8", optional = true }
+# quipu = { git = "https://github.com/scbrown/quipu", rev = "<pin-in-phase-4>", default-features = false, optional = true }
+
+[features]
+default = []
+# Phase 1: MCP (stdio + streamable-HTTP) and the local HTTP API.
+mcp = ["dep:rmcp", "dep:schemars", "dep:axum", "dep:tower", "dep:tower-http"]
+# Bobbin's full grammar set beyond Rust.
+langs-extra = [
+    "dep:tree-sitter-typescript",
+    "dep:tree-sitter-python",
+    "dep:tree-sitter-go",
+    "dep:tree-sitter-java",
+    "dep:tree-sitter-cpp",
+]
+# Phase 2: CPG + dataflow (Joern boundary or Rust-native traversals).
+cpg = []
+# Phase 2/1: LSP-precise facts where a build resolves.
+lsp = []
+# Phase 4: promote committed facts into Quipu, SHACL-validated.
+quipu = ["dep:oxrdf", "dep:oxttl", "dep:oxrdfio", "dep:rudof_lib"]
+
+[dev-dependencies]
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+# Lint policy copied from Quipu so Hank matches house style from commit one.
+[lints.rust]
+unsafe_code = "deny"
+unused_must_use = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+# Correctness & safety
+cast_sign_loss = "warn"
+checked_conversions = "warn"
+
+# Code quality
+cloned_instead_of_copied = "warn"
+doc_markdown = "warn"
+explicit_into_iter_loop = "warn"
+explicit_iter_loop = "warn"
+flat_map_option = "warn"
+fn_params_excessive_bools = "warn"
+implicit_clone = "warn"
+inefficient_to_string = "warn"
+manual_let_else = "warn"
+map_unwrap_or = "warn"
+match_wildcard_for_single_variants = "warn"
+needless_continue = "warn"
+needless_pass_by_value = "warn"
+redundant_closure_for_method_calls = "warn"
+semicolon_if_nothing_returned = "warn"
+string_add_assign = "warn"
+uninlined_format_args = "warn"
+unnested_or_patterns = "warn"
+unused_self = "warn"

@@ -1,0 +1,30 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+
+# Rust
+/target/
+
+# mdbook output
+docs/book/book/
+
+# Runtime artifacts (agent locks, session state)
+.runtime/
+
+# Gas Town (added by gt)
+.claude/
+.logs/
+__pycache__/
+state.json
+CLAUDE.local.md

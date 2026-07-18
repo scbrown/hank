@@ -152,6 +152,7 @@ Where each stolen idea lives (from the vision, made concrete):
 ## 4. User Personas
 
 ### Persona 1: Autonomous Coding Agent (polecat)
+
 - **Needs:** provably-connected references (not "probably relevant"); blast
   radius before it edits; a boolean "will this edit compile / is this identifier
   real" check on its own proposed buffer.
@@ -159,6 +160,7 @@ Where each stolen idea lives (from the vision, made concrete):
   operate inside a capability sandbox scoped by *its own* tenant's live graph.
 
 ### Persona 2: Human Developer (direct + via Bobbin)
+
 - **Needs:** "where is this defined / who references it" with ground truth; "what
   will this change break"; explained coupling ("these two files change together
   *because* of this dataflow path").
@@ -166,6 +168,7 @@ Where each stolen idea lives (from the vision, made concrete):
   sub-second answers; does not want to stand up a language server per query.
 
 ### Persona 3: Bobbin (the fusion layer)
+
 - **Needs:** structural facts with confidence/tier tags to fuse with co-change
   and embeddings; a way to flag retrieved code that will not compile in the
   current overlay.
@@ -173,6 +176,7 @@ Where each stolen idea lives (from the vision, made concrete):
   dependency it must route others through.
 
 ### Persona 4: The Broker / Aegis (policy consumer)
+
 - **Needs:** per-tenant blast radius to scope the provisioned execution
   environment for a polecat — autonomous edits safe *by construction*, not by
   review.
@@ -189,6 +193,7 @@ a numbered capability from the vision (§"The concrete capability set").
 ### 5.1 Extraction engine (tree-sitter + LSP tiers)
 
 **FR-1: Fast structural extraction (tree-sitter).**
+
 - Parse source files with tree-sitter, reusing the exact grammar set Bobbin
   already ships: Rust, TypeScript/TSX, Python, Go, Java, C/C++.
 - Extract a symbol tree (functions, methods, classes, structs, enums,
@@ -198,6 +203,7 @@ a numbered capability from the vision (§"The concrete capability set").
   syntactically-broken buffer, incrementally (tree-sitter's incremental reparse).
 
 **FR-2: Precise semantic extraction (LSP).**
+
 - Run a language server per supported language behind one language-agnostic
   client interface (the multilspy idea), yielding defs, refs, types, hover,
   document/workspace symbols.
@@ -206,6 +212,7 @@ a numbered capability from the vision (§"The concrete capability set").
 - Absence of a resolvable build must degrade to tree-sitter facts, not fail.
 
 **FR-3: Confidence / freshness tier tags (crux — see risk §14.5).**
+
 - Every served fact MUST carry a `tier` ∈ {`treesitter`, `lsp`, `cpg`} and a
   `freshness` ∈ {`fresh`, `stale`, `recomputing`}. Agents must be able to tell a
   tree-sitter-fast-but-approximate fact from an LSP-precise one.
@@ -484,7 +491,7 @@ struct Overlay { tenant: TenantId, base_commit: Oid, touched: HashMap<PathBuf, F
 
 ### 7.4 The blast-radius primitive (FR-12), made concrete
 
-```
+```text
 fn reachable(seed: &[SymbolId], dir: Direction, hops: u32, view: &TenantView) -> ReachSet
     // dir = Forward  → dependents  → "what does this change affect?"  (consumer)
     // dir = Backward → dependencies → context for recompute
@@ -549,6 +556,7 @@ with that surface. This is a reversible decision; revisit if a 2024-only
 dependency becomes compelling (§16, open question 1).
 
 **Feature flags** (mirroring both peers' feature discipline):
+
 - `quipu` — gates the entire promotion path (`dep:quipu`, `oxttl`, `rudof_lib`).
   Off by default so Hank compiles and serves without the promotion toolchain, and
   — critically — **CI builds and tests both with and without it**, the single
@@ -704,6 +712,9 @@ and migrates to named graphs when they arrive. The config `branch_model` key
 
 ### 9.5 Quipu quad-store RFC (sketch, Quipu-side follow-up)
 
+> **Tracked as [scbrown/quipu#36](https://github.com/scbrown/quipu/issues/36)** —
+> *"store: add named-graph (quad) support — additive, default-graph-preserving."*
+
 A short design note to raise in `scbrown/quipu` (natural home:
 `docs/design/group-isolation.md` or a new `docs/design/named-graphs.md`):
 
@@ -814,6 +825,7 @@ criterion; every phase must keep the `quipu` feature compiling both on and off
 (Bobbin's dark-feature rule) and must land docs + tests per §13.
 
 ### Phase 1 — Hank, single-tenant *(explained retrieval, no new store)*
+
 - [ ] Project scaffold: Cargo (edition 2021), `[lints]` block, `just` + pre-commit + CI (both feature arms), mdBook skeleton.
 - [ ] Tree-sitter extraction (Bobbin's grammar set): symbol tree + intra-file calls.
 - [ ] LSP client (multilspy-style) for ≥ Rust + one more language: defs/refs/types.
@@ -823,6 +835,7 @@ criterion; every phase must keep the `quipu` feature compiling both on and off
 - **Exit:** Bobbin fuses Hank's precise references with its co-change/embeddings; "probably relevant" becomes "provably connected."
 
 ### Phase 2 — Dataflow & blast radius
+
 - [ ] Resolve the JVM/Rust CPG decision (§14.1): Joern behind a process boundary *or* Rust traversals for the needed subset.
 - [ ] CPG construction + dataflow/taint (FR-7, FR-8).
 - [ ] Blast-radius primitive (FR-10, FR-12) with forward/backward reachability.
@@ -831,6 +844,7 @@ criterion; every phase must keep the `quipu` feature compiling both on and off
 - **Exit:** structural blast radius, reconciled with history, served to agents and Bobbin.
 
 ### Phase 3 — Multi-tenancy *(the hard phase)*
+
 - [ ] Shared base + copy-on-write overlays (FR-13, FR-14).
 - [ ] Content-hash structural sharing (FR-15).
 - [ ] Frontier-bounded incremental update reusing the Phase-2 blast primitive (FR-16).
@@ -840,6 +854,7 @@ criterion; every phase must keep the `quipu` feature compiling both on and off
 - **Exit:** N developers edit concurrently; each sees a correct, isolated `base + overlay`; overlays cost O(touched + frontier).
 
 ### Phase 4 — Promote to Quipu
+
 - [ ] Extend the code ontology with edge shapes (§9.2); start permissive.
 - [ ] Turtle emission (`oxttl`) with the existing `bobbin:` IRI constructors.
 - [ ] SHACL-validate (`rudof`) before every write (FR-20).
@@ -850,6 +865,7 @@ criterion; every phase must keep the `quipu` feature compiling both on and off
 - **Exit:** committed structure lives in Quipu, SHACL-validated, bitemporally queryable; uncommitted churn never pollutes it.
 
 ### Phase 5 — Consumption & guardrails
+
 - [ ] Per-tenant blast radius wired into the broker/Aegis capability-scoping path (FR-25).
 - [ ] `hank_verify` monitor-guided edit verification as a direct surface (FR-23, FR-24).
 - [ ] Bobbin consumes verdicts to flag won't-compile retrieved code.
