@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Architecture - Hank — Live Code Structure</title>
+        <title>Harness Integration - Hank — Live Code Structure</title>
 
 
         <!-- Custom HTML head -->
@@ -147,7 +147,7 @@
                         <a href="https://github.com/scbrown/hank" title="Git repository" aria-label="Git repository">
                             <i id="git-repository-button" class="fa fa-github"></i>
                         </a>
-                        <a href="https://github.com/scbrown/hank/edit/main/docs/book/src/concepts/architecture.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                        <a href="https://github.com/scbrown/hank/edit/main/docs/book/src/getting-started/harness-integration.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
                             <i id="git-edit-button" class="fa fa-edit"></i>
                         </a>
 
@@ -181,45 +181,58 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="architecture"><a class="header" href="#architecture">Architecture</a></h1>
-<p>Hank is a peer of Bobbin and Quipu, not a feature of either. It quarantines the
-heavy language toolchains (tree-sitter grammars, LSP servers, any CPG/dataflow
-machinery), holds a hot structural graph, and feeds three consumers: Bobbin
-(fusion), Quipu (promotion on commit), and the Gas Town broker/Aegis (per-tenant
-blast radius as a trust boundary).</p>
-<pre><code class="language-text">   MCP (rmcp)  ·  HTTP (axum)  ·  CLI (clap)
-                    │
-              Query / Serve layer
-   refs · defs · callgraph · dataflow · blast-radius · verify
-   (resolve against base + tenant overlay, tier/freshness tagged)
-                    │
-              Tenancy layer
-   shared read-only base  +  per-tenant copy-on-write overlays
-                    │
-              Extraction layer
-   tree-sitter (breadth) · LSP (precision) · CPG/dataflow (Phase 2)
-                    │
-   file-watch (notify) · git baseline · overlay cache
-                    │
-   Promotion boundary → Quipu (SHACL-validated Turtle)
+                        <h1 id="harness-integration-claude-code-hooks"><a class="header" href="#harness-integration-claude-code-hooks">Harness Integration (Claude Code Hooks)</a></h1>
+<p>Hank can plug into an agent harness so it responds to edits <strong>synchronously</strong>,
+the way a language server reacts to a keystroke. The agent's edit tool call <em>is</em>
+the change event; a harness hook feeds it to Hank, and Hank replies inline — no
+tool call for the agent to remember.</p>
+<p>For Claude Code this uses <a href="https://docs.claude.com/en/docs/claude-code/hooks">hooks</a>.</p>
+<h2 id="post-edit-advisory-available-now"><a class="header" href="#post-edit-advisory-available-now">Post-edit advisory (available now)</a></h2>
+<p><code>hank hook post-edit</code> reads the <code>PostToolUse</code> payload on stdin and, when the
+edited file has symbols called from <em>other</em> files, returns a cross-file
+blast-radius advisory as injected context.</p>
+<p>Wire it in <code>.claude/settings.json</code>:</p>
+<pre><code class="language-json">{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "hank hook post-edit" }
+        ]
+      }
+    ]
+  }
+}
 </code></pre>
-<h2 id="the-routing-rule"><a class="header" href="#the-routing-rule">The routing rule</a></h2>
-<p>Bobbin is on the request path <strong>only when fusion or ranking adds value.</strong>
-Multi-signal retrieval goes through Bobbin. Single-signal, analysis-only queries
-— edit verification, blast radius, live structure lookups — go straight to Hank,
-and policy consumers like the broker read Hank directly.</p>
-<p>See the <a href="../design/specification.html">Specification</a> §7 for the full component
-diagram and the proposed source layout.</p>
+<p>After the agent edits <code>src/auth.rs</code>, it sees something like:</p>
+<pre><code class="language-text">Hank (tree-sitter): your edit to src/auth.rs touches symbol(s) with callers
+elsewhere — re-check these still compile.
+  authenticate &lt;- 3 caller(s)
+  verify_token &lt;- 1 caller(s)
+Impacted files: src/api/login.rs, src/api/session.rs
+</code></pre>
+<p>The advisory is emitted only when there is cross-file impact, and the hook never
+fails the harness (no output = nothing to say).</p>
+<h2 id="pre-edit-guard-planned-phase-5"><a class="header" href="#pre-edit-guard-planned-phase-5">Pre-edit guard (planned, Phase 5)</a></h2>
+<p><code>hank hook pre-edit</code> (<code>PreToolUse</code>) will verify the <em>proposed</em> buffer before the
+edit lands and — for capability-scoped agents — optionally block it with a
+reason. Blocking is opt-in; the default stays advisory.</p>
+<h2 id="performance-note"><a class="header" href="#performance-note">Performance note</a></h2>
+<p>This prototype builds the call graph transiently on each invocation. Once the
+Phase-3 resident per-tenant overlay lands, the hook becomes a thin client of the
+<code>hank serve</code> daemon and meets the sub-100ms budget a synchronous guard needs.
+See <a href="../design/specification.html">the specification</a> §5.9 (FR-30/FR-31).</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../getting-started/harness-integration.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../getting-started/configuration.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
-                            <a rel="next prefetch" href="../concepts/tenancy-model.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../concepts/architecture.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
 
@@ -229,11 +242,11 @@ diagram and the proposed source layout.</p>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../getting-started/harness-integration.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../getting-started/configuration.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
                     </a>
 
-                    <a rel="next prefetch" href="../concepts/tenancy-model.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../concepts/architecture.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>

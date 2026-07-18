@@ -290,6 +290,48 @@ mcp_http_port = 3040
 enabled = false
 branch_model = "named_graph"
 </code></pre>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="harness-integration-claude-code-hooks"><a class="header" href="#harness-integration-claude-code-hooks">Harness Integration (Claude Code Hooks)</a></h1>
+<p>Hank can plug into an agent harness so it responds to edits <strong>synchronously</strong>,
+the way a language server reacts to a keystroke. The agent's edit tool call <em>is</em>
+the change event; a harness hook feeds it to Hank, and Hank replies inline — no
+tool call for the agent to remember.</p>
+<p>For Claude Code this uses <a href="https://docs.claude.com/en/docs/claude-code/hooks">hooks</a>.</p>
+<h2 id="post-edit-advisory-available-now"><a class="header" href="#post-edit-advisory-available-now">Post-edit advisory (available now)</a></h2>
+<p><code>hank hook post-edit</code> reads the <code>PostToolUse</code> payload on stdin and, when the
+edited file has symbols called from <em>other</em> files, returns a cross-file
+blast-radius advisory as injected context.</p>
+<p>Wire it in <code>.claude/settings.json</code>:</p>
+<pre><code class="language-json">{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "hank hook post-edit" }
+        ]
+      }
+    ]
+  }
+}
+</code></pre>
+<p>After the agent edits <code>src/auth.rs</code>, it sees something like:</p>
+<pre><code class="language-text">Hank (tree-sitter): your edit to src/auth.rs touches symbol(s) with callers
+elsewhere — re-check these still compile.
+  authenticate &lt;- 3 caller(s)
+  verify_token &lt;- 1 caller(s)
+Impacted files: src/api/login.rs, src/api/session.rs
+</code></pre>
+<p>The advisory is emitted only when there is cross-file impact, and the hook never
+fails the harness (no output = nothing to say).</p>
+<h2 id="pre-edit-guard-planned-phase-5"><a class="header" href="#pre-edit-guard-planned-phase-5">Pre-edit guard (planned, Phase 5)</a></h2>
+<p><code>hank hook pre-edit</code> (<code>PreToolUse</code>) will verify the <em>proposed</em> buffer before the
+edit lands and — for capability-scoped agents — optionally block it with a
+reason. Blocking is opt-in; the default stays advisory.</p>
+<h2 id="performance-note"><a class="header" href="#performance-note">Performance note</a></h2>
+<p>This prototype builds the call graph transiently on each invocation. Once the
+Phase-3 resident per-tenant overlay lands, the hook becomes a thin client of the
+<code>hank serve</code> daemon and meets the sub-100ms budget a synchronous guard needs.
+See <a href="getting-started/../design/specification.html">the specification</a> §5.9 (FR-30/FR-31).</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="architecture"><a class="header" href="#architecture">Architecture</a></h1>
 <p>Hank is a peer of Bobbin and Quipu, not a feature of either. It quarantines the
 heavy language toolchains (tree-sitter grammars, LSP servers, any CPG/dataflow
@@ -395,6 +437,7 @@ COMMANDS:
     callers     Direct callers and callees of a symbol
     impact      Blast radius; --cochange reconciles against history (FR-11)
     dataflow    Intra-procedural data dependence within a function
+    hook        Harness hook adapter (reads hook payload on stdin)
     verify      Verdict on a proposed edit buffer                 [Phase 5]
     promote     Promote a commit's structural facts into Quipu    [Phase 4]
     status      Show base commit, tiers, and configuration
