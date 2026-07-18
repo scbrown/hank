@@ -479,11 +479,14 @@ GLOBAL FLAGS:
 <h2 id="examples"><a class="header" href="#examples">Examples</a></h2>
 <pre><code class="language-bash">hank analyze src
 hank refs authenticate src --json
-hank status
+hank status                    # resolves base_ref to a commit SHA (in a git repo)
 hank impact src/auth.rs::authenticate --hops 5
 hank verify --file src/auth.rs --buffer /tmp/edited.rs
 hank promote --commit HEAD
 </code></pre>
+<p><code>hank status</code> resolves the configured <code>base_ref</code> (default <code>main</code>) to a concrete
+commit via the system <code>git</code>; outside a git repository the base commit shows as
+unresolved and Hank falls back to the working tree.</p>
 <p>Commands marked with a phase print a notice until their engine lands; see the
 <a href="reference/../design/specification.html">Specification</a> §12.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="configuration-reference"><a class="header" href="#configuration-reference">Configuration Reference</a></h1>
