@@ -44,10 +44,10 @@ hank status
 ```
 
 > **Status:** Phase 1 complete, Phase 2 underway. `analyze`, `refs`, `status`,
-> and the call-graph commands `callers`/`impact` do real work, and an MCP server
-> (`hank serve`, `--features mcp`) exposes seven `hank_*` tools including
-> `hank_callers`, `hank_callees`, and `hank_impact` (blast radius). `verify` and
-> `promote` land per the [phasing](docs/hank-spec.md#12-milestones--phasing).
+> the call-graph commands `callers`/`impact`, and intra-procedural `dataflow` do
+> real work, and an MCP server (`hank serve`, `--features mcp`) exposes eight
+> `hank_*` tools including `hank_impact` (blast radius) and `hank_dataflow`.
+> `verify` and `promote` land per the [phasing](docs/hank-spec.md#12-milestones--phasing).
 
 ## 🤔 Why Hank?
 
@@ -111,6 +111,9 @@ cargo run -- status
 # Call graph: callers/callees and blast radius
 cargo run -- callers <symbol> src
 cargo run -- impact <symbol> src --hops 5
+
+# Data dependence within a function
+cargo run -- dataflow <function> src --var <variable>
 
 # Serve over MCP (stdio) for an agent
 cargo run --features mcp -- serve

@@ -19,6 +19,10 @@ All notable changes to this project will be documented in this file.
   in-memory `CodeGraph` (petgraph) with the `reachable()` primitive (FR-12),
   the `hank callers` and `hank impact` CLI commands, and the `hank_callers`,
   `hank_callees`, and `hank_impact` MCP tools.
+- Phase-2 intra-procedural dataflow (Rust-native, resolving §14.1): per-function
+  data-dependence extraction, `DependsOn`/`FlowsInto` flow queries, the
+  `hank dataflow` CLI command, and the `hank_dataflow` MCP tool (eight tools
+  total).
 - Docs published to the `gh-pages` branch via `peaceiris/actions-gh-pages`.
 - Project tooling matched to Bobbin and Quipu: `just` recipes, pre-commit,
   clippy lint policy, markdownlint/Vale/Prettier, mdBook, CI, and release-plz.

@@ -839,8 +839,9 @@ criterion; every phase must keep the `quipu` feature compiling both on and off
 - [x] Call graph (FR-6): tree-sitter call-site extraction, by-name resolution, in-memory `CodeGraph`.
 - [x] Blast-radius primitive (FR-10, FR-12) with forward/backward reachability (`reachable()`, one primitive).
 - [x] `hank_impact`, `hank_callers`, `hank_callees` (MCP) and `hank callers` / `hank impact` (CLI).
-- [ ] Resolve the JVM/Rust CPG decision (§14.1): Joern behind a process boundary *or* Rust traversals for the needed subset.
-- [ ] CPG construction + dataflow/taint (FR-7, FR-8); `hank_dataflow`.
+- [x] Resolve the JVM/Rust CPG decision (§14.1): **Rust-native traversals** (Joern not adopted).
+- [x] Intra-procedural data dependence (FR-8, first slice): `src/dataflow.rs`, `hank dataflow` (CLI) and `hank_dataflow` (MCP).
+- [ ] Deeper CPG: control dependence + inter-procedural taint (FR-7, remainder of FR-8), behind the `cpg` feature.
 - [ ] Reconcile structural reachable set with Bobbin co-change (FR-11).
 - **Exit:** structural blast radius, reconciled with history, served to agents and Bobbin.
 
@@ -908,7 +909,7 @@ commit one:
 
 | # | Risk | Impact | Mitigation |
 |---|---|---|---|
-| 14.1 | **JVM/Rust fork for CPG.** Joern is JVM/Scala; the stack is Rust. | High | Decide in Phase 2. Run Joern as a subprocess extractor behind a fact-emitting boundary (pragmatic, adds a heavy dep + serialization seam) *or* reimplement only the CPG/dataflow traversals needed in Rust (keeps Hank coherent). Isolating this in Hank is itself a reason Hank exists. Gate behind the `cpg` feature. |
+| 14.1 | **JVM/Rust fork for CPG.** Joern is JVM/Scala; the stack is Rust. | High | **Decided (Phase 2): Rust-native traversals.** Rather than embed Joern (a heavy JVM dep + serialization seam), Hank reimplements the traversals it needs, keeping the stack coherent. Started with intra-procedural data dependence (`src/dataflow.rs`, tree-sitter tier); a deeper CPG with inter-procedural taint can grow behind the `cpg` feature. Joern is not adopted. |
 | 14.2 | **Overlay memory & churn.** Per-tenant overlays + a large base must stay in budget; frontier recompute on hot (high-fan-in) symbols can cascade. | High | Content-hash sharing (FR-15) as the primary lever; `high_fanin_threshold` special-casing; explicit overlay eviction policy (`on_session_close`/`lru`); `log` any bounded/truncated coverage — never degrade silently. |
 | 14.3 | **When to promote to Quipu.** Every commit? Only merges to tracked branches? Promotion cost vs. history completeness. | Medium | `promote_on = commit\|merge\|manual` config; default `merge`. Bitemporality lets promotion be lazy but not free. |
 | 14.4 | **Two graph engines drift.** Hank's transient store could become a second source of truth for committed facts. | Medium | Hard rule (§9.6): committed truth lives in Quipu; Hank holds in-flight + a read-only base projection only. Promotion is the one-way boundary. |

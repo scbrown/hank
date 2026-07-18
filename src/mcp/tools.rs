@@ -172,6 +172,69 @@ pub struct ImpactResponse {
     pub reachable: Vec<ReachItem>,
 }
 
+/// Request for `hank_dataflow` — intra-procedural data dependence.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DataflowRequest {
+    /// The function to analyze.
+    #[schemars(description = "Function name to analyze")]
+    pub function: String,
+
+    /// Directory to build the dataflow over (relative to the root).
+    #[schemars(description = "Directory relative to the root. Omit for the whole root.")]
+    pub path: Option<String>,
+
+    /// Trace flow for a specific variable (omit to return all edges).
+    #[schemars(description = "Variable to trace; omit to return all dependence edges")]
+    pub var: Option<String>,
+
+    /// Trace what the variable flows into, rather than what it depends on.
+    #[schemars(
+        description = "If true, trace what the variable flows into (default: what it depends on)"
+    )]
+    pub forward: Option<bool>,
+
+    /// Maximum hops to follow (default 5).
+    #[schemars(description = "Maximum hops to follow (default 5)")]
+    pub hops: Option<u32>,
+}
+
+/// One reached variable in a flow query.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct FlowStepItem {
+    /// Variable name.
+    pub name: String,
+    /// Hop distance from the queried variable.
+    pub distance: u32,
+}
+
+/// One data-dependence edge.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct DepEdgeItem {
+    /// The assigned/bound variable.
+    pub dependent: String,
+    /// A local used in its initializer.
+    pub depends_on: String,
+    /// 1-based line.
+    pub line: usize,
+}
+
+/// Response for `hank_dataflow`.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct DataflowResponse {
+    /// The analyzed function.
+    pub function: String,
+    /// Whether the function exists in the model.
+    pub found: bool,
+    /// Direction when a variable was traced (`depends_on` / `flows_into`).
+    pub direction: Option<String>,
+    /// The traced variable, if any.
+    pub var: Option<String>,
+    /// Flow steps when a variable was traced.
+    pub flow: Vec<FlowStepItem>,
+    /// All dependence edges when no variable was given.
+    pub edges: Vec<DepEdgeItem>,
+}
+
 /// Response for `hank_status`.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct StatusResponse {

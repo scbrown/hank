@@ -12,7 +12,9 @@
 //! promotion (`quipu`) land in subsequent phases.
 
 pub mod cli;
+mod cli_cmds;
 pub mod config;
+pub mod dataflow;
 pub mod errors;
 pub mod extract;
 pub mod graph;

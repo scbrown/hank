@@ -27,6 +27,10 @@ hank callers authenticate src
 
 # Blast radius: what changing a symbol transitively affects
 hank impact authenticate src --hops 5 --json
+
+# Intra-procedural data dependence: where a value comes from / flows to
+hank dataflow authenticate src --var token           # what `token` depends on
+hank dataflow authenticate src --var token --forward # what `token` flows into
 ```
 
 ## The MCP server
@@ -43,7 +47,7 @@ See the [MCP Tools reference](../reference/mcp-tools.md).
 
 ## What works today
 
-`analyze`, `refs`, `status`, the call-graph commands `callers`/`impact`, and the
-seven MCP tools are live. `verify` and `promote` are declared with their final
-shape and print a phase notice until their engines land — see the
-[Specification](../design/specification.md).
+`analyze`, `refs`, `status`, the call-graph commands `callers`/`impact`,
+`dataflow`, and the eight MCP tools are live. `verify` and `promote` are declared
+with their final shape and print a phase notice until their engines land — see
+the [Specification](../design/specification.md).

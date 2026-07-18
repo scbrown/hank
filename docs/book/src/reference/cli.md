@@ -10,6 +10,7 @@ COMMANDS:
     refs        Find the definition sites of a symbol by name
     callers     Direct callers and callees of a symbol
     impact      Blast radius: symbols affected by changing a symbol
+    dataflow    Intra-procedural data dependence within a function
     verify      Verdict on a proposed edit buffer                 [Phase 5]
     promote     Promote a commit's structural facts into Quipu    [Phase 4]
     status      Show base commit, tiers, and configuration

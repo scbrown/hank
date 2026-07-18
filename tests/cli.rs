@@ -65,6 +65,28 @@ fn callers_lists_direct_callers() {
 }
 
 #[test]
+fn dataflow_traces_dependence() {
+    let dir = project_with(
+        "a.rs",
+        "fn f(a: i32) -> i32 { let b = a + 1; let c = b * 2; c }\n",
+    );
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args([
+            "dataflow",
+            "f",
+            dir.path().to_str().unwrap(),
+            "--var",
+            "c",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"b\""))
+        .stdout(predicate::str::contains("\"a\""));
+}
+
+#[test]
 fn impact_reports_transitive_callers() {
     let dir = project_with(
         "a.rs",

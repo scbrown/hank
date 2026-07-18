@@ -12,10 +12,9 @@ use clap::{CommandFactory, Parser, Subcommand};
 use colored::Colorize;
 use tracing_subscriber::EnvFilter;
 
+use crate::cli_cmds;
 use crate::config::HankConfig;
 use crate::extract::{extract_symbols, rust_files};
-use crate::graph::{CodeGraph, Dir};
-use crate::render::{print_reached, reached_json};
 use crate::types::Symbol;
 
 /// Hank — live, per-tenant code structure for the Bobbin × Quipu stack.
@@ -89,6 +88,23 @@ enum Commands {
         #[arg(long, default_value_t = 5)]
         hops: u32,
     },
+    /// Intra-procedural data dependence within a function.
+    Dataflow {
+        /// Function to analyze.
+        function: String,
+        /// Directory to build the dataflow over (defaults to current dir).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Trace flow for a specific variable (omit to list all edges).
+        #[arg(long)]
+        var: Option<String>,
+        /// Trace what the variable flows into, rather than what it depends on.
+        #[arg(long)]
+        forward: bool,
+        /// Maximum hops to follow.
+        #[arg(long, default_value_t = 5)]
+        hops: u32,
+    },
     /// Verdict on a proposed edit buffer (Phase 5).
     Verify {
         /// The file being edited.
@@ -126,8 +142,27 @@ impl Cli {
                 Ok(())
             }
             Commands::Serve { http } => self.serve(*http).await,
-            Commands::Callers { symbol, path } => self.callers(symbol, path),
-            Commands::Impact { symbol, path, hops } => self.impact(symbol, path, *hops),
+            Commands::Callers { symbol, path } => {
+                cli_cmds::callers(self.json, self.quiet, symbol, path)
+            }
+            Commands::Impact { symbol, path, hops } => {
+                cli_cmds::impact(self.json, self.quiet, symbol, path, *hops)
+            }
+            Commands::Dataflow {
+                function,
+                path,
+                var,
+                forward,
+                hops,
+            } => cli_cmds::dataflow(
+                self.json,
+                self.quiet,
+                function,
+                path,
+                var.as_deref(),
+                *forward,
+                *hops,
+            ),
             Commands::Verify { .. } => {
                 self.planned(
                     "verify",
@@ -213,82 +248,6 @@ impl Cli {
                     sym.tier
                 );
             }
-        }
-        Ok(())
-    }
-
-    /// Print direct callers and callees of `symbol`.
-    fn callers(&self, symbol: &str, path: &Path) -> anyhow::Result<()> {
-        let graph = CodeGraph::build(path)?;
-        if !graph.has_symbol(symbol) {
-            return self.not_in_graph(symbol);
-        }
-        let callers = graph.direct(symbol, Dir::Callers);
-        let callees = graph.direct(symbol, Dir::Callees);
-
-        if self.json {
-            let out = serde_json::json!({
-                "symbol": symbol,
-                "callers": reached_json(&callers),
-                "callees": reached_json(&callees),
-            });
-            println!("{}", serde_json::to_string_pretty(&out)?);
-        } else {
-            print_reached(&format!("callers of {symbol}"), &callers, self.quiet);
-            print_reached(&format!("callees of {symbol}"), &callees, self.quiet);
-        }
-        Ok(())
-    }
-
-    /// Print the blast radius (transitive callers) of `symbol`.
-    fn impact(&self, symbol: &str, path: &Path, hops: u32) -> anyhow::Result<()> {
-        let graph = CodeGraph::build(path)?;
-        if !graph.has_symbol(symbol) {
-            return self.not_in_graph(symbol);
-        }
-        let reached = graph.reachable(symbol, Dir::Callers, hops);
-
-        if self.json {
-            let out = serde_json::json!({
-                "symbol": symbol,
-                "hops": hops,
-                "direction": "callers",
-                "count": reached.len(),
-                "reachable": reached_json(&reached),
-            });
-            println!("{}", serde_json::to_string_pretty(&out)?);
-        } else if reached.is_empty() {
-            if !self.quiet {
-                println!("nothing calls {symbol} (blast radius empty)");
-            }
-        } else {
-            println!(
-                "{} {} symbol(s) affected by changing {symbol}:",
-                "impact".green().bold(),
-                reached.len()
-            );
-            for item in &reached {
-                println!(
-                    "  {}:{} {} (hop {})",
-                    item.file,
-                    item.start_line,
-                    item.name.cyan(),
-                    item.distance
-                );
-            }
-        }
-        Ok(())
-    }
-
-    /// Report that a symbol is not present in the built graph.
-    fn not_in_graph(&self, symbol: &str) -> anyhow::Result<()> {
-        if self.json {
-            println!(
-                "{}",
-                serde_json::json!({ "symbol": symbol, "found": false })
-            );
-        } else if !self.quiet {
-            println!("symbol {symbol} not found in the call graph");
         }
         Ok(())
     }

@@ -16,11 +16,13 @@ use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler
 use serde::Serialize;
 
 use super::tools::{
-    AnalyzeRequest, AnalyzeResponse, ImpactRequest, ImpactResponse, NeighborsRequest,
-    NeighborsResponse, ReachItem, RefItem, ReferencesRequest, ReferencesResponse, StatusResponse,
-    SymbolItem, SymbolsRequest, SymbolsResponse,
+    AnalyzeRequest, AnalyzeResponse, DataflowRequest, DataflowResponse, DepEdgeItem, FlowStepItem,
+    ImpactRequest, ImpactResponse, NeighborsRequest, NeighborsResponse, ReachItem, RefItem,
+    ReferencesRequest, ReferencesResponse, StatusResponse, SymbolItem, SymbolsRequest,
+    SymbolsResponse,
 };
 use crate::config::HankConfig;
+use crate::dataflow::{Dataflow, FlowDir};
 use crate::extract::{extract_symbols, rust_files};
 use crate::graph::{CodeGraph, Dir, Reached};
 
@@ -202,6 +204,62 @@ impl HankMcpServer {
             hops,
             count: reachable.len(),
             reachable: reachable.iter().map(reach_item).collect(),
+        };
+        json_result(&response)
+    }
+
+    #[tool(
+        description = "Intra-procedural data dependence within a function. With `var`, trace what it depends on (or, with forward=true, what it flows into); without `var`, list all dependence edges. Best for: 'where does this value come from?'."
+    )]
+    async fn hank_dataflow(
+        &self,
+        Parameters(req): Parameters<DataflowRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let base = req
+            .path
+            .as_ref()
+            .map_or_else(|| self.root.clone(), |p| self.root.join(p));
+        let flow = Dataflow::build(&base).map_err(internal)?;
+        let found = flow.has_function(&req.function);
+
+        let (direction, steps, edges) = match &req.var {
+            Some(var) => {
+                let dir = if req.forward.unwrap_or(false) {
+                    FlowDir::FlowsInto
+                } else {
+                    FlowDir::DependsOn
+                };
+                let steps = flow
+                    .flow(&req.function, var, dir, req.hops.unwrap_or(5))
+                    .into_iter()
+                    .map(|s| FlowStepItem {
+                        name: s.name,
+                        distance: s.distance,
+                    })
+                    .collect();
+                (Some(dir.as_str().to_string()), steps, Vec::new())
+            }
+            None => {
+                let edges = flow
+                    .edges(&req.function)
+                    .iter()
+                    .map(|e| DepEdgeItem {
+                        dependent: e.dependent.clone(),
+                        depends_on: e.depends_on.clone(),
+                        line: e.line,
+                    })
+                    .collect();
+                (None, Vec::new(), edges)
+            }
+        };
+
+        let response = DataflowResponse {
+            function: req.function.clone(),
+            found,
+            direction,
+            var: req.var.clone(),
+            flow: steps,
+            edges,
         };
         json_result(&response)
     }

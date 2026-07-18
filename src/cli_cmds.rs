@@ -1,0 +1,164 @@
+//! Implementations of the call-graph and dataflow CLI commands.
+//!
+//! These live outside `cli.rs` to keep that file small; they take the two
+//! output flags they need (`json`, `quiet`) rather than the whole `Cli`.
+
+use std::path::Path;
+
+use colored::Colorize;
+
+use crate::dataflow::{Dataflow, FlowDir};
+use crate::graph::{CodeGraph, Dir};
+use crate::render::{print_reached, reached_json};
+
+/// `hank callers` — direct callers and callees of a symbol.
+pub(crate) fn callers(json: bool, quiet: bool, symbol: &str, path: &Path) -> anyhow::Result<()> {
+    let graph = CodeGraph::build(path)?;
+    if !graph.has_symbol(symbol) {
+        return not_found(json, quiet, symbol, "call graph");
+    }
+    let callers = graph.direct(symbol, Dir::Callers);
+    let callees = graph.direct(symbol, Dir::Callees);
+
+    if json {
+        let out = serde_json::json!({
+            "symbol": symbol,
+            "callers": reached_json(&callers),
+            "callees": reached_json(&callees),
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        print_reached(&format!("callers of {symbol}"), &callers, quiet);
+        print_reached(&format!("callees of {symbol}"), &callees, quiet);
+    }
+    Ok(())
+}
+
+/// `hank impact` — the blast radius (transitive callers) of a symbol.
+pub(crate) fn impact(
+    json: bool,
+    quiet: bool,
+    symbol: &str,
+    path: &Path,
+    hops: u32,
+) -> anyhow::Result<()> {
+    let graph = CodeGraph::build(path)?;
+    if !graph.has_symbol(symbol) {
+        return not_found(json, quiet, symbol, "call graph");
+    }
+    let reached = graph.reachable(symbol, Dir::Callers, hops);
+
+    if json {
+        let out = serde_json::json!({
+            "symbol": symbol,
+            "hops": hops,
+            "direction": "callers",
+            "count": reached.len(),
+            "reachable": reached_json(&reached),
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else if reached.is_empty() {
+        if !quiet {
+            println!("nothing calls {symbol} (blast radius empty)");
+        }
+    } else {
+        println!(
+            "{} {} symbol(s) affected by changing {symbol}:",
+            "impact".green().bold(),
+            reached.len()
+        );
+        for item in &reached {
+            println!(
+                "  {}:{} {} (hop {})",
+                item.file,
+                item.start_line,
+                item.name.cyan(),
+                item.distance
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `hank dataflow` — intra-procedural data dependence within a function.
+pub(crate) fn dataflow(
+    json: bool,
+    quiet: bool,
+    function: &str,
+    path: &Path,
+    var: Option<&str>,
+    forward: bool,
+    hops: u32,
+) -> anyhow::Result<()> {
+    let flow = Dataflow::build(path)?;
+    if !flow.has_function(function) {
+        return not_found(json, quiet, function, "dataflow");
+    }
+    let dir = if forward {
+        FlowDir::FlowsInto
+    } else {
+        FlowDir::DependsOn
+    };
+
+    match var {
+        Some(var) => {
+            let steps = flow.flow(function, var, dir, hops);
+            if json {
+                let out = serde_json::json!({
+                    "function": function,
+                    "var": var,
+                    "direction": dir.as_str(),
+                    "count": steps.len(),
+                    "flow": steps.iter().map(|s| serde_json::json!({ "name": s.name, "distance": s.distance })).collect::<Vec<_>>(),
+                });
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            } else if steps.is_empty() {
+                if !quiet {
+                    println!("{var} has no {} edges in {function}", dir.as_str());
+                }
+            } else {
+                println!("{} of {var} in {function}:", dir.as_str());
+                for step in &steps {
+                    println!("  {} (hop {})", step.name.cyan(), step.distance);
+                }
+            }
+        }
+        None => {
+            let edges = flow.edges(function);
+            if json {
+                let out = serde_json::json!({
+                    "function": function,
+                    "count": edges.len(),
+                    "edges": edges.iter().map(|e| serde_json::json!({ "dependent": e.dependent, "depends_on": e.depends_on, "line": e.line })).collect::<Vec<_>>(),
+                });
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            } else if edges.is_empty() {
+                if !quiet {
+                    println!("no data-dependence edges in {function}");
+                }
+            } else {
+                println!("data dependence in {function}:");
+                for edge in edges {
+                    println!(
+                        "  {}:{} {} depends on {}",
+                        function,
+                        edge.line,
+                        edge.dependent.cyan(),
+                        edge.depends_on.cyan()
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Shared "not found" reporting for a missing symbol/function.
+fn not_found(json: bool, quiet: bool, name: &str, what: &str) -> anyhow::Result<()> {
+    if json {
+        println!("{}", serde_json::json!({ "name": name, "found": false }));
+    } else if !quiet {
+        println!("{name} not found in the {what}");
+    }
+    Ok(())
+}
