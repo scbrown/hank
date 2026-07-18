@@ -50,24 +50,52 @@ hank status
 > the [phasing](docs/hank-spec.md#12-milestones--phasing); Phase 3 (multi-tenancy)
 > is next.
 
-## 🤔 Why Hank?
+## 🤔 Why Hank? — and how it's different
 
-Most code-intelligence tools pick one signal and go deep. The stack already had
-two — embedding similarity (Bobbin) and historical co-change (Bobbin). Hank adds
-the third, and makes it correct for a team:
+Structural code intelligence isn't new; the strongest tools each prove out **one**
+signal class. Hank deliberately takes the best idea from each — then adds the axes
+none of them have: **a whole team editing at once, governance, and time.**
 
-|  | **Embeddings / co-change** | **A language server** | **Hank** |
-|--|:--:|:--:|:--:|
-| Knows call/dataflow structure | ❌ | ✅ | ✅ |
-| Explains *why* two files couple | ❌ | ⚠️ | ✅ |
-| Blast radius / impact | ❌ | ⚠️ | ✅ |
-| Correct while a **team** edits concurrently | ❌ | ❌ | ✅ |
-| Feeds a governed, versioned record | ❌ | ❌ | ✅ (→ Quipu) |
-| Scopes an agent's sandbox (trust boundary) | ❌ | ❌ | ✅ |
+### Key selling points
 
-The differentiated move is **fusion + governance + time + tenancy**: a co-change
-edge with no structural explanation is a refactoring smell; one backed by a
-dataflow path is real coupling. No single signal makes that distinction.
+- 🧵 **Correct under concurrency** — the only structural engine that stays right
+  while a whole team of humans *and agents* edit the same base at once (shared base
+  graph + per-tenant copy-on-write overlays).
+- 🔀 **Fusion, not one signal** — call/dataflow structure *plus* historical
+  co-change *plus* embeddings. A coupling backed by a dataflow path is real; one
+  without is a refactoring smell — only fusion tells them apart.
+- 🪢 **Governed & time-travelable** — committed facts promote into
+  [Quipu](https://github.com/scbrown/quipu) as SHACL-validated, bitemporal RDF: a
+  versioned source of truth, not a best-effort cache.
+- 💥 **Blast radius as a primitive** — *"what will this change break,"* per tenant —
+  and it doubles as the incremental-update engine.
+- ⚡ **Two-tier freshness** — tree-sitter-fast breadth + LSP-precise depth, every
+  fact confidence-tagged so an agent knows what it's trusting.
+- 🛡️ **Structure scopes the sandbox** — per-tenant blast radius bounds what an
+  autonomous agent may touch, and can act as *generation guardrails*, not just context.
+- 🪙 **Token-cheap** — structural answers instead of dumping files into context.
+
+### How it compares
+
+| | **codebase-memory** | **Joern (CPG)** | **LSP / multilspy** | **Embeddings / co-change** | **Hank** |
+|---|:--:|:--:|:--:|:--:|:--:|
+| Fast structural graph, low token cost | ✅ | ⚠️ | ❌ | ✅ | ✅ |
+| Call graph + **dataflow / taint** | ⚠️ | ✅ | ⚠️ | ❌ | ✅ |
+| Precise LSP-grade types | tiered | ❌ | ✅ | ❌ | tiered |
+| Incremental freshness on edit | ✅ | ❌ | ✅ | ❌ | ✅ *(frontier-bounded)* |
+| **Correct while a team edits concurrently** | ❌ | ❌ | ❌ | ❌ | ✅ *(per-tenant overlays)* |
+| **Governed, versioned, time-travel record** | ❌ | ❌ | ❌ | ❌ | ✅ *(→ Quipu)* |
+| Blast radius scopes an **agent trust boundary** | ❌ | ❌ | ❌ | ❌ | ✅ |
+
+Each proves one piece — **[multilspy](https://github.com/microsoft/multilspy)** that
+LSP facts can also be *generation guardrails*, **[Joern](https://joern.io)** the Code
+Property Graph and dataflow, **codebase-memory** a lean standalone analyzer with
+content-hash incremental freshness. Hank is spiritually closest to codebase-memory,
+extended with Joern-style dataflow, LSP precision, **tenancy**, and a governed
+projection into Quipu.
+
+> The moat isn't any single signal — it's **fusion + governance + time + tenancy**,
+> kept correct while a whole team edits. No off-the-shelf tool does that.
 
 ## 🧩 The Stack — three tools, one job each
 
@@ -98,35 +126,69 @@ dataflow path is real coupling. No single signal makes that distinction.
 See [`docs/vision.md`](docs/vision.md) for the north star and
 [`docs/hank-spec.md`](docs/hank-spec.md) for the full build spec.
 
+## 🪢 Hank + Quipu — what the pair unlocks
+
+Hank holds the *live* structure; [Quipu](https://github.com/scbrown/quipu) governs
+the *committed* record (bitemporal RDF, SHACL-validated, SPARQL-queryable). Together
+they do things neither does alone:
+
+- **Governed SPARQL-over-code.** Query committed structure as typed, validated facts
+  — *"every public function with no test," "modules that violate the layering," "who
+  still calls this deprecated API"* — not a cache you hope is fresh.
+- **Impact over history.** Bitemporal facts answer *what did this change break, and
+  when did that coupling first appear* — blast radius that accounts for how the code
+  got here, replayable at any point in time.
+- **Ontology rules that block or influence changes.** Author architectural
+  constraints as ontology rules in Quipu (SHACL over the code graph); Hank evaluates
+  a proposed edit against them **live and per tenant**, and warns or blocks a
+  violation *before it lands*. Policy-as-ontology — a new rule is a graph assertion,
+  not a new bespoke linter.
+- **Per-tenant parallel worlds.** A shared base plus copy-on-write overlays (Hank)
+  map onto Quipu named graphs, so a whole team edits concurrently without corrupting
+  each other's view — over a single **source-of-truth root** that's always queryable.
+- **Agent trust boundaries.** Per-tenant blast radius scopes what an autonomous agent
+  may touch — structure *defines the sandbox* — via the Aegis/broker machinery.
+- **Code ↔ intent, linked.** Quipu provenance ties structural facts to the decisions
+  and work-items that produced them — *"which decision does this module implement,"
+  "what tickets co-occur with this code path."*
+
 ## 🚀 Quick Start
 
-```bash
-# Build
-just build            # or: cargo build
+### Install
 
-# Analyze a tree and list structure
-cargo run -- analyze src
-cargo run -- refs <symbol> src
-cargo run -- status
+```bash
+# From source — puts the `hank` binary on your PATH
+cargo install --path .                              # or: just install
+# with the MCP server and the extra language grammars:
+cargo install --path . --features "mcp langs-extra"
+```
+
+### Use
+
+```bash
+# Analyze a tree and list its structure
+hank analyze src
+hank refs <symbol> src
+hank status
 
 # Call graph: callers/callees and blast radius
-cargo run -- callers <symbol> src
-cargo run -- impact <symbol> src --hops 5
+hank callers <symbol> src
+hank impact <symbol> src --hops 5
 
 # Data dependence within a function
-cargo run -- dataflow <function> src --var <variable>
+hank dataflow <function> src --var <variable>
 
 # Export the referential structure (code + docs) as governed RDF Turtle
-cargo run -- export src --repo myrepo --format turtle
+hank export src --repo myrepo --format turtle
 
 # Serve over MCP (stdio) for an agent
-cargo run --features mcp -- serve
+hank serve
 
 # Edit-reactive: wire `hank hook post-edit` into a Claude Code PostToolUse hook
 # for synchronous blast-radius advisories on every edit (see docs).
 
 # Shell completions
-cargo run -- completions bash > hank.bash
+hank completions bash > hank.bash
 ```
 
 Hank shares the stack's `.bobbin/config.toml` under a `[hank]` table — see the
