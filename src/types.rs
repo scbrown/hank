@@ -31,6 +31,18 @@ pub enum Freshness {
     Recomputing,
 }
 
+impl Tier {
+    /// The lowercase string form used on the wire and in the ontology.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Tier::TreeSitter => "treesitter",
+            Tier::Lsp => "lsp",
+            Tier::Cpg => "cpg",
+        }
+    }
+}
+
 /// The kind of a named code symbol. Values mirror the enumeration in Quipu's
 /// `shapes/code-entities.ttl` (`bobbin:symbolKind`) so promoted facts validate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +74,29 @@ pub enum SymbolKind {
     Constructor,
     /// A type alias.
     TypeAlias,
+}
+
+impl SymbolKind {
+    /// The lowercase string form used on the wire and in the ontology
+    /// (`bobbin:symbolKind`).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SymbolKind::Function => "function",
+            SymbolKind::Method => "method",
+            SymbolKind::Class => "class",
+            SymbolKind::Interface => "interface",
+            SymbolKind::Enum => "enum",
+            SymbolKind::Struct => "struct",
+            SymbolKind::Variable => "variable",
+            SymbolKind::Constant => "constant",
+            SymbolKind::Module => "module",
+            SymbolKind::Property => "property",
+            SymbolKind::Field => "field",
+            SymbolKind::Constructor => "constructor",
+            SymbolKind::TypeAlias => "type_alias",
+        }
+    }
 }
 
 /// A structural edge between two symbols or modules. These become predicates in

@@ -5,7 +5,7 @@ USAGE:
     hank <COMMAND>
 
 COMMANDS:
-    serve       Run the MCP (stdio + HTTP) and HTTP API servers   [Phase 1]
+    serve       Run the MCP server (stdio; --http for streamable-HTTP)
     analyze     Build the base graph for a path and print a summary
     refs        Find the definition sites of a symbol by name
     callers     Callers / callees of a symbol                     [Phase 2]

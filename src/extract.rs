@@ -6,10 +6,23 @@
 //! top in later phases. Today only Rust is wired; the remaining grammars in
 //! Bobbin's set arrive behind the `langs-extra` feature.
 
+use std::path::{Path, PathBuf};
+
 use tree_sitter::Parser;
 
 use crate::errors::{Error, Result};
 use crate::types::{Symbol, SymbolKind, Tier};
+
+/// Walk `path` for Rust source files, honoring `.gitignore`.
+#[must_use]
+pub fn rust_files(path: &Path) -> Vec<PathBuf> {
+    ignore::WalkBuilder::new(path)
+        .build()
+        .filter_map(std::result::Result::ok)
+        .map(ignore::DirEntry::into_path)
+        .filter(|p| p.extension().is_some_and(|ext| ext == "rs"))
+        .collect()
+}
 
 /// Extract the named symbols from `source`, written in `language`.
 ///

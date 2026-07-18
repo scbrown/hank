@@ -15,6 +15,8 @@ pub mod cli;
 pub mod config;
 pub mod errors;
 pub mod extract;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 pub mod types;
 
 pub use errors::{Error, Result};

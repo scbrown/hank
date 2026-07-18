@@ -6,14 +6,14 @@
 //! land (see `docs/hank-spec.md` §12).
 
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{CommandFactory, Parser, Subcommand};
 use colored::Colorize;
 use tracing_subscriber::EnvFilter;
 
 use crate::config::HankConfig;
-use crate::extract::extract_symbols;
+use crate::extract::{extract_symbols, rust_files};
 use crate::types::Symbol;
 
 /// Hank — live, per-tenant code structure for the Bobbin × Quipu stack.
@@ -48,8 +48,12 @@ pub struct Cli {
 /// The available subcommands.
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Run the MCP (stdio + HTTP) and HTTP API servers.
-    Serve,
+    /// Run the MCP server (stdio by default; `--http` for streamable-HTTP).
+    Serve {
+        /// Serve over streamable-HTTP instead of stdio.
+        #[arg(long)]
+        http: bool,
+    },
     /// Build the base graph for a path and print a summary.
     Analyze {
         /// Directory or file to analyze (defaults to the current directory).
@@ -113,14 +117,7 @@ impl Cli {
                 clap_complete::generate(*shell, &mut cmd, "hank", &mut io::stdout());
                 Ok(())
             }
-            Commands::Serve => {
-                self.planned(
-                    "serve",
-                    1,
-                    "build with `--features mcp` to enable the MCP + HTTP surface",
-                );
-                Ok(())
-            }
+            Commands::Serve { http } => self.serve(*http).await,
             Commands::Callers { .. } => {
                 self.planned("callers", 2, "call-graph extraction lands in Phase 2");
                 Ok(())
@@ -153,7 +150,7 @@ impl Cli {
     }
 
     /// Build the base graph for `path` and print a summary.
-    fn analyze(&self, path: &PathBuf) -> anyhow::Result<()> {
+    fn analyze(&self, path: &Path) -> anyhow::Result<()> {
         let mut files = 0usize;
         let mut symbols = 0usize;
         for file in rust_files(path) {
@@ -177,7 +174,7 @@ impl Cli {
     }
 
     /// Find definitions of `symbol` by name under `path`.
-    fn refs(&self, symbol: &str, path: &PathBuf) -> anyhow::Result<()> {
+    fn refs(&self, symbol: &str, path: &Path) -> anyhow::Result<()> {
         let mut hits: Vec<(PathBuf, Symbol)> = Vec::new();
         for file in rust_files(path) {
             let source = std::fs::read_to_string(&file)?;
@@ -249,6 +246,37 @@ impl Cli {
         Ok(())
     }
 
+    /// Run the MCP server (stdio, or streamable-HTTP with `http = true`).
+    async fn serve(&self, http: bool) -> anyhow::Result<()> {
+        #[cfg(feature = "mcp")]
+        {
+            let root = std::env::current_dir()?;
+            let tenant = self.tenant.clone();
+            if http {
+                let config = HankConfig::load(&root)?;
+                crate::mcp::run_http(
+                    root,
+                    tenant,
+                    config.serve.bind_address,
+                    config.serve.mcp_http_port,
+                )
+                .await
+            } else {
+                crate::mcp::run_stdio(root, tenant).await
+            }
+        }
+        #[cfg(not(feature = "mcp"))]
+        {
+            let _ = http;
+            self.planned(
+                "serve",
+                1,
+                "build with `--features mcp` to enable the MCP + HTTP surface",
+            );
+            Ok(())
+        }
+    }
+
     /// Print a notice for a command whose engine has not yet landed.
     fn planned(&self, name: &str, phase: u8, detail: &str) {
         if !self.quiet {
@@ -270,16 +298,6 @@ fn tier_availability() -> Vec<String> {
         tiers.push("cpg".to_string());
     }
     tiers
-}
-
-/// Walk `path` for Rust source files, honoring `.gitignore`.
-fn rust_files(path: &PathBuf) -> Vec<PathBuf> {
-    ignore::WalkBuilder::new(path)
-        .build()
-        .filter_map(std::result::Result::ok)
-        .map(ignore::DirEntry::into_path)
-        .filter(|p| p.extension().is_some_and(|ext| ext == "rs"))
-        .collect()
 }
 
 /// Initialize the tracing subscriber (logs to stderr, `RUST_LOG`-controlled).
