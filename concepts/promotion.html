@@ -187,6 +187,19 @@ shared branch (commit/merge), the corresponding facts are <strong>promoted</stro
 Quipu as a new bitemporal state — valid-time = commit time, transaction-time =
 when learned. Quipu holds the settled, governed, versioned record; Hank holds
 what's in flight. Uncommitted churn never pollutes the governed graph.</p>
+<h2 id="export--the-governed-projection"><a class="header" href="#export--the-governed-projection">Export — the governed projection</a></h2>
+<p><code>hank export</code> is the projection Hank promotes: the <strong>precise, typed referential
+structure</strong> (modules, symbols, <code>definedIn</code>/<code>calls</code>, and — as the markdown
+extractor lands — <code>Document</code>/<code>Section</code> + <code>references</code>), emitted as RDF Turtle in
+the <code>bobbin:</code> ontology. This is <strong>not</strong> Bobbin's chunking; it is structure for
+reasoning and governance.</p>
+<pre><code class="language-bash">hank export src --repo myrepo --format turtle   # dump the referential graph
+# hank export --to quipu                         # promote it (Phase 4)
+</code></pre>
+<p>Code and docs are one referential graph (spec §5.10): code leans real-time (the
+live graph + edit hook), docs lean asynchronous (this export). Once in Quipu,
+doc rot becomes a SPARQL query — "every <code>Document</code> referencing a <code>CodeSymbol</code>
+that no longer exists."</p>
 <ul>
 <li>Facts are emitted as Turtle in the existing <code>bobbin:</code> code ontology and
 <strong>SHACL-validated before write</strong> — Hank never writes to Quipu without passing
