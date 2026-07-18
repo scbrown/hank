@@ -753,6 +753,34 @@ queries. The rule (from the vision's risks): **Hank's transient store must never
 become a second source of truth for committed facts.** Committed truth lives in
 Quipu; Hank holds only what is in flight plus a read-only projection of the base.
 
+### 9.7 Downstream: promotion feeds work-item co-occurrence in Quipu
+
+Hank's promotion emits more than entity facts — at commit time it can write the
+**provenance edge `commit → touched entities`** (valid-time = commit time,
+`source` = SHA, `actor` = committer). That provenance is the substrate for a
+Quipu-side capability distinct from Bobbin's statistical co-change:
+**governed, provenance-based work-item co-occurrence** (ticket/epic ↔ code).
+
+Keep the three notions of "coupling" distinct — they are different mechanisms
+answering different questions, and conflating them recreates the two-engines
+problem:
+
+| Signal | Owner | Mechanism | Question |
+|---|---|---|---|
+| Structural coupling | **Hank** | call/dataflow reachability | "what is wired to this" |
+| Statistical co-change | **Bobbin** | FP-Growth over git history | "what *tends to* change together" |
+| Work-item co-occurrence | **Quipu** | deterministic SPARQL over provenance edges | "what work *did* touch this, and what else did it touch" |
+
+The loop closes cleanly: **Hank promotes the `commit → entity` provenance →
+Quipu aggregates it (with `bead → commit`) into ticket/epic co-occurrence →
+Bobbin fuses all three signals.** This generalizes FR-11's structural-vs-co-change
+reconciliation into multi-signal corroboration: coupling backed by structure
+*and* co-change *and* a shared work item is strong; coupling in only one is weak.
+The same borrow-don't-derive invariant applies to Quipu (no statistical mining
+there — that stays Bobbin's). Tracked Quipu-side as
+[scbrown/quipu#37](https://github.com/scbrown/quipu/issues/37); Hank's obligation
+is only to promote the provenance edge in Phase 4.
+
 ---
 
 ## 10. MCP & HTTP Tool Surface
