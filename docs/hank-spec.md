@@ -1,9 +1,14 @@
 # Hank — Product Requirements & Build Specification
 
-**Version:** 0.1
-**Status:** Draft
+**Version:** 0.2
+**Status:** Living (Phases 1–2 implemented; Phase 3 next)
 **Last Updated:** 2026-07-18
 **Owning vision:** [`docs/vision.md`](./vision.md) — *Bobbin × Hank × Quipu: A Governed, Multi-Signal, Multi-Tenant Code Intelligence Layer (v0.2)*
+
+> **New here / picking this up?** Start with **Appendix D (Implementation
+> Status)** for exactly what is built, **Appendix E (Design Decision Log)** for
+> why the architecture is the way it is, and **Appendix F (Handoff & Next
+> Steps)** for what to build next and how.
 
 ---
 
@@ -928,6 +933,13 @@ serialized with `serde_json::to_string_pretty` into `CallToolResult::success`.
 The HTTP API exposes a parallel endpoint per tool (Quipu's REST-mirrors-MCP
 pattern) for the broker.
 
+> **Refinement — name-based today, position-based for the LSP tier.** The
+> current tools resolve by symbol *name* (the tree-sitter tier). The precise
+> LSP tier (FR-2/FR-4) wants **position-based** variants — `(file, line, col)` —
+> so `hank_definition` can disambiguate overloads and shadowing the way a
+> language server does. MCP carries positions fine; the tools were simply
+> designed name-first. Add position variants when the `lsp` tier lands.
+
 ---
 
 ## 11. Configuration
@@ -1208,6 +1220,140 @@ edge instead carries a `bobbin:onBranch "main"` term.)
   "structural_only": [ "src/api/session.rs::refresh" ]
 }
 ```
+
+---
+
+## Appendix D: Implementation Status
+
+A snapshot of what is actually built, as of commit `d5668ec`. The body of this
+spec (§§1–11) is the *design*; this appendix is the *state*.
+
+**Phases:** Phase 1 (single-tenant structure + MCP) and Phase 2 (call graph,
+blast radius, intra-procedural dataflow, co-change reconciliation) are
+**complete**. Phase 3 (multi-tenancy) is next and unstarted.
+
+**Source layout (`src/`, ~3,000 LOC, every file < 400 lines):**
+
+| Module | Role | Status |
+|---|---|---|
+| `extract.rs` | tree-sitter symbol + call-site extraction (Rust) | done |
+| `graph.rs` | `CodeGraph` (petgraph) + `reachable()` primitive (FR-12) | done |
+| `dataflow.rs` | intra-procedural data dependence (Rust-native) | done |
+| `reconcile.rs` | structural-vs-co-change partition (FR-11) | done |
+| `export.rs` | referential structure → Turtle in `bobbin:` ontology (FR-34) | code side done |
+| `hook.rs` | Claude Code `PostToolUse` advisory adapter (FR-30) | post-edit done |
+| `mcp/` | `rmcp` server (`server`/`tools`/`transport`) | done (`mcp` feature) |
+| `config.rs` | `[hank]` config table | done |
+| `cli.rs` / `cli_cmds.rs` / `render.rs` | CLI surface | done |
+| `types.rs` / `errors.rs` | fact model (Tier/Freshness/…) + errors | done |
+
+**CLI commands:** `analyze`, `refs`, `callers`, `impact` (`--cochange`),
+`dataflow`, `export`, `hook post-edit`, `status`, `serve` (`mcp` feature),
+`completions` — all live. `verify`, `promote` — declared, print a phase notice.
+
+**MCP tools (8, `mcp` feature):** `hank_status`, `hank_symbols`,
+`hank_references`, `hank_analyze`, `hank_callers`, `hank_callees`, `hank_impact`
+(with `cochange`), `hank_dataflow`. Over stdio + streamable-HTTP.
+
+**Cargo features:** `default = []`; `mcp`, `langs-extra`, `cpg`, `lsp`, `quipu`
+(all off by default; `mcp` in the CI matrix). `langs-extra` deps are declared but
+extractors are Rust-only so far.
+
+**Tests:** 27 (19 unit + 8 integration via `assert_cmd`), green on `default` and
+`mcp`. Quality gate green: `cargo fmt`, `clippy -D warnings` (both arms),
+markdownlint, mdBook.
+
+**Not yet built:** the resident daemon / per-tenant overlays (Phase 3); LSP
+precision tier (`lsp`); CPG control-dependence + inter-procedural taint (`cpg`);
+Quipu promotion wiring (`quipu`, `--to quipu`); doc→code reference extraction
+(FR-33); `pre-edit` guard; position-based tool variants; the `langs-extra`
+grammar extractors.
+
+## Appendix E: Design Decision Log
+
+The load-bearing decisions and *why*, so they are not re-litigated blind.
+
+1. **Stack pinned to Bobbin + Quipu.** Edition 2021, `rmcp` 0.12, tree-sitter
+   0.25, `petgraph`, `oxrdf`/`oxttl`/`rudof` (behind `quipu`), Quipu's clippy
+   lint block verbatim. Rationale: the three tools must build against a coherent
+   dependency set (§8).
+2. **`Cargo.lock` committed** (unlike Bobbin). Rationale: the spec's own
+   float-to-tip lesson (§14.10) — a gitignored lock let a feature ship dark.
+3. **CPG = Rust-native, not Joern** (§14.1). Reimplement the traversals we need;
+   no JVM dependency or serialization seam. Started with intra-procedural data
+   dependence.
+4. **MCP is the query interface; the harness hook is the edit-reactive
+   interface** (§5.9). Hank has two modes — pull (MCP) and push/synchronous
+   (LSP-shaped) — and forcing edit-streaming over MCP is the mistake. The
+   filesystem watcher / harness hook is the edit source, not a protocol the agent
+   speaks. Exposing LSP is an optional, deferred surface for human editors.
+5. **The hook makes Phase 3 a hard prerequisite** (FR-31). A synchronous guard
+   has a sub-100ms budget; a cold build per edit blows it → the resident overlay
+   is required, not optional.
+6. **Co-change stays Bobbin's; Hank borrows it, never derives it** (§5.4
+   invariant). `reconcile()` takes co-change as a required input with no fallback.
+   Prevents a second source of truth.
+7. **Reconciliation lives in Hank** (not Bobbin) because the broker reads Hank
+   directly for a reconciled blast radius (§5.8); it is a stateless annotation,
+   not fusion.
+8. **Export is decoupled from serving** (§5.10). `hank export` produces the
+   governed projection (Turtle); `--to quipu` = Phase-4 promotion. The present
+   (overlay) and the record (Quipu) stay cleanly separated.
+9. **Code and docs are one referential graph** (§5.10) — *not* chunking (that is
+   Bobbin's). Code leans real-time; docs lean asynchronous (export).
+10. **Branches → RDF named graphs via an additive Quipu quad store** (§9.4/§9.5),
+    not a branch-qualifier hack. Tracked as [quipu#36](https://github.com/scbrown/quipu/issues/36).
+11. **Docs publish via a `gh-pages` branch** (`peaceiris`), because the Actions
+    integration token lacks `pages: write`. One owner-only toggle remains (see
+    Appendix F).
+
+**Tracked Quipu-side follow-ups:** [quipu#36](https://github.com/scbrown/quipu/issues/36)
+(quad store / named graphs) · [quipu#37](https://github.com/scbrown/quipu/issues/37)
+(provenance-based work-item co-occurrence — fed by Hank's promotion, §9.7).
+
+## Appendix F: Handoff & Next Steps
+
+**Repo state.** `main` is current; the working branch
+`claude/hank-project-spec-qyw6qg` mirrors it. Every push runs CI (green) and
+redeploys the mdBook to `gh-pages`.
+
+**One owner-only action outstanding.** GitHub Pages is not yet enabled. Toggle:
+**Settings → Pages → Deploy from a branch → `gh-pages` / `(root)`** → the book
+goes live at `https://scbrown.github.io/hank/`. No token available to the agent
+can do this (the Pages REST endpoint is blocked and the integration lacks
+`pages: write`).
+
+**Next build: Phase 3 — multi-tenancy (the lynchpin).** It is the hard phase and
+now has a concrete forcing function (the hook's latency budget, decision E-5).
+Recommended order:
+
+1. **Resident engine + local API.** Turn `hank serve` into a daemon holding the
+   base graph, reachable over a local socket/HTTP (FR-27/FR-31). Make the hook
+   and the streamable-HTTP MCP surface *thin clients* of it (today they build
+   transiently). This alone is the biggest latency win and unblocks the guard.
+2. **Shared base + copy-on-write overlays** (FR-13/14). One read-only base graph;
+   a per-tenant overlay of touched files + recomputed frontier. `tenant` already
+   threads through the CLI/MCP surface; bind it to a working-tree path / session.
+3. **Frontier-bounded incremental update** (FR-16) reusing `graph::reachable()` —
+   the FR-12 primitive is already built; this is its second caller.
+4. **Content-hash structural sharing** (FR-15, `sha2` already a dep) and overlay
+   eviction / high-fan-in handling (§14.2).
+5. **File-watcher** (`notify`, already a dep) as the on-disk edit source for
+   agents (§5.5).
+
+**Then:** `pre-edit` guard (FR-30, needs #1); `hank export --to quipu` + doc→code
+references (FR-33/34, Phase 4); the `lsp`/`cpg` precision tiers; and filling in
+the `langs-extra` extractors.
+
+**Known imprecision to keep in mind.** Call/reference resolution is *by name*
+(tree-sitter tier), so it over-connects on common names (`build`, `new`,
+`write`). This is expected — the `lsp`/`cpg` tiers are what refine it. Every
+served fact is already tier-tagged (FR-3) so consumers know.
+
+**How to work here.** `just check` + `just test` before every push; clippy is
+`-D warnings` with Quipu's lint block; keep files < 400 lines; new Cargo features
+join the CI matrix in the same change (the "don't ship dark" rule). See
+`AGENTS.md`.
 
 ---
 
