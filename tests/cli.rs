@@ -52,3 +52,36 @@ fn refs_json_is_empty_array_when_absent() {
         .success()
         .stdout(predicate::str::contains("[]"));
 }
+
+#[test]
+fn callers_lists_direct_callers() {
+    let dir = project_with("a.rs", "fn leaf() {}\nfn mid() { leaf(); }\n");
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["callers", "leaf", dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("mid"));
+}
+
+#[test]
+fn impact_reports_transitive_callers() {
+    let dir = project_with(
+        "a.rs",
+        "fn leaf() {}\nfn mid() { leaf(); }\nfn top() { mid(); }\n",
+    );
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args([
+            "impact",
+            "leaf",
+            dir.path().to_str().unwrap(),
+            "--json",
+            "--hops",
+            "5",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"top\""))
+        .stdout(predicate::str::contains("\"count\": 2"));
+}

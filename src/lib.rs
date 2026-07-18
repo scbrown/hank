@@ -15,8 +15,10 @@ pub mod cli;
 pub mod config;
 pub mod errors;
 pub mod extract;
+pub mod graph;
 #[cfg(feature = "mcp")]
 pub mod mcp;
+mod render;
 pub mod types;
 
 pub use errors::{Error, Result};

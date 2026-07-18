@@ -21,14 +21,15 @@ hank serve --http     # streamable-HTTP at http://127.0.0.1:3040/mcp
 | `hank_symbols` | Symbol tree for a file |
 | `hank_references` | Definition site(s) of a symbol by name |
 | `hank_analyze` | Files/symbols summary for a subtree |
+| `hank_callers` | Direct callers of a symbol (who calls it) |
+| `hank_callees` | Direct callees of a symbol (what it calls) |
+| `hank_impact` | Blast radius — transitive callers, N hops |
 
 ## Planned (later phases)
 
 | Tool | Purpose | Phase |
 |------|---------|-------|
-| `hank_callers` / `hank_callees` | Call-graph neighbors | 2 |
-| `hank_dataflow` | Source→sink dataflow paths | 2 |
-| `hank_impact` | Blast radius (forward/backward, N hops) | 2 |
+| `hank_dataflow` | Source→sink dataflow paths | 2 (CPG) |
 | `hank_verify` | Verdict on a proposed edit buffer | 5 |
 | `hank_promote` | Trigger promotion of a commit to Quipu | 4 |
 

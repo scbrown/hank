@@ -1,9 +1,9 @@
 //! The `hank` command-line interface.
 //!
-//! This is a Phase-1 surface. `analyze`, `refs`, and `status` do real
-//! tree-sitter work; `serve`, `callers`, `impact`, `verify`, and `promote` are
-//! declared with their final shape and print a phase notice until their engines
-//! land (see `docs/hank-spec.md` §12).
+//! `analyze`, `refs`, `status`, `serve` (MCP), and the Phase-2 call-graph
+//! commands `callers` and `impact` are live. `verify` and `promote` are declared
+//! with their final shape and print a phase notice until their engines land
+//! (see `docs/hank-spec.md` §12).
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -14,6 +14,8 @@ use tracing_subscriber::EnvFilter;
 
 use crate::config::HankConfig;
 use crate::extract::{extract_symbols, rust_files};
+use crate::graph::{CodeGraph, Dir};
+use crate::render::{print_reached, reached_json};
 use crate::types::Symbol;
 
 /// Hank — live, per-tenant code structure for the Bobbin × Quipu stack.
@@ -68,15 +70,21 @@ enum Commands {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
-    /// Callers / callees of a symbol (Phase 2).
+    /// Direct callers and callees of a symbol.
     Callers {
         /// Symbol name.
         symbol: String,
+        /// Directory to build the call graph over (defaults to current dir).
+        #[arg(default_value = ".")]
+        path: PathBuf,
     },
-    /// Blast radius for a change (Phase 2).
+    /// Blast radius: symbols transitively affected by changing a symbol.
     Impact {
         /// Seed symbol.
         symbol: String,
+        /// Directory to build the call graph over (defaults to current dir).
+        #[arg(default_value = ".")]
+        path: PathBuf,
         /// Maximum hops to follow.
         #[arg(long, default_value_t = 5)]
         hops: u32,
@@ -118,18 +126,8 @@ impl Cli {
                 Ok(())
             }
             Commands::Serve { http } => self.serve(*http).await,
-            Commands::Callers { .. } => {
-                self.planned("callers", 2, "call-graph extraction lands in Phase 2");
-                Ok(())
-            }
-            Commands::Impact { .. } => {
-                self.planned(
-                    "impact",
-                    2,
-                    "blast radius lands in Phase 2 (the incremental-update primitive)",
-                );
-                Ok(())
-            }
+            Commands::Callers { symbol, path } => self.callers(symbol, path),
+            Commands::Impact { symbol, path, hops } => self.impact(symbol, path, *hops),
             Commands::Verify { .. } => {
                 self.planned(
                     "verify",
@@ -215,6 +213,82 @@ impl Cli {
                     sym.tier
                 );
             }
+        }
+        Ok(())
+    }
+
+    /// Print direct callers and callees of `symbol`.
+    fn callers(&self, symbol: &str, path: &Path) -> anyhow::Result<()> {
+        let graph = CodeGraph::build(path)?;
+        if !graph.has_symbol(symbol) {
+            return self.not_in_graph(symbol);
+        }
+        let callers = graph.direct(symbol, Dir::Callers);
+        let callees = graph.direct(symbol, Dir::Callees);
+
+        if self.json {
+            let out = serde_json::json!({
+                "symbol": symbol,
+                "callers": reached_json(&callers),
+                "callees": reached_json(&callees),
+            });
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        } else {
+            print_reached(&format!("callers of {symbol}"), &callers, self.quiet);
+            print_reached(&format!("callees of {symbol}"), &callees, self.quiet);
+        }
+        Ok(())
+    }
+
+    /// Print the blast radius (transitive callers) of `symbol`.
+    fn impact(&self, symbol: &str, path: &Path, hops: u32) -> anyhow::Result<()> {
+        let graph = CodeGraph::build(path)?;
+        if !graph.has_symbol(symbol) {
+            return self.not_in_graph(symbol);
+        }
+        let reached = graph.reachable(symbol, Dir::Callers, hops);
+
+        if self.json {
+            let out = serde_json::json!({
+                "symbol": symbol,
+                "hops": hops,
+                "direction": "callers",
+                "count": reached.len(),
+                "reachable": reached_json(&reached),
+            });
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        } else if reached.is_empty() {
+            if !self.quiet {
+                println!("nothing calls {symbol} (blast radius empty)");
+            }
+        } else {
+            println!(
+                "{} {} symbol(s) affected by changing {symbol}:",
+                "impact".green().bold(),
+                reached.len()
+            );
+            for item in &reached {
+                println!(
+                    "  {}:{} {} (hop {})",
+                    item.file,
+                    item.start_line,
+                    item.name.cyan(),
+                    item.distance
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Report that a symbol is not present in the built graph.
+    fn not_in_graph(&self, symbol: &str) -> anyhow::Result<()> {
+        if self.json {
+            println!(
+                "{}",
+                serde_json::json!({ "symbol": symbol, "found": false })
+            );
+        } else if !self.quiet {
+            println!("symbol {symbol} not found in the call graph");
         }
         Ok(())
     }

@@ -836,11 +836,12 @@ criterion; every phase must keep the `quipu` feature compiling both on and off
 
 ### Phase 2 — Dataflow & blast radius
 
+- [x] Call graph (FR-6): tree-sitter call-site extraction, by-name resolution, in-memory `CodeGraph`.
+- [x] Blast-radius primitive (FR-10, FR-12) with forward/backward reachability (`reachable()`, one primitive).
+- [x] `hank_impact`, `hank_callers`, `hank_callees` (MCP) and `hank callers` / `hank impact` (CLI).
 - [ ] Resolve the JVM/Rust CPG decision (§14.1): Joern behind a process boundary *or* Rust traversals for the needed subset.
-- [ ] CPG construction + dataflow/taint (FR-7, FR-8).
-- [ ] Blast-radius primitive (FR-10, FR-12) with forward/backward reachability.
+- [ ] CPG construction + dataflow/taint (FR-7, FR-8); `hank_dataflow`.
 - [ ] Reconcile structural reachable set with Bobbin co-change (FR-11).
-- [ ] `hank_impact`, `hank_dataflow`, `hank_callees`.
 - **Exit:** structural blast radius, reconciled with history, served to agents and Bobbin.
 
 ### Phase 3 — Multi-tenancy *(the hard phase)*

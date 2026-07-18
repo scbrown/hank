@@ -19,6 +19,16 @@ hank completions bash > hank.bash
 Every command accepts the global flags `--json`, `--quiet`, `--verbose`,
 `--tenant <id>`, and `--config <path>`.
 
+## Call graph and blast radius
+
+```bash
+# Direct callers and callees of a symbol
+hank callers authenticate src
+
+# Blast radius: what changing a symbol transitively affects
+hank impact authenticate src --hops 5 --json
+```
+
 ## The MCP server
 
 Built with the `mcp` feature, `hank serve` exposes `hank_status`,
@@ -33,7 +43,7 @@ See the [MCP Tools reference](../reference/mcp-tools.md).
 
 ## What works today
 
-`analyze`, `refs`, and `status` do real tree-sitter extraction, and the four
-MCP tools above are live. `callers`, `impact`, `verify`, and `promote` are
-declared with their final shape and print a phase notice until their engines
-land — see the [Specification](../design/specification.md).
+`analyze`, `refs`, `status`, the call-graph commands `callers`/`impact`, and the
+seven MCP tools are live. `verify` and `promote` are declared with their final
+shape and print a phase notice until their engines land — see the
+[Specification](../design/specification.md).

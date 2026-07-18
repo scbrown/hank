@@ -43,11 +43,11 @@ hank status
   quipu     : enabled=false branch_model=named_graph
 ```
 
-> **Status:** early Phase 1. `analyze`, `refs`, and `status` do real tree-sitter
-> work, and an MCP server (`hank serve`, `--features mcp`) exposes `hank_status`,
-> `hank_symbols`, `hank_references`, and `hank_analyze`. `callers`, `impact`,
-> `verify`, and `promote` are declared with their final shape and land per the
-> [phasing](docs/hank-spec.md#12-milestones--phasing).
+> **Status:** Phase 1 complete, Phase 2 underway. `analyze`, `refs`, `status`,
+> and the call-graph commands `callers`/`impact` do real work, and an MCP server
+> (`hank serve`, `--features mcp`) exposes seven `hank_*` tools including
+> `hank_callers`, `hank_callees`, and `hank_impact` (blast radius). `verify` and
+> `promote` land per the [phasing](docs/hank-spec.md#12-milestones--phasing).
 
 ## 🤔 Why Hank?
 
@@ -107,6 +107,10 @@ just build            # or: cargo build
 cargo run -- analyze src
 cargo run -- refs <symbol> src
 cargo run -- status
+
+# Call graph: callers/callees and blast radius
+cargo run -- callers <symbol> src
+cargo run -- impact <symbol> src --hops 5
 
 # Serve over MCP (stdio) for an agent
 cargo run --features mcp -- serve

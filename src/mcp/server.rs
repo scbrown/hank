@@ -16,11 +16,13 @@ use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler
 use serde::Serialize;
 
 use super::tools::{
-    AnalyzeRequest, AnalyzeResponse, RefItem, ReferencesRequest, ReferencesResponse,
-    StatusResponse, SymbolItem, SymbolsRequest, SymbolsResponse,
+    AnalyzeRequest, AnalyzeResponse, ImpactRequest, ImpactResponse, NeighborsRequest,
+    NeighborsResponse, ReachItem, RefItem, ReferencesRequest, ReferencesResponse, StatusResponse,
+    SymbolItem, SymbolsRequest, SymbolsResponse,
 };
 use crate::config::HankConfig;
 use crate::extract::{extract_symbols, rust_files};
+use crate::graph::{CodeGraph, Dir, Reached};
 
 /// Hank's MCP server. Resolves requests against the analysis root for a tenant.
 #[derive(Clone)]
@@ -158,6 +160,71 @@ impl HankMcpServer {
         };
         json_result(&response)
     }
+
+    #[tool(
+        description = "List the direct callers of a symbol (who calls it). Best for: 'who calls authenticate?'."
+    )]
+    async fn hank_callers(
+        &self,
+        Parameters(req): Parameters<NeighborsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.neighbors(&req, Dir::Callers)
+    }
+
+    #[tool(
+        description = "List the direct callees of a symbol (what it calls). Best for: 'what does authenticate call?'."
+    )]
+    async fn hank_callees(
+        &self,
+        Parameters(req): Parameters<NeighborsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        self.neighbors(&req, Dir::Callees)
+    }
+
+    #[tool(
+        description = "Blast radius: the symbols transitively affected by changing a symbol (its callers, up to N hops). Best for: 'what breaks if I change authenticate?'."
+    )]
+    async fn hank_impact(
+        &self,
+        Parameters(req): Parameters<ImpactRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let base = req
+            .path
+            .as_ref()
+            .map_or_else(|| self.root.clone(), |p| self.root.join(p));
+        let hops = req.hops.unwrap_or(5);
+        let graph = CodeGraph::build(&base).map_err(internal)?;
+        let found = graph.has_symbol(&req.symbol);
+        let reachable = graph.reachable(&req.symbol, Dir::Callers, hops);
+        let response = ImpactResponse {
+            symbol: req.symbol.clone(),
+            found,
+            hops,
+            count: reachable.len(),
+            reachable: reachable.iter().map(reach_item).collect(),
+        };
+        json_result(&response)
+    }
+}
+
+impl HankMcpServer {
+    /// Shared body for `hank_callers` / `hank_callees`.
+    fn neighbors(&self, req: &NeighborsRequest, dir: Dir) -> Result<CallToolResult, McpError> {
+        let base = req
+            .path
+            .as_ref()
+            .map_or_else(|| self.root.clone(), |p| self.root.join(p));
+        let graph = CodeGraph::build(&base).map_err(internal)?;
+        let found = graph.has_symbol(&req.symbol);
+        let neighbors = graph.direct(&req.symbol, dir);
+        let response = NeighborsResponse {
+            symbol: req.symbol.clone(),
+            found,
+            count: neighbors.len(),
+            neighbors: neighbors.iter().map(reach_item).collect(),
+        };
+        json_result(&response)
+    }
 }
 
 #[tool_handler]
@@ -193,6 +260,17 @@ fn json_result<T: Serialize>(value: &T) -> Result<CallToolResult, McpError> {
 /// Map any error into an MCP internal error.
 fn internal<E: std::fmt::Display>(err: E) -> McpError {
     McpError::internal_error(err.to_string(), None)
+}
+
+/// Convert a graph `Reached` into the wire DTO.
+fn reach_item(reached: &Reached) -> ReachItem {
+    ReachItem {
+        name: reached.name.clone(),
+        file: reached.file.clone(),
+        start_line: reached.start_line,
+        distance: reached.distance,
+        via: reached.via.to_string(),
+    }
 }
 
 /// The extraction tiers this build can serve.

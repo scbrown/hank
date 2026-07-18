@@ -101,6 +101,77 @@ pub struct AnalyzeResponse {
     pub tier: String,
 }
 
+/// Request for `hank_callers` / `hank_callees` — call-graph neighbors.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct NeighborsRequest {
+    /// The symbol name.
+    #[schemars(description = "Symbol name, e.g. 'authenticate'")]
+    pub symbol: String,
+
+    /// Directory to build the call graph over (relative to the root).
+    #[schemars(description = "Directory relative to the root. Omit for the whole root.")]
+    pub path: Option<String>,
+}
+
+/// Request for `hank_impact` — the blast radius of changing a symbol.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ImpactRequest {
+    /// The seed symbol.
+    #[schemars(description = "Seed symbol name")]
+    pub symbol: String,
+
+    /// Directory to build the call graph over (relative to the root).
+    #[schemars(description = "Directory relative to the root. Omit for the whole root.")]
+    pub path: Option<String>,
+
+    /// Maximum hops to follow (default 5).
+    #[schemars(description = "Maximum hops to follow (default 5)")]
+    pub hops: Option<u32>,
+}
+
+/// One reached symbol in a call-graph response.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ReachItem {
+    /// Symbol name.
+    pub name: String,
+    /// File (relative to the root).
+    pub file: String,
+    /// 1-based definition line.
+    pub start_line: usize,
+    /// Hop distance from the seed.
+    pub distance: u32,
+    /// Relationship to the seed (`calls` / `called_by`).
+    pub via: String,
+}
+
+/// Response for `hank_callers` / `hank_callees`.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct NeighborsResponse {
+    /// The seed symbol.
+    pub symbol: String,
+    /// Whether the symbol exists in the graph.
+    pub found: bool,
+    /// Number of neighbors.
+    pub count: usize,
+    /// The direct neighbors.
+    pub neighbors: Vec<ReachItem>,
+}
+
+/// Response for `hank_impact`.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ImpactResponse {
+    /// The seed symbol.
+    pub symbol: String,
+    /// Whether the symbol exists in the graph.
+    pub found: bool,
+    /// Maximum hops followed.
+    pub hops: u32,
+    /// Number of affected symbols.
+    pub count: usize,
+    /// The transitively affected symbols (callers).
+    pub reachable: Vec<ReachItem>,
+}
+
 /// Response for `hank_status`.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct StatusResponse {
