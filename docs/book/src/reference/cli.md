@@ -11,6 +11,7 @@ COMMANDS:
     callers     Direct callers and callees of a symbol
     impact      Blast radius; --cochange reconciles against history (FR-11)
     dataflow    Intra-procedural data dependence within a function
+    export      Emit the referential structure as Turtle (bobbin: ontology)
     hook        Harness hook adapter (reads hook payload on stdin)
     verify      Verdict on a proposed edit buffer                 [Phase 5]
     promote     Promote a commit's structural facts into Quipu    [Phase 4]

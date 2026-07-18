@@ -34,6 +34,14 @@ All notable changes to this project will be documented in this file.
   edit tool call *is* the change event. Spec §5.9 reworked into an interface
   model (hook / MCP / HTTP / CLI / optional LSP) with the resident-daemon latency
   requirement (FR-31).
+- Unified code+docs referential structure (spec §5.10): the concept crystallized
+  — code and docs are one referential graph (real-time for code, asynchronous for
+  docs), distinct from Bobbin's chunking. Adds FR-33 (doc→code reference
+  extraction) and FR-34 (`hank export`).
+- Referential-structure export (FR-34, code side): `hank export --format turtle`
+  emits `CodeModule`/`CodeSymbol` + `definedIn`/`calls` edges as RDF Turtle in the
+  `bobbin:` code ontology (validating against `shapes/code-entities.ttl`) — the
+  governed projection that is the substrate under Phase-4 promotion.
 - Docs published to the `gh-pages` branch via `peaceiris/actions-gh-pages`.
 - Project tooling matched to Bobbin and Quipu: `just` recipes, pre-commit,
   clippy lint policy, markdownlint/Vale/Prettier, mdBook, CI, and release-plz.

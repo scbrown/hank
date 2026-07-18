@@ -116,6 +116,9 @@ cargo run -- impact <symbol> src --hops 5
 # Data dependence within a function
 cargo run -- dataflow <function> src --var <variable>
 
+# Export the referential structure (code + docs) as governed RDF Turtle
+cargo run -- export src --repo myrepo --format turtle
+
 # Serve over MCP (stdio) for an agent
 cargo run --features mcp -- serve
 

@@ -35,7 +35,15 @@ hank impact authenticate src --cochange cochange.json
 # Intra-procedural data dependence: where a value comes from / flows to
 hank dataflow authenticate src --var token           # what `token` depends on
 hank dataflow authenticate src --var token --forward # what `token` flows into
+
+# Export the referential structure (modules, symbols, calls) as governed RDF
+hank export src --repo myrepo --format turtle
 ```
+
+The export is the governed projection of the live graph — precise, typed
+referential structure in the `bobbin:` code ontology, **not** embedding chunks.
+It is the substrate under Phase-4 promotion into Quipu; see the
+[Specification](../design/specification.md) §5.10 and §9.
 
 ## The MCP server
 

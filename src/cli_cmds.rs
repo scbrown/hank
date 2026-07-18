@@ -9,6 +9,7 @@ use std::path::Path;
 use colored::Colorize;
 
 use crate::dataflow::{Dataflow, FlowDir};
+use crate::export;
 use crate::graph::{CodeGraph, Dir};
 use crate::reconcile::reconcile;
 use crate::render::{print_reached, reached_json};
@@ -211,6 +212,22 @@ pub(crate) fn dataflow(
             }
         }
     }
+    Ok(())
+}
+
+/// `hank export` — emit the referential structure as Turtle.
+pub(crate) fn export(path: &Path, repo: Option<&str>) -> anyhow::Result<()> {
+    let repo = repo.map_or_else(
+        || {
+            path.canonicalize()
+                .ok()
+                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                .unwrap_or_else(|| "repo".to_string())
+        },
+        str::to_string,
+    );
+    let turtle = export::to_turtle(path, &repo)?;
+    print!("{turtle}");
     Ok(())
 }
 

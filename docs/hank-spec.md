@@ -413,6 +413,67 @@ consumers. Note the tenant/edit-sync input differs by consumer: **agents** edit
 on disk (picked up by the file-watcher, §5.5) or via the harness hook (FR-30);
 **editors** stream unsaved `didChange` (this surface).
 
+### 5.10 Unified referential structure — code and docs
+
+**The synergy:** code and docs are one referential graph, not two. A function
+calls a function; a doc section *references* a symbol; a code comment links to an
+ADR. These are the same *kind* of fact — a typed edge between named entities —
+and Hank's machinery (reference resolution, blast radius, monitor-guided
+verification) applies to all of them. Hank's differentiated job is to be the one
+tool that builds the **complete, precise referential graph spanning code and
+docs**. This is explicitly **not chunking**: Bobbin chunks code+docs into
+embedding windows for *retrieval*; Hank emits *precise, typed referential
+structure* for *reasoning and governance*. Complementary, not redundant.
+
+**Two clocks — the same graph, two update disciplines:**
+
+| | Real-time (live) | Asynchronous (export) |
+|---|---|---|
+| Trigger | edit hook / MCP query | commit / merge / on-demand |
+| Home | Hank in-memory overlay (the present) | Quipu governed graph (the record) |
+| Code | blast radius + guard, in-loop | committed structure, bitemporal |
+| Docs | "your code edit made `docs/x.md#y` stale" | full doc→code reference graph, versioned |
+
+The distinction the doc case forces: **a doc going stale is a warning, not a
+blocker.** You never hard-block an agent mid-edit because a README drifted. So
+the doc side leans *asynchronous* (export, caught on commit/CI) while the
+real-time hook still fires the *code→doc* staleness note in the moment. Same
+underlying graph; code leans live, docs lean export.
+
+**It reuses the existing ontology.** `shapes/code-entities.ttl` already defines
+`Document` and `Section` (alongside `CodeModule`/`CodeSymbol`). Hank adds
+`Section → references → CodeSymbol` edges into that model — additive, no new
+entity design.
+
+**Doc rot becomes a query.** Once the referential graph is in Quipu, SPARQL
+answers "every `Document` that references a `CodeSymbol` which no longer exists,"
+auditable over time. That is capability 7 (SPARQL-over-code) extended to docs for
+free.
+
+**Boundary discipline** (so this stays Hank's job and not everyone's): Hank owns
+*building the structural referential graph*. It does **not** do chunking or
+embeddings (Bobbin), prose/style linting (Vale), doc semantic retrieval (Bobbin),
+or governed-intent storage (Quipu owns the record). Hank only cares about
+*structural references between docs and code*.
+
+**FR-33: Doc→code reference extraction.** Parse markdown (tree-sitter / the
+`langs-extra` set) and extract references to code symbols — inline code spans,
+code fences, and `src/…#L..` links — resolved against the code graph and
+tier-tagged. Emits `Section → references → CodeSymbol` edges. Feeds both the
+live hook (code→doc staleness) and the export (FR-34).
+
+**FR-34: Export the referential structure.** Provide `hank export` — the governed
+projection of the live graph.
+
+- `hank export --format turtle` emits the referential structure (modules,
+  symbols, `definedIn`/`calls`, and — as FR-33 lands — `Document`/`Section` +
+  `references`) as Turtle in the `bobbin:` ontology, validating against
+  `shapes/code-entities.ttl`. *(Implemented for the code side.)*
+- `hank export --to quipu` promotes it (SHACL-validate → `quipu_knot`,
+  bitemporal). This **is** Phase-4 promotion (§9); the Turtle dump is the
+  substrate under it. Decoupling "produce the governed projection" from "serve
+  live" keeps the present (overlay) and the record (Quipu) cleanly separated.
+
 ---
 
 ## 6. Non-Functional Requirements
@@ -938,6 +999,7 @@ criterion; every phase must keep the `quipu` feature compiling both on and off
 - [x] Intra-procedural data dependence (FR-8, first slice): `src/dataflow.rs`, `hank dataflow` (CLI) and `hank_dataflow` (MCP).
 - [x] Reconcile structural reachable set with Bobbin co-change (FR-11): `src/reconcile.rs`, `hank impact --cochange` (CLI) and the `cochange` param on `hank_impact` (MCP), partitioning into corroborated / structural-only / co-change-only.
 - [x] Edit-reactive harness hook (FR-30, prototype): `hank hook post-edit` emits a synchronous cross-file blast-radius advisory as Claude Code `PostToolUse` context (builds transiently until the Phase-3 resident daemon lands).
+- [x] Referential-structure export (FR-34, code side): `hank export --format turtle` emits `CodeModule`/`CodeSymbol` + `definedIn`/`calls` as Turtle in the `bobbin:` ontology (the substrate under Phase-4 promotion; doc→code references and `--to quipu` fold in later).
 - [ ] *Deferred to the `cpg` feature (post-exit):* deeper CPG — control dependence + inter-procedural taint (FR-7, remainder of FR-8).
 - **Exit (met):** structural blast radius, reconciled with history, served to agents and Bobbin. Co-change mining stays in Bobbin; Hank reconciles a supplied co-change set (the routing rule).
 
@@ -953,8 +1015,9 @@ criterion; every phase must keep the `quipu` feature compiling both on and off
 
 ### Phase 4 — Promote to Quipu
 
-- [ ] Extend the code ontology with edge shapes (§9.2); start permissive.
-- [ ] Turtle emission (`oxttl`) with the existing `bobbin:` IRI constructors.
+- [ ] Extend the code ontology with edge shapes (§9.2) and `Section → references → CodeSymbol` (§5.10); start permissive.
+- [x] Turtle emission of the referential structure (`hank export --format turtle`, FR-34, code side) — extend to docs (FR-33) and wire `--to quipu`.
+- [ ] Doc→code reference extraction (FR-33) folded into the export and the live hook.
 - [ ] SHACL-validate (`rudof`) before every write (FR-20).
 - [ ] Promote on commit/merge via `quipu_knot` / `Store::transact`, bitemporal (FR-19, FR-21, FR-22).
 - [ ] Branch modeling per §9.4: promote each branch into a named graph if Quipu
@@ -1076,6 +1139,9 @@ COMMANDS:
     refs        Definitions and references for a symbol/position
     callers     Callers / callees of a symbol
     impact      Blast radius (forward/backward, N hops) for a change
+    dataflow    Intra-procedural data dependence within a function
+    export      Emit the referential structure as Turtle (→ Quipu)
+    hook        Agent-harness hook adapter (edit-reactive)
     verify      Verdict on a proposed edit buffer
     promote     Promote a commit's structural facts into Quipu
     status      Base commit, tenant overlays, tiers, freshness

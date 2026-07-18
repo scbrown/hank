@@ -1,10 +1,10 @@
 //! The `hank` command-line interface.
 //!
 //! `analyze`, `refs`, `status`, `serve` (MCP), the Phase-2 call-graph commands
-//! `callers`/`impact` and `dataflow`, and the `hook` adapter (edit-reactive
-//! harness integration, §5.9/FR-30) are live. `verify` and `promote` are
-//! declared with their final shape and print a phase notice until their engines
-//! land (see `docs/hank-spec.md` §12).
+//! `callers`/`impact` and `dataflow`, `export` (referential structure as Turtle,
+//! §5.10/FR-34), and the `hook` adapter (edit-reactive harness integration,
+//! §5.9/FR-30) are live. `verify` and `promote` are declared with their final
+//! shape and print a phase notice until their engines land (`docs/hank-spec.md`).
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -93,6 +93,18 @@ enum Commands {
         #[arg(long)]
         cochange: Option<PathBuf>,
     },
+    /// Export the referential structure (modules, symbols, edges) as Turtle.
+    Export {
+        /// Directory to export (defaults to current dir).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Repository name to attribute entities to (defaults to the dir name).
+        #[arg(long)]
+        repo: Option<String>,
+        /// Output format.
+        #[arg(long, default_value = "turtle")]
+        format: ExportFormat,
+    },
     /// Intra-procedural data dependence within a function.
     Dataflow {
         /// Function to analyze.
@@ -146,6 +158,13 @@ enum HookEvent {
     PostEdit,
 }
 
+/// Output formats for `hank export`.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ExportFormat {
+    /// RDF Turtle in the `bobbin:` code ontology.
+    Turtle,
+}
+
 impl Cli {
     /// Run the parsed command.
     pub async fn run(self) -> anyhow::Result<()> {
@@ -178,6 +197,10 @@ impl Cli {
                 *hops,
                 cochange.as_deref(),
             ),
+            Commands::Export { path, repo, format } => {
+                let ExportFormat::Turtle = format;
+                cli_cmds::export(path, repo.as_deref())
+            }
             Commands::Dataflow {
                 function,
                 path,
