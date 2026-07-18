@@ -204,6 +204,10 @@ hank callers authenticate src
 # Blast radius: what changing a symbol transitively affects
 hank impact authenticate src --hops 5 --json
 
+# Reconcile the structural impact against a co-change set (from Bobbin):
+# corroborated = real coupling; co-change-only = possible refactoring smell
+hank impact authenticate src --cochange cochange.json
+
 # Intra-procedural data dependence: where a value comes from / flows to
 hank dataflow authenticate src --var token           # what `token` depends on
 hank dataflow authenticate src --var token --forward # what `token` flows into
