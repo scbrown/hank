@@ -1,54 +1,50 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
     <linearGradient id="strandA" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:#E07A5F"/>
-      <stop offset="100%" style="stop-color:#C45B3C"/>
+      <stop offset="0%" style="stop-color:#E07A5F"/><stop offset="100%" style="stop-color:#C45B3C"/>
     </linearGradient>
     <linearGradient id="strandB" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:#3D85C6"/>
-      <stop offset="100%" style="stop-color:#2A6BAD"/>
+      <stop offset="0%" style="stop-color:#3D85C6"/><stop offset="100%" style="stop-color:#2A6BAD"/>
     </linearGradient>
     <linearGradient id="strandC" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:#81B29A"/>
-      <stop offset="100%" style="stop-color:#5E9B7E"/>
+      <stop offset="0%" style="stop-color:#81B29A"/><stop offset="100%" style="stop-color:#5E9B7E"/>
     </linearGradient>
     <linearGradient id="strandD" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:#F2CC8F"/>
-      <stop offset="100%" style="stop-color:#D4A95A"/>
+      <stop offset="0%" style="stop-color:#F2CC8F"/><stop offset="100%" style="stop-color:#D4A95A"/>
     </linearGradient>
     <linearGradient id="tieGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:#9B72AA"/>
-      <stop offset="100%" style="stop-color:#7D5691"/>
+      <stop offset="0%" style="stop-color:#9B72AA"/><stop offset="100%" style="stop-color:#7D5691"/>
     </linearGradient>
-    <filter id="soft" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#00000040"/>
+    <filter id="soft" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#00000055"/>
     </filter>
   </defs>
 
-  <!-- Badge background -->
+  <!-- Badge -->
   <circle cx="256" cy="256" r="240" fill="#1a1a2e"/>
   <circle cx="256" cy="256" r="232" fill="none" stroke="#2d2d4a" stroke-width="1.5"/>
 
-  <!-- A hank: a coiled skein of yarn, wound into a loop and tied in the middle.
-       Four strands wound as tall rings; a tie band cinches the coil. -->
+  <!-- A hank wound into an infinity / feedback loop: four yarn strands coiled along the lemniscate.
+       Path INF: figure-8 crossing at centre; the strands are offset copies so it reads as a wound skein. -->
   <g filter="url(#soft)" fill="none" stroke-linecap="round">
-    <!-- wound rings (each an elongated loop) -->
-    <ellipse cx="212" cy="256" rx="30" ry="150" stroke="url(#strandA)" stroke-width="14"/>
-    <ellipse cx="238" cy="256" rx="30" ry="158" stroke="url(#strandB)" stroke-width="14"/>
-    <ellipse cx="274" cy="256" rx="30" ry="158" stroke="url(#strandC)" stroke-width="14"/>
-    <ellipse cx="300" cy="256" rx="30" ry="150" stroke="url(#strandD)" stroke-width="14"/>
+    <g transform="translate(0,-11)"><path d="M256 256 C300 202 374 202 402 256 C374 310 300 310 256 256 C212 202 138 202 110 256 C138 310 212 310 256 256 Z" stroke="url(#strandA)" stroke-width="9"/></g>
+    <g transform="translate(0,-4)"><path d="M256 256 C300 202 374 202 402 256 C374 310 300 310 256 256 C212 202 138 202 110 256 C138 310 212 310 256 256 Z" stroke="url(#strandB)" stroke-width="9"/></g>
+    <g transform="translate(0,4)"><path d="M256 256 C300 202 374 202 402 256 C374 310 300 310 256 256 C212 202 138 202 110 256 C138 310 212 310 256 256 Z" stroke="url(#strandC)" stroke-width="9"/></g>
+    <g transform="translate(0,11)"><path d="M256 256 C300 202 374 202 402 256 C374 310 300 310 256 256 C212 202 138 202 110 256 C138 310 212 310 256 256 Z" stroke="url(#strandD)" stroke-width="9"/></g>
   </g>
 
-  <!-- Tie band cinching the hank at its waist -->
-  <rect x="176" y="238" width="160" height="36" rx="18" fill="url(#tieGrad)" filter="url(#soft)"/>
-  <rect x="176" y="238" width="160" height="36" rx="18" fill="none" stroke="#ffffff22" stroke-width="1.5"/>
+  <!-- Feedback-loop arrowheads: flow direction along the coil (right lobe → right, left lobe → left) -->
+  <path d="M326 188 L352 200 L326 212 Z" fill="#F2CC8F" filter="url(#soft)"/>
+  <path d="M186 188 L160 200 L186 212 Z" fill="#E07A5F" filter="url(#soft)"/>
 
-  <!-- Live-structure hint: small graph nodes + edges overlaid on the coil -->
-  <line x1="212" y1="130" x2="300" y2="130" stroke="#ffffff22" stroke-width="1.5"/>
-  <line x1="238" y1="382" x2="274" y2="382" stroke="#ffffff22" stroke-width="1.5"/>
-  <line x1="212" y1="130" x2="238" y2="382" stroke="#ffffff14" stroke-width="1.5"/>
-  <circle cx="212" cy="130" r="6" fill="#E07A5F" stroke="#1a1a2e" stroke-width="2"/>
-  <circle cx="300" cy="130" r="6" fill="#F2CC8F" stroke="#1a1a2e" stroke-width="2"/>
-  <circle cx="238" cy="382" r="6" fill="#3D85C6" stroke="#1a1a2e" stroke-width="2"/>
-  <circle cx="274" cy="382" r="6" fill="#81B29A" stroke="#1a1a2e" stroke-width="2"/>
+  <!-- Live-structure hint: graph nodes at the lobe tips, faint edges to the tie -->
+  <line x1="256" y1="256" x2="402" y2="256" stroke="#ffffff14" stroke-width="1.5"/>
+  <line x1="256" y1="256" x2="110" y2="256" stroke="#ffffff14" stroke-width="1.5"/>
+  <circle cx="402" cy="256" r="7" fill="#3D85C6" stroke="#1a1a2e" stroke-width="2"/>
+  <circle cx="110" cy="256" r="7" fill="#81B29A" stroke="#1a1a2e" stroke-width="2"/>
+
+  <!-- The knot: strands cross and are tied at the centre (hank tied at its waist / quipu ties the knot) -->
+  <circle cx="256" cy="256" r="17" fill="url(#tieGrad)" filter="url(#soft)"/>
+  <circle cx="256" cy="256" r="17" fill="none" stroke="#ffffff33" stroke-width="1.5"/>
+  <circle cx="256" cy="256" r="5" fill="#ffffff" opacity="0.85"/>
 </svg>
