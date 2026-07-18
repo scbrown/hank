@@ -254,6 +254,16 @@ Quipu's `quipu_impact` but over Hank's live per-tenant graph.
 co-change set; surface edges that appear in one but not the other (structural-
 only = new/unexercised coupling; co-change-only = a refactoring smell).
 
+> **Invariant — Hank borrows co-change, it never derives it.** The co-change set
+> is always a *required input* supplied by the caller (Bobbin), never something
+> Hank mines itself. Hank must not walk git history, run FP-Growth, or store a
+> co-change signal — that is Bobbin's owned signal (statistical, over the settled
+> past) and the routing rule (§2.4) keeps it there. Reconciliation is a
+> *stateless annotation* on Hank's own structural output, not ownership of a
+> second temporal signal. The day Hank derives co-change is the day it becomes a
+> second source of truth (the risk in §9.6). The implementation enforces this:
+> `reconcile()` takes the co-change set as a parameter with no fallback path.
+
 **FR-12 (crux):** The blast-radius reachability query MUST be implemented as a
 single primitive reused for two purposes: (a) answering *"what does this change
 affect?"* for a consumer, and (b) answering *"what must I recompute?"* for the
