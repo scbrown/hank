@@ -36,7 +36,7 @@ hank impact authenticate src --cochange cochange.json
 hank dataflow authenticate src --var token           # what `token` depends on
 hank dataflow authenticate src --var token --forward # what `token` flows into
 
-# Export the referential structure (modules, symbols, calls) as governed RDF
+# Export the referential structure (modules, symbols, calls, imports) as governed RDF
 hank export src --repo myrepo --format turtle
 ```
 
