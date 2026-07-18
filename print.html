@@ -248,6 +248,10 @@ hank callers authenticate src
 
 # Blast radius: what changing a symbol transitively affects
 hank impact authenticate src --hops 5 --json
+
+# Intra-procedural data dependence: where a value comes from / flows to
+hank dataflow authenticate src --var token           # what `token` depends on
+hank dataflow authenticate src --var token --forward # what `token` flows into
 </code></pre>
 <h2 id="the-mcp-server"><a class="header" href="#the-mcp-server">The MCP server</a></h2>
 <p>Built with the <code>mcp</code> feature, <code>hank serve</code> exposes <code>hank_status</code>,
@@ -257,10 +261,10 @@ cargo run --features mcp -- serve --http  # streamable-HTTP at :3040/mcp
 </code></pre>
 <p>See the <a href="getting-started/../reference/mcp-tools.html">MCP Tools reference</a>.</p>
 <h2 id="what-works-today"><a class="header" href="#what-works-today">What works today</a></h2>
-<p><code>analyze</code>, <code>refs</code>, <code>status</code>, the call-graph commands <code>callers</code>/<code>impact</code>, and the
-seven MCP tools are live. <code>verify</code> and <code>promote</code> are declared with their final
-shape and print a phase notice until their engines land — see the
-<a href="getting-started/../design/specification.html">Specification</a>.</p>
+<p><code>analyze</code>, <code>refs</code>, <code>status</code>, the call-graph commands <code>callers</code>/<code>impact</code>,
+<code>dataflow</code>, and the eight MCP tools are live. <code>verify</code> and <code>promote</code> are declared
+with their final shape and print a phase notice until their engines land — see
+the <a href="getting-started/../design/specification.html">Specification</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="configuration"><a class="header" href="#configuration">Configuration</a></h1>
 <p>Hank shares the stack's <code>.bobbin/config.toml</code> under a <code>[hank]</code> table, with the
 same resolution order Quipu uses: compiled defaults are overlaid by the user
@@ -386,6 +390,7 @@ COMMANDS:
     refs        Find the definition sites of a symbol by name
     callers     Direct callers and callees of a symbol
     impact      Blast radius: symbols affected by changing a symbol
+    dataflow    Intra-procedural data dependence within a function
     verify      Verdict on a proposed edit buffer                 [Phase 5]
     promote     Promote a commit's structural facts into Quipu    [Phase 4]
     status      Show base commit, tiers, and configuration
@@ -469,11 +474,11 @@ hank serve --http     # streamable-HTTP at http://127.0.0.1:3040/mcp
 <tr><td><code>hank_callers</code></td><td>Direct callers of a symbol (who calls it)</td></tr>
 <tr><td><code>hank_callees</code></td><td>Direct callees of a symbol (what it calls)</td></tr>
 <tr><td><code>hank_impact</code></td><td>Blast radius — transitive callers, N hops</td></tr>
+<tr><td><code>hank_dataflow</code></td><td>Intra-procedural data dependence within a function</td></tr>
 </tbody></table>
 </div>
 <h2 id="planned-later-phases"><a class="header" href="#planned-later-phases">Planned (later phases)</a></h2>
 <div class="table-wrapper"><table><thead><tr><th>Tool</th><th>Purpose</th><th>Phase</th></tr></thead><tbody>
-<tr><td><code>hank_dataflow</code></td><td>Source→sink dataflow paths</td><td>2 (CPG)</td></tr>
 <tr><td><code>hank_verify</code></td><td>Verdict on a proposed edit buffer</td><td>5</td></tr>
 <tr><td><code>hank_promote</code></td><td>Trigger promotion of a commit to Quipu</td><td>4</td></tr>
 </tbody></table>

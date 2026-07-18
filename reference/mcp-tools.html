@@ -200,11 +200,11 @@ hank serve --http     # streamable-HTTP at http://127.0.0.1:3040/mcp
 <tr><td><code>hank_callers</code></td><td>Direct callers of a symbol (who calls it)</td></tr>
 <tr><td><code>hank_callees</code></td><td>Direct callees of a symbol (what it calls)</td></tr>
 <tr><td><code>hank_impact</code></td><td>Blast radius — transitive callers, N hops</td></tr>
+<tr><td><code>hank_dataflow</code></td><td>Intra-procedural data dependence within a function</td></tr>
 </tbody></table>
 </div>
 <h2 id="planned-later-phases"><a class="header" href="#planned-later-phases">Planned (later phases)</a></h2>
 <div class="table-wrapper"><table><thead><tr><th>Tool</th><th>Purpose</th><th>Phase</th></tr></thead><tbody>
-<tr><td><code>hank_dataflow</code></td><td>Source→sink dataflow paths</td><td>2 (CPG)</td></tr>
 <tr><td><code>hank_verify</code></td><td>Verdict on a proposed edit buffer</td><td>5</td></tr>
 <tr><td><code>hank_promote</code></td><td>Trigger promotion of a commit to Quipu</td><td>4</td></tr>
 </tbody></table>
