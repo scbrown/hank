@@ -675,7 +675,7 @@ the three build against a coherent dependency set.
 | Overlay spill / cache (optional) | `rusqlite` (bundled) | `0.33` | Both |
 | HTTP server | `axum` + `tower-http` (cors, trace) | `0.8` / `0.6` | Both |
 | File-watch | `notify` | `6` | Bobbin |
-| Git baseline | `gix` or `git2` | (TBD Phase 1) | — (Bobbin shells to git in `index/git.rs`; pick one, see §16) |
+| Git baseline | shell out to `git` (decided, §15.2) | — | Bobbin (`index/git.rs` shells to git); behind `src/git.rs`, reversible |
 | Error handling | `thiserror` (+ `anyhow` in bins only) | `2` / `1` | Both (Quipu is thiserror-only; Bobbin uses both) |
 | Serialization | `serde` / `serde_json` / `toml` | `1` / `1` / `0.8` | Both |
 | Logging | `tracing` + `tracing-subscriber` | `0.1` / `0.3` | Bobbin |
@@ -1098,9 +1098,13 @@ commit one:
 
 1. **Edition.** Default is 2021 (Bobbin's serving stack). Adopt 2024 (Quipu) only
    if a 2024-only dependency becomes compelling.
-2. **Git access.** `gix` (pure-Rust, in-process) vs `git2` (libgit2) vs shelling
-   out like Bobbin's `index/git.rs`. Pick in Phase 1; affects the baseline build
-   and commit-diff path.
+2. **Git access.** ~~`gix` vs `git2` vs shelling out~~ — **Decided: shell out to
+   the system `git`** (matches Bobbin's `index/git.rs`; zero dependency; single
+   binary preserved), behind the `src/git.rs` boundary so a later swap to
+   `gix`/`git2` is localized and reversible. Resolves the baseline commit
+   (`resolve_commit`) and the commit-diff (`changed_paths`); degrades gracefully
+   outside a repo (§6.4). Building base-graph *content at* a historical ref (vs
+   the working tree) is the remaining slice.
 3. **CPG realization.** Joern-as-subprocess vs Rust-native traversals (§14.1) —
    the single biggest architectural fork; resolve early in Phase 2.
 4. **Branch model.** Named graphs (via Quipu quad support, §9.4/§9.5) are the
@@ -1306,6 +1310,10 @@ The load-bearing decisions and *why*, so they are not re-litigated blind.
 11. **Docs publish via a `gh-pages` branch** (`peaceiris`), because the Actions
     integration token lacks `pages: write`. One owner-only toggle remains (see
     Appendix F).
+12. **Git access = shell out to `git`** (§15.2), not `gix`/`git2`. Matches
+    Bobbin's `index/git.rs`, adds no dependency, keeps the single binary, and
+    lives behind `src/git.rs` so a swap is localized. Resolves the baseline
+    commit + commit-diff; degrades gracefully outside a repo.
 
 **Tracked Quipu-side follow-ups:** [quipu#36](https://github.com/scbrown/quipu/issues/36)
 (quad store / named graphs) · [quipu#37](https://github.com/scbrown/quipu/issues/37)

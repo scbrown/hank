@@ -32,11 +32,15 @@ GLOBAL FLAGS:
 ```bash
 hank analyze src
 hank refs authenticate src --json
-hank status
+hank status                    # resolves base_ref to a commit SHA (in a git repo)
 hank impact src/auth.rs::authenticate --hops 5
 hank verify --file src/auth.rs --buffer /tmp/edited.rs
 hank promote --commit HEAD
 ```
+
+`hank status` resolves the configured `base_ref` (default `main`) to a concrete
+commit via the system `git`; outside a git repository the base commit shows as
+unresolved and Hank falls back to the working tree.
 
 Commands marked with a phase print a notice until their engine lands; see the
 [Specification](../design/specification.md) §12.
