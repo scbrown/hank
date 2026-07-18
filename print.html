@@ -257,7 +257,7 @@ hank impact authenticate src --cochange cochange.json
 hank dataflow authenticate src --var token           # what `token` depends on
 hank dataflow authenticate src --var token --forward # what `token` flows into
 
-# Export the referential structure (modules, symbols, calls) as governed RDF
+# Export the referential structure (modules, symbols, calls, imports) as governed RDF
 hank export src --repo myrepo --format turtle
 </code></pre>
 <p>The export is the governed projection of the live graph — precise, typed
@@ -419,10 +419,14 @@ when learned. Quipu holds the settled, governed, versioned record; Hank holds
 what's in flight. Uncommitted churn never pollutes the governed graph.</p>
 <h2 id="export--the-governed-projection"><a class="header" href="#export--the-governed-projection">Export — the governed projection</a></h2>
 <p><code>hank export</code> is the projection Hank promotes: the <strong>precise, typed referential
-structure</strong> (modules, symbols, <code>definedIn</code>/<code>calls</code>, and — as the markdown
-extractor lands — <code>Document</code>/<code>Section</code> + <code>references</code>), emitted as RDF Turtle in
-the <code>bobbin:</code> ontology. This is <strong>not</strong> Bobbin's chunking; it is structure for
-reasoning and governance.</p>
+structure</strong> (modules, symbols, <code>definedIn</code>/<code>calls</code>/<code>imports</code>, and — as the
+markdown extractor lands — <code>Document</code>/<code>Section</code> + <code>references</code>), emitted as RDF
+Turtle in the <code>bobbin:</code> ontology. This is <strong>not</strong> Bobbin's chunking; it is
+structure for reasoning and governance.</p>
+<p>Module dependencies (<code>bobbin:imports</code>, <code>CodeModule → CodeModule</code>) are resolved
+from <code>use</code>/<code>mod</code> declarations at the tree-sitter tier — best-effort by module
+stem, so they over-connect on shared names like any tree-sitter-tier fact; the
+<code>lsp</code> tier refines them.</p>
 <pre><code class="language-bash">hank export src --repo myrepo --format turtle   # dump the referential graph
 # hank export --to quipu                         # promote it (Phase 4)
 </code></pre>
