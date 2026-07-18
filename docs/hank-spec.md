@@ -339,7 +339,28 @@ consume to scope a polecat's provisioned execution environment. Capability
 scoping MUST be computed against the *requesting tenant's* live graph, never a
 stale shared one (this is why the live per-tenant state must live in Hank).
 
-### 5.9 Interfaces
+### 5.9 Interfaces — the interface model
+
+Hank has **two interaction modes**, and they want different shapes. Conflating
+them is the mistake to avoid:
+
+- **Query mode** (pull) — an agent asks a discrete question ("what's the blast
+  radius of this symbol"). Request/response, agent-initiated, structured. **MCP
+  is ideal** and it is what agents and Bobbin already speak.
+- **Edit-reactive mode** (push/synchronous) — the agent *changes a file* and
+  Hank responds *at the moment of the edit* (impact, verification). This is
+  LSP-shaped (an edit stream in, a verdict out) and MCP-pull fits it poorly.
+
+The resolution is to serve each mode with the surface that fits, over one
+resident engine:
+
+| Surface | Consumer | Shape | Requirement |
+|---|---|---|---|
+| **Harness hook** (`hank hook …`) | in-harness agents (Claude Code) | synchronous, edit-reactive, automatic | FR-30 |
+| **MCP tools** | agents, Bobbin | pull, on-demand queries | FR-26 |
+| **HTTP API** | broker / daemon backplane | the resident engine all surfaces share | FR-27 |
+| **CLI** | humans, scripts, CI | one-shot | FR-28 |
+| **LSP server** (optional) | human editors | unsaved-buffer precision + push diagnostics | FR-32 |
 
 **FR-26: MCP server.** Expose Hank's capabilities as MCP tools (§12) over both
 stdio and streamable-HTTP transports, using `rmcp` exactly as Bobbin does
@@ -355,6 +376,42 @@ serving, one-shot analysis, and inspection (§Appendix A).
 **FR-29: Config.** Read from the shared `.bobbin/config.toml` under a new `[hank]`
 table (§11), with the same resolution order Quipu uses (flags > project toml >
 user toml > defaults).
+
+**FR-30: Harness hook adapter — the edit-reactive interface.** Provide
+`hank hook <event>` adapters that read an agent harness's hook payload on stdin
+and respond synchronously. The edit tool call *is* the `didChange` event; the
+hook makes Hank's response automatic — the agent never has to remember to call a
+tool. For Claude Code (Bobbin already integrates this way for context injection):
+
+- **`hank hook post-edit`** (`PostToolUse` on `Edit|Write|MultiEdit`) — after the
+  edit lands, update the overlay and return the cross-file blast radius as
+  injected `additionalContext`. *Advisory by default.* (Implemented; today it
+  builds transiently — see FR-31.)
+- **`hank hook pre-edit`** (`PreToolUse`) — before the edit lands, verify the
+  *proposed* buffer (§5.7 / FR-23) and, for **capability-scoped agents**
+  (polecats), optionally `deny` with a reason so the model revises. This is where
+  the §5.8 trust boundary becomes concrete: **blocking guard is opt-in**, never
+  the default (a wrong hard-deny is worse than none).
+
+The adapter is a thin, harness-specific translation layer; the core engine and
+its facts stay harness-agnostic.
+
+**FR-31: Resident daemon (the latency prerequisite).** The hook fires
+synchronously in the agent's loop, so a `pre-edit` guard has a sub-100ms budget
+(§6.1). A cold full-graph build per edit blows it. Therefore the hook (and the
+streamable-HTTP MCP surface, and the broker) must be **thin clients of a resident
+`hank serve` engine** holding the base + per-tenant overlays — never rebuilding
+per invocation (Bobbin's hooks hit its resident server the same way). **This
+makes the Phase-3 resident overlay a hard prerequisite of the hook interface, not
+a nice-to-have** — the hook use case is the forcing function for the hot overlay.
+
+**FR-32: LSP server surface (optional).** Optionally *expose* an LSP server (Hank
+already *consumes* LSP internally for the precise tier) so human editors get
+unsaved-buffer precision and pushed diagnostics natively. Justified only if
+human-in-editor is a target consumer; deferred behind the agent/Bobbin/broker
+consumers. Note the tenant/edit-sync input differs by consumer: **agents** edit
+on disk (picked up by the file-watcher, §5.5) or via the harness hook (FR-30);
+**editors** stream unsaved `didChange` (this surface).
 
 ---
 
@@ -880,6 +937,7 @@ criterion; every phase must keep the `quipu` feature compiling both on and off
 - [x] Resolve the JVM/Rust CPG decision (§14.1): **Rust-native traversals** (Joern not adopted).
 - [x] Intra-procedural data dependence (FR-8, first slice): `src/dataflow.rs`, `hank dataflow` (CLI) and `hank_dataflow` (MCP).
 - [x] Reconcile structural reachable set with Bobbin co-change (FR-11): `src/reconcile.rs`, `hank impact --cochange` (CLI) and the `cochange` param on `hank_impact` (MCP), partitioning into corroborated / structural-only / co-change-only.
+- [x] Edit-reactive harness hook (FR-30, prototype): `hank hook post-edit` emits a synchronous cross-file blast-radius advisory as Claude Code `PostToolUse` context (builds transiently until the Phase-3 resident daemon lands).
 - [ ] *Deferred to the `cpg` feature (post-exit):* deeper CPG — control dependence + inter-procedural taint (FR-7, remainder of FR-8).
 - **Exit (met):** structural blast radius, reconciled with history, served to agents and Bobbin. Co-change mining stays in Bobbin; Hank reconciles a supplied co-change set (the routing rule).
 
@@ -908,6 +966,7 @@ criterion; every phase must keep the `quipu` feature compiling both on and off
 
 - [ ] Per-tenant blast radius wired into the broker/Aegis capability-scoping path (FR-25).
 - [ ] `hank_verify` monitor-guided edit verification as a direct surface (FR-23, FR-24).
+- [ ] `hank hook pre-edit` guard (FR-30): verify the proposed buffer; blocking `deny` opt-in for capability-scoped polecats.
 - [ ] Bobbin consumes verdicts to flag won't-compile retrieved code.
 - **Exit:** structure defines the polecat sandbox, per tenant; agents get a boolean guard on their own edits.
 

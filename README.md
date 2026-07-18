@@ -119,6 +119,9 @@ cargo run -- dataflow <function> src --var <variable>
 # Serve over MCP (stdio) for an agent
 cargo run --features mcp -- serve
 
+# Edit-reactive: wire `hank hook post-edit` into a Claude Code PostToolUse hook
+# for synchronous blast-radius advisories on every edit (see docs).
+
 # Shell completions
 cargo run -- completions bash > hank.bash
 ```

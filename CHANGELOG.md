@@ -28,6 +28,12 @@ All notable changes to this project will be documented in this file.
   corroborated / structural-only / co-change-only. Exposed via
   `hank impact --cochange` (CLI) and the `cochange` parameter on `hank_impact`
   (MCP). Co-change mining stays in Bobbin. **Phase 2 complete.**
+- Edit-reactive harness integration (spec §5.9 / FR-30, prototype): `hank hook
+  post-edit` reads a Claude Code `PostToolUse` payload on stdin and returns a
+  synchronous cross-file blast-radius advisory as injected context — the agent's
+  edit tool call *is* the change event. Spec §5.9 reworked into an interface
+  model (hook / MCP / HTTP / CLI / optional LSP) with the resident-daemon latency
+  requirement (FR-31).
 - Docs published to the `gh-pages` branch via `peaceiris/actions-gh-pages`.
 - Project tooling matched to Bobbin and Quipu: `just` recipes, pre-commit,
   clippy lint policy, markdownlint/Vale/Prettier, mdBook, CI, and release-plz.

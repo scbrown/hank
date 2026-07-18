@@ -18,6 +18,7 @@ pub mod dataflow;
 pub mod errors;
 pub mod extract;
 pub mod graph;
+pub mod hook;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 pub mod reconcile;

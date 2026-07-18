@@ -1,14 +1,15 @@
 //! The `hank` command-line interface.
 //!
-//! `analyze`, `refs`, `status`, `serve` (MCP), and the Phase-2 call-graph
-//! commands `callers` and `impact` are live. `verify` and `promote` are declared
-//! with their final shape and print a phase notice until their engines land
-//! (see `docs/hank-spec.md` §12).
+//! `analyze`, `refs`, `status`, `serve` (MCP), the Phase-2 call-graph commands
+//! `callers`/`impact` and `dataflow`, and the `hook` adapter (edit-reactive
+//! harness integration, §5.9/FR-30) are live. `verify` and `promote` are
+//! declared with their final shape and print a phase notice until their engines
+//! land (see `docs/hank-spec.md` §12).
 
 use std::io;
 use std::path::{Path, PathBuf};
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use tracing_subscriber::EnvFilter;
 
@@ -126,11 +127,23 @@ enum Commands {
     },
     /// Show base commit, tiers, and configuration.
     Status,
+    /// Agent-harness hook adapter (reads the hook payload on stdin).
+    Hook {
+        /// Which hook event to handle.
+        event: HookEvent,
+    },
     /// Generate shell completions.
     Completions {
         /// Target shell.
         shell: clap_complete::Shell,
     },
+}
+
+/// Supported agent-harness hook events.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum HookEvent {
+    /// Claude Code `PostToolUse` on Edit/Write: advise on cross-file blast radius.
+    PostEdit,
 }
 
 impl Cli {
@@ -140,6 +153,9 @@ impl Cli {
             Commands::Analyze { path } => self.analyze(path),
             Commands::Refs { symbol, path } => self.refs(symbol, path),
             Commands::Status => self.status(),
+            Commands::Hook { event } => match event {
+                HookEvent::PostEdit => crate::hook::run_post_edit(),
+            },
             Commands::Completions { shell } => {
                 let mut cmd = Cli::command();
                 clap_complete::generate(*shell, &mut cmd, "hank", &mut io::stdout());
