@@ -26,6 +26,7 @@
 
 - [Specification](design/specification.md)
 - [Vision](design/vision.md)
+- [Governance Plane](design/governance-plane.md)
 
 # Operations
 
