@@ -43,6 +43,17 @@ fmt:
 run *args="":
     cargo run -- {{args}}
 
+# Install `hank` onto PATH; pass features e.g. `just install "mcp langs-extra"`
+install features="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "{{features}}" ]; then
+        cargo install --path . --locked --features "{{features}}"
+    else
+        cargo install --path . --locked
+    fi
+    echo "Installed: $(command -v hank)"
+
 # === Documentation ===
 
 # Documentation management: just docs <cmd>
