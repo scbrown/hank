@@ -196,9 +196,25 @@ Hank shares the stack's `.bobbin/config.toml` under a `[hank]` table — see the
 
 ## 🌳 Supported Languages
 
-Tree-sitter structural extraction ships for **Rust** today; the rest of Bobbin's
-grammar set (TypeScript, Python, Go, Java, C/C++) is wired behind the
-`langs-extra` feature and lands as extractors are filled in.
+Tree-sitter structural extraction (symbols, intra-file call edges, import
+references — all tagged `TreeSitter`) is wired for Bobbin's full grammar set.
+**Rust** is always built; the rest land behind the `langs-extra` feature
+(`cargo build --features langs-extra`).
+
+| Language       | Feature       | Extensions                                     |
+| -------------- | ------------- | ---------------------------------------------- |
+| Rust           | *(always on)* | `.rs`                                           |
+| TypeScript     | `langs-extra` | `.ts` `.mts` `.cts` `.js` `.mjs` `.cjs`         |
+| TSX / JSX      | `langs-extra` | `.tsx` `.jsx`                                   |
+| Python         | `langs-extra` | `.py` `.pyi`                                     |
+| Go             | `langs-extra` | `.go`                                           |
+| Java           | `langs-extra` | `.java`                                          |
+| C / C++        | `langs-extra` | `.c` `.h` `.cc` `.cpp` `.cxx` `.hpp` `.hh` `.hxx` |
+
+Each grammar contributes a per-language `GrammarSpec` (grammar + node-kind →
+`SymbolKind` mapping + call/import extraction) to a shared, language-agnostic
+walker in `src/extract/`; `language_for_extension` selects the grammar by file
+extension. See [FR-1](docs/hank-spec.md) for the extraction-tier contract.
 
 ## 🛠️ Development
 
