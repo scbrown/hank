@@ -1,8 +1,11 @@
 # Governance Plane — Policy, Workflows & Verification
 
-Status: **design / exploratory.** This describes a capability that layers on the
-Hank × Quipu × Bobbin stack. It is not yet built. It fixes the primitives and
-the trust model so implementation can proceed without re-litigating them.
+Status: **design — ready to implement.** This describes a governance capability
+that layers on the Hank × Quipu × Bobbin stack. The primitives, trust model,
+integration contract, and build order are settled; see
+[Implementation phasing](#implementation-phasing) for the MVP and the build order,
+and [Decisions and deferrals](#decisions-and-deferrals) for the calls made. Not
+yet built. Scope for v1 is a single trust domain.
 
 ## Motivation
 
@@ -290,10 +293,10 @@ evidence-grounded **selectors and predicates** (see [Catalog](#catalog-initial))
 Authoring is composition three layers deep, bottoming out in the catalog:
 
 ```text
-Workflow  = ordered graph of Steps
+Workflow  = directed graph of Steps + guarded Transitions
   Step    = { produces, requires, gated-by: [Policy], actor: Role }
-  Policy  = { targets: EntityType, claim: <composed catalog predicates> }   (external)
-  Catalog predicate = atomic verifier bound to an evidence source           (leaf)
+  Policy  = { targets: EntityType, claim: <composed catalog leaves> }   (external)
+  Catalog leaf = selector | predicate, bound to an evidence source      (leaf)
 ```
 
 Nobody writes raw predicates to build a workflow — they **assemble named
