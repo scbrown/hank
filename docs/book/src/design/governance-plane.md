@@ -516,19 +516,90 @@ One mechanism, different triggers:
   bypass. Gates are overridable by default; a small `non-overridable` set (e.g.
   legal / compliance) requires **N-of-M** human sign-off instead.
 
-## Open questions
+## Worked example
 
-- **Home** — leaning: the policy / workflow **engine lives in Quipu** (widely
-  applicable, usable by Quipu on its own data), with Hank as a co-located
-  decision point and no new repo. Confirm before building. (Capability name still
-  open — working name *the loom*.)
-- **Enforcement floor** — is `observed` acceptable for harnesses that cannot
-  hard-gate, or must every governed action route through a proxy that *can*
-  prevent?
-- **Task → workflow binding** — router by task type / files-touched, declared
-  override, or repo-default.
-- **Catalog authority** — who holds the privilege to register a new catalog
-  predicate.
-- **Compensation** — do runs with irreversible side effects need defined undo
-  (Saga-style), or is halt-and-escalate enough? (Deferred: halt-and-escalate for
-  v1.)
+One `feature-sdlc` run, threading every primitive. Bead `KUE-42` — "add
+rate-limiting to the login handler," repo `hank`, actor `agent-fix-3`. Risk map:
+`auth/**` = high.
+
+**Definitions (Quipu).** `feature-sdlc` = Steps `design → implement → review →
+merge`, guarded transitions between them. The `implement` exit gate binds:
+
+```text
+plan-present               plan-declared-before-edit          (entry gate)
+plan-covers-blast-radius   ∀ s ∈ blast-radius(change) : s ∈ plan.targets
+all-public-tested          ∀ s ∈ changed-public-symbols(run) : has-test(s)
+tests-green(artifact)                                          [CI-attested]
+```
+
+`review` binds `require-approval` + `different-actor-than(implement)`.
+
+**1 — Bind.** Instance created for `(feature-sdlc, bead=KUE-42, repo=hank,
+actor=agent-fix-3)`; `design-doc` pattern resolves to `docs/design/KUE-42.md`.
+Milestone `instance started, step=design` → Quipu. Quipu pushes the `implement`
+bundle to Hank.
+
+**2 — Design.** Agent writes the design doc; `design-artifact-approved` is an
+async `require-approval` gate → **suspends**; a human signs a `DecisionRecord`
+bound to the doc's hash → transition fires → `step=implement`.
+
+**3 — Plan (intent map).** On entry, Hank *infers* a plan from the harness todo
+→ `targets = {login_handler, RateLimiter}`, satisfying `plan-present`. Agent
+edits both, tries to finish.
+
+**4 — Live gate (Hank PDP).** `blast-radius(change)` at `tier=lsp` (high
+confidence) → `{login_handler, RateLimiter, session_store, auth_middleware}`.
+`plan-covers-blast-radius` → **unsatisfied** (two omitted). Risk = high (`auth`).
+`effect(high, high, unsatisfied)` → **deny at the transition** + inject the two
+missing symbols. (A docs change would `warn` — same policy, different effect.)
+
+**5 — Adapt.** Agent declares a plan override (`hank_plan_declare`) covering all
+four, edits them, adds tests. Re-eval: `plan-covers-blast-radius` ✓,
+`all-public-tested` ✓ (lsp). `tests-green` → **`unknown`** (no CI yet) → still
+cannot complete; propulsion: "CI pending."
+
+**6 — Commit → milestone (Quipu).** Agent commits; Hank promotes committed
+structural facts; CI **signs** `tests-green over hash H'`. Quipu's engine
+evaluates the gate over committed evidence → all ✓, high confidence. Milestone
+`step=implement completed` → reactive reasoner fires the `approve`-guarded
+transition target... but `review` first needs a human, and
+`different-actor-than` forbids `agent-fix-3`, so it enqueues `review` for
+`agent-review-2`.
+
+**7 — Review (HITL).** `agent-review-2` runs review checks; `require-approval`
+**suspends** to the governance inbox. The human picks `request-changes` → the
+guarded transition branches **back** to `implement` (bounded loop). Second pass:
+approve → `merge`.
+
+**8 — Resume (if `agent-fix-3` had died at step 5).** A fresh agent rehydrates
+from the last milestone (`implement in progress`); Hank re-derives live verdicts;
+the diff shows `auth_middleware` still untested → precisely the remaining work.
+No context reload.
+
+Every step is a stored, bitemporal, signed fact — the run is fully auditable and
+reproducible after the fact.
+
+## Decisions and deferrals
+
+Settled:
+
+- **Home** — the policy / workflow **engine lives in Quipu** (widely applicable,
+  usable by Quipu on its own data); Hank is a co-located decision point; no new
+  repo. Working name for the capability: *the loom*.
+- **Enforcement floor** — the default floor is `observed` (never block real work
+  because a harness can't gate), but a **high-risk action requires a `prevented`
+  boundary** — a hard-gating harness or explicit pre-authorization. Risk sets the
+  required floor (see [Risk and confidence](#risk-and-confidence)).
+- **Task → workflow binding** — a **router** selects by task type / label /
+  files-touched, with a **declared override** and a **repo-default** fallback.
+- **Catalog authority** — an agent may *propose* a catalog predicate, but it
+  becomes registered only on **human (keeper) promotion** after passing
+  reproducibility review — creation-is-verified applied to the catalog itself.
+- **Plan-before-edit** — code-editing steps carry a `plan-present` entry gate
+  (satisfiable by inference); the coverage gate is meaningless without it.
+
+Deferred (v1):
+
+- **Compensation** — runs with irreversible side effects use **halt-and-escalate**
+  rather than defined Saga-style undo.
+- **Capability naming** — *the loom* is a working name, not final.
