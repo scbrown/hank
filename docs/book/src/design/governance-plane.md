@@ -74,8 +74,16 @@ of `Entity`; the rest are base primitives.
 - **Instance (Run)** — a definition gone live for a specific run (this bead, this
   session), holding live state + verdicts. Distinct from the definition it
   instantiates.
-- **Catalog predicate** — an atomic, registered, evidence-grounded verifier —
-  the composable leaf that policies are built from (see [Authoring](#authoring)).
+- **Catalog leaf** — the composable atoms policies are built from, of two kinds
+  (see [Catalog](#catalog-initial)): a **selector** (evidence → a *set*, e.g.
+  `changed-symbols`) and a **predicate** (element → bool, e.g. `has-test`).
+  Registered, evidence-grounded, tier-tagged.
+- **Parameterization** — definitions are *templates*. References and actors are
+  *patterns* (`repo://{repo}/docs/design/{bead}.md`, role `reviewer`) resolved
+  when an Instance binds its parameters (bead, repo, agent).
+- **Temporal trigger** — a scheduled re-verification for verdicts that depend on
+  *elapsed time* (SLAs, deadlines), which reactive fact-change invalidation does
+  not cover.
 
 ### Composition types
 
@@ -155,18 +163,8 @@ Two distinct "creations" — do not conflate:
 
 ### Creation is composition over a catalog
 
-Underneath authoring sits a **catalog of primitive predicates** — atomic,
-pre-verified, evidence-grounded verifiers:
-
-```text
-symbol-has-tests      → evidence: Hank   (live, tier-tagged)
-blast-radius-within   → evidence: Hank
-doc-section-exists    → evidence: Hank
-tests-green           → evidence: CI     (attested)
-approval-exists       → evidence: Quipu
-different-actor-than  → evidence: Quipu  (separation of duties)
-```
-
+Underneath authoring sits a **catalog** of atomic, pre-verified,
+evidence-grounded **selectors and predicates** (see [Catalog](#catalog-initial)).
 Authoring is composition three layers deep, bottoming out in the catalog:
 
 ```text
@@ -191,6 +189,32 @@ interchangeable front-ends over this same composition:
 - **Mined** — the plane observes fleet behavior in Quipu's bitemporal log and
   *proposes* a codification of a recurring sequence; a human approves.
 
+### The composition grammar
+
+The grammar over the catalog is small: a **selector** yields a set, a
+**predicate** tests an element, and **combinators** (`and` / `or` / `not`) plus
+**quantifiers** (`all` / `any`) bind them. A composed policy — a fitness
+function — reads:
+
+```text
+∀ s ∈ changed-public-symbols(run) : has-test(s)
+      └─ selector (Hank)             └─ predicate (Hank)
+targets Step[implement].exit-gate  ·  effect: block
+```
+
+Definitions are **templates**: references and actors are patterns
+(`repo://{repo}/docs/design/{bead}.md`, role `reviewer`) that an Instance
+resolves when it binds its parameters (bead, repo, agent). Authoring is over
+roles and patterns; runtime resolves them.
+
+### Dry-run against history
+
+Because predicates are pure and reproducible, a draft policy is replayed over
+past evidence *before* promotion — *"this would have blocked 3 of the last 20
+merges"* — via Quipu's counterfactual `speculate()` over the bitemporal log. You
+tune against reality, then promote; the same replay validates a **mined**
+proposal. No governance rule goes live blind.
+
 ### Creation is itself verified
 
 A definition is an Entity with the Claim *"well-formed"* — acyclic step graph,
@@ -213,6 +237,47 @@ verification), the same spine one altitude up:
   — all emit a candidate that becomes governing only after definition-time
   verification **and** human promotion. The thing that governs the agents cannot
   be silently rewritten by an agent.
+
+## Catalog (initial)
+
+A starting set — deliberately small, meant to be refined. Every entry is
+evidence-grounded and tier-tagged; the escape hatch grows it. `run` is the bound
+Instance context.
+
+### Selectors (evidence → set)
+
+- `changed-files(run)` — files touched — *git / Hank overlay*
+- `changed-symbols(run)` — symbols touched — *Hank*
+- `changed-public-symbols(run)` — exported subset of the above — *Hank*
+- `blast-radius(change)` — dependents / frontier of a change — *Hank*
+- `callers(symbol)` / `callees(symbol)` — *Hank*
+- `sinks-reached(source)` — taint / dataflow reachable sinks — *Hank (cpg)*
+- `referencing-docs(symbol)` / `referenced-symbols(section)` — doc↔code — *Hank*
+- `required-artifacts(step)` / `prior-steps(step)` — *Quipu (definition)*
+
+### Predicates (element → bool)
+
+Code-grounded, live tier (*Hank*):
+
+- `has-test(symbol)` · `symbol-exists(ref)` · `doc-section-exists(ref)`
+- `blast-radius-within(change, scope)` · `in-scope(action, scope)`
+- `sanitized-before(source, sink-class)` — no unsanitized taint path
+
+Record-grounded, committed tier (*Quipu*):
+
+- `approval-exists(entity, by-role)` · `decision-record-exists(change)`
+- `different-actor-than(step-a, step-b)` · `artifact-verified(artifact)`
+- `within-duration(event, dur)` — depends on a temporal trigger
+
+Attested by external owners:
+
+- `tests-green(artifact)` · `build-succeeds(commit)` — *CI (signed)*
+- `commit-exists(ref)` — *git* · `no-secrets(change)` — *scanner (signed)*
+
+### Combinators
+
+- boolean: `and` · `or` · `not`
+- quantifiers over a selector: `all` · `any`
 
 ## Execution model
 
@@ -247,3 +312,6 @@ step → workflow chain (Quipu's reactive reasoner + Hank freshness).
   override, or repo-default.
 - **Catalog authority** — who holds the privilege to register a new catalog
   predicate.
+- **Compensation** — do runs with irreversible side effects need defined undo
+  (Saga-style), or is halt-and-escalate enough? (Deferred: halt-and-escalate for
+  v1.)
