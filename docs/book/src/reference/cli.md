@@ -9,6 +9,7 @@ COMMANDS:
     analyze     Build the base graph for a path and print a summary
     refs        Find the definition sites of a symbol by name
     callers     Direct callers and callees of a symbol
+    communities Densely-connected symbol clusters (deterministic Louvain, FR-9)
     impact      Blast radius; --cochange reconciles against history (FR-11)
     dataflow    Intra-procedural data dependence within a function
     export      Emit the referential structure as Turtle (bobbin: ontology)
@@ -34,6 +35,7 @@ hank analyze src
 hank refs authenticate src --json
 hank status                    # resolves base_ref to a commit SHA (in a git repo)
 hank impact src/auth.rs::authenticate --hops 5
+hank communities src --json         # symbol clusters, largest-first
 hank verify --file src/auth.rs --buffer /tmp/edited.rs
 hank promote --commit HEAD
 ```
@@ -41,6 +43,12 @@ hank promote --commit HEAD
 `hank status` resolves the configured `base_ref` (default `main`) to a concrete
 commit via the system `git`; outside a git repository the base commit shows as
 unresolved and Hank falls back to the working tree.
+
+`hank communities` partitions the call graph into densely-connected symbol
+clusters using deterministic Louvain (FR-9) — the same partition on every run,
+no RNG. Communities are ordered largest-first; members carry a `tier` tag.
+Quipu runs community detection over *committed* facts; Hank computes it live
+over the hot graph.
 
 Commands marked with a phase print a notice until their engine lands; see the
 [Specification](../design/specification.md) §12.

@@ -23,6 +23,7 @@ hank serve --http     # streamable-HTTP at http://127.0.0.1:3040/mcp
 | `hank_analyze` | Files/symbols summary for a subtree |
 | `hank_callers` | Direct callers of a symbol (who calls it) |
 | `hank_callees` | Direct callees of a symbol (what it calls) |
+| `hank_communities` | Densely-connected symbol clusters (deterministic Louvain, FR-9) |
 | `hank_impact` | Blast radius — transitive callers, N hops; reconciles against a `cochange` set (FR-11) |
 | `hank_dataflow` | Intra-procedural data dependence within a function |
 

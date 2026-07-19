@@ -18,7 +18,8 @@ use serde::Serialize;
 use std::collections::BTreeSet;
 
 use super::tools::{
-    AnalyzeRequest, AnalyzeResponse, DataflowRequest, DataflowResponse, DepEdgeItem, FlowStepItem,
+    AnalyzeRequest, AnalyzeResponse, CommunitiesRequest, CommunitiesResponse, CommunityItem,
+    CommunityMemberItem, DataflowRequest, DataflowResponse, DepEdgeItem, FlowStepItem,
     ImpactRequest, ImpactResponse, NeighborsRequest, NeighborsResponse, ReachItem,
     ReconciliationItem, RefItem, ReferencesRequest, ReferencesResponse, StatusResponse, SymbolItem,
     SymbolsRequest, SymbolsResponse,
@@ -219,6 +220,45 @@ impl HankMcpServer {
             reachable: reachable.iter().map(reach_item).collect(),
             structural_files: structural_files.into_iter().collect(),
             reconciliation,
+        };
+        json_result(&response)
+    }
+
+    #[tool(
+        description = "Detect communities: densely-connected clusters of symbols in the call graph (deterministic Louvain). Best for: 'what are the natural modules/subsystems here?'."
+    )]
+    async fn hank_communities(
+        &self,
+        Parameters(req): Parameters<CommunitiesRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let base = req
+            .path
+            .as_ref()
+            .map_or_else(|| self.root.clone(), |p| self.root.join(p));
+        let graph = CodeGraph::build(&base).map_err(internal)?;
+        let comms = graph.communities();
+        let communities = comms
+            .iter()
+            .map(|c| CommunityItem {
+                id: c.id,
+                size: c.members.len(),
+                members: c
+                    .members
+                    .iter()
+                    .map(|m| CommunityMemberItem {
+                        name: m.name.clone(),
+                        kind: m.kind.clone(),
+                        file: m.file.clone(),
+                        start_line: m.start_line,
+                        tier: m.tier.as_str().to_string(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        let response = CommunitiesResponse {
+            count: comms.len(),
+            communities,
+            tier: "treesitter".to_string(),
         };
         json_result(&response)
     }

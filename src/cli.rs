@@ -93,6 +93,12 @@ enum Commands {
         #[arg(long)]
         cochange: Option<PathBuf>,
     },
+    /// Detected communities: densely-connected clusters of symbols (FR-9).
+    Communities {
+        /// Directory to build the call graph over (defaults to current dir).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
     /// Export the referential structure (modules, symbols, edges) as Turtle.
     Export {
         /// Directory to export (defaults to current dir).
@@ -184,6 +190,7 @@ impl Cli {
             Commands::Callers { symbol, path } => {
                 cli_cmds::callers(self.json, self.quiet, symbol, path)
             }
+            Commands::Communities { path } => cli_cmds::communities(self.json, self.quiet, path),
             Commands::Impact {
                 symbol,
                 path,
