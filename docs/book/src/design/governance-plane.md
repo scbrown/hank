@@ -239,6 +239,41 @@ the code-entities ontology (`CodeModule`, `CodeSymbol`, `Document`, `Section`,
 `Bundle`) already in Quipu — governance facts and code facts live in one graph,
 queryable together in a single SPARQL query.
 
+## Integration contract (Hank ↔ Quipu)
+
+Four exchanges across the seam. Quipu signs bundles; Hank signs verdicts; both
+verify against the shared verifier registry.
+
+```text
+Quipu (engine of record)                         Hank (co-located decision point)
+  │  1. bundle pull ─────────────────────────────▶  cache live-evaluable policies
+  │◀──── 2. signed live verdicts (at milestones) ──  evaluate live-tier leaves
+  │◀──── 4. milestone promotion ──────────────────  on transition
+  ▲                                                 3. hank_plan_declare ◀── agent/harness
+```
+
+1. **Bundle pull (Quipu → Hank).** On instance bind — and reactively on any
+   policy change — Quipu compiles the *live-evaluable* subset of the workflow's
+   policies into a **signed bundle**: the catalog leaves Hank can evaluate, their
+   gates + effect matrix, the relevant risk-map slice, and the registry entries.
+   A re-pushed bundle invalidates the affected cached verdicts.
+2. **Live verdict envelope (Hank → Quipu).** Hank emits signed verdicts —
+   `{predicate-id, target-ref, outcome, evidence-hash, tier, freshness,
+   confidence, verifier, sig}` — cached live in Hank and **promoted to Quipu only
+   at milestones** (the live / settled split).
+3. **`hank_plan_declare` (agent / harness → Hank).** `{instance, targets:
+   [symbol-ref], rationale}`; Hank binds targets to symbols, reconciles against
+   the inferred plan, and returns the plan + an immediate coverage verdict.
+   Companion `hank_plan_status` returns the plan and per-`PlanStep` verdicts.
+4. **Milestone promotion (Hank / plane → Quipu).** On a transition,
+   `{instance, step, transition, verdicts[], committed-evidence, actor,
+   valid-time}` is written as bitemporal facts, waking the reactive reasoner.
+
+Tool surface: `hank_policy_check`, `hank_plan_declare`, `hank_plan_status` join
+Hank's existing `hank_*` MCP tools (and REST mirror); harness adapters call these
+plus the pre-edit hook. The `quipu` Cargo feature already carries Hank's
+promotion path; policy bundles ride the same channel.
+
 ## Authoring
 
 Two distinct "creations" — do not conflate:
