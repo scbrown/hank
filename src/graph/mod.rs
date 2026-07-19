@@ -3,27 +3,28 @@
 //! Phase 2 builds a symbol-level call graph over a subtree and answers
 //! reachability in either direction. This is the FR-12 primitive: the same
 //! traversal answers "what does this change affect?" (callers, transitively)
-//! and "what does this call?" (callees). Phase 3 will make this a hot,
-//! per-tenant resident graph; today it is built on demand.
+//! and "what does this call?" (callees). Phase 3 makes this a hot, per-tenant
+//! resident graph (see [`base`]/[`overlay`]/[`tenant`]); today it is built on
+//! demand.
+//!
+//! The single breadth-first traversal lives in [`blast`] behind the [`Adjacency`]
+//! trait, so the base graph, the composed per-tenant view, and the frontier
+//! update all share one implementation (FR-12, "build it once").
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+mod blast;
+mod community;
+
+use std::collections::HashMap;
 use std::path::Path;
 
 use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph::Direction as PgDirection;
 
 use crate::errors::Result;
 use crate::extract::{extract_structure, rust_files};
 use crate::types::{EdgeKind, Tier};
 
-/// Direction of a reachability walk over the call graph.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Dir {
-    /// Transitive callers — "what does changing this affect?" (impact).
-    Callers,
-    /// Transitive callees — "what does this depend on?".
-    Callees,
-}
+pub use blast::{reachable_over, Adjacency, Dir, NodeMeta, Reached};
+pub use community::{Community, CommunityMember};
 
 /// A node in the call graph: one defined symbol.
 #[derive(Debug, Clone)]
@@ -38,21 +39,6 @@ pub struct SymbolNode {
     pub start_line: usize,
     /// Provenance tier.
     pub tier: Tier,
-}
-
-/// A symbol reached during a walk, with its distance from the seed.
-#[derive(Debug, Clone)]
-pub struct Reached {
-    /// Symbol name.
-    pub name: String,
-    /// File (relative to the build root).
-    pub file: String,
-    /// 1-based definition line.
-    pub start_line: usize,
-    /// Hop distance from the seed (1 = direct).
-    pub distance: u32,
-    /// Relationship to the seed (`calls` or `called_by`).
-    pub via: &'static str,
 }
 
 /// A symbol-level call graph built over a subtree.
@@ -163,152 +149,12 @@ impl CodeGraph {
 
     /// Symbols reachable from `seed` within `max_hops`, breadth-first.
     ///
-    /// This is the FR-12 primitive: `Dir::Callers` is the impact set (who
-    /// transitively calls `seed`); `Dir::Callees` is the dependency set.
+    /// This is the FR-12 primitive (via the single [`blast::reachable_over`]
+    /// walk): `Dir::Callers` is the impact set (who transitively calls `seed`);
+    /// `Dir::Callees` is the dependency set.
     #[must_use]
     pub fn reachable(&self, seed: &str, dir: Dir, max_hops: u32) -> Vec<Reached> {
-        let Some(seeds) = self.by_name.get(seed) else {
-            return Vec::new();
-        };
-        let pg_dir = match dir {
-            Dir::Callees => PgDirection::Outgoing,
-            Dir::Callers => PgDirection::Incoming,
-        };
-        let via = match dir {
-            Dir::Callees => "calls",
-            Dir::Callers => "called_by",
-        };
-
-        let mut visited: HashSet<NodeIndex> = seeds.iter().copied().collect();
-        let mut frontier: Vec<NodeIndex> = seeds.clone();
-        let mut reached = Vec::new();
-        let mut hop = 0;
-
-        while hop < max_hops && !frontier.is_empty() {
-            hop += 1;
-            let mut next = Vec::new();
-            for node in frontier {
-                for neighbor in self.graph.neighbors_directed(node, pg_dir) {
-                    if visited.insert(neighbor) {
-                        let symbol = &self.graph[neighbor];
-                        reached.push(Reached {
-                            name: symbol.name.clone(),
-                            file: symbol.file.clone(),
-                            start_line: symbol.start_line,
-                            distance: hop,
-                            via,
-                        });
-                        next.push(neighbor);
-                    }
-                }
-            }
-            frontier = next;
-        }
-        reached
-    }
-}
-
-/// One member symbol of a detected community.
-#[derive(Debug, Clone)]
-pub struct CommunityMember {
-    /// Symbol name.
-    pub name: String,
-    /// Symbol kind (lowercase form).
-    pub kind: String,
-    /// File the symbol is defined in (relative to the build root).
-    pub file: String,
-    /// 1-based definition line.
-    pub start_line: usize,
-    /// Provenance tier.
-    pub tier: Tier,
-}
-
-/// A detected community: a densely-connected cluster of symbols (FR-9).
-#[derive(Debug, Clone)]
-pub struct Community {
-    /// Stable community id (0-based, assigned largest-cluster-first).
-    pub id: usize,
-    /// Member symbols, sorted by `(file, line, name)`.
-    pub members: Vec<CommunityMember>,
-}
-
-impl CodeGraph {
-    /// Detect communities over the graph via deterministic Louvain (FR-9).
-    ///
-    /// The directed call graph is projected to an undirected weighted graph
-    /// (parallel/opposing edges sum), partitioned by [`crate::community::louvain`],
-    /// then grouped into clusters ordered largest-first with members sorted by
-    /// location — a stable, reproducible partition for a given graph.
-    #[must_use]
-    pub fn communities(&self) -> Vec<Community> {
-        let n = self.graph.node_count();
-        if n == 0 {
-            return Vec::new();
-        }
-        // Fold the directed call graph into undirected weights.
-        let mut weights: HashMap<(usize, usize), f64> = HashMap::new();
-        for edge in self.graph.edge_indices() {
-            let Some((a, b)) = self.graph.edge_endpoints(edge) else {
-                continue;
-            };
-            let (a, b) = (a.index(), b.index());
-            if a == b {
-                continue;
-            }
-            let key = if a < b { (a, b) } else { (b, a) };
-            *weights.entry(key).or_insert(0.0) += 1.0;
-        }
-        let edges: Vec<(usize, usize, f64)> =
-            weights.into_iter().map(|((a, b), w)| (a, b, w)).collect();
-        let labels = crate::community::louvain(n, &edges);
-
-        // Group node indices by community label.
-        let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-        for (idx, &label) in labels.iter().enumerate() {
-            groups.entry(label).or_default().push(idx);
-        }
-        // Materialize members, sorted by location within each community.
-        let mut clusters: Vec<Vec<CommunityMember>> = groups
-            .into_values()
-            .map(|nodes| {
-                let mut members: Vec<CommunityMember> = nodes
-                    .into_iter()
-                    .map(|i| {
-                        let symbol = &self.graph[NodeIndex::new(i)];
-                        CommunityMember {
-                            name: symbol.name.clone(),
-                            kind: symbol.kind.clone(),
-                            file: symbol.file.clone(),
-                            start_line: symbol.start_line,
-                            tier: symbol.tier,
-                        }
-                    })
-                    .collect();
-                members.sort_by(|a, b| {
-                    (a.file.as_str(), a.start_line, a.name.as_str()).cmp(&(
-                        b.file.as_str(),
-                        b.start_line,
-                        b.name.as_str(),
-                    ))
-                });
-                members
-            })
-            .collect();
-        // Order communities largest-first, tie-broken by first member's location.
-        clusters.sort_by(|a, b| {
-            b.len().cmp(&a.len()).then_with(|| {
-                let key = |m: &[CommunityMember]| {
-                    m.first()
-                        .map(|f| (f.file.clone(), f.start_line, f.name.clone()))
-                };
-                key(a).cmp(&key(b))
-            })
-        });
-        clusters
-            .into_iter()
-            .enumerate()
-            .map(|(id, members)| Community { id, members })
-            .collect()
+        reachable_over(self, seed, dir, max_hops)
     }
 }
 
@@ -410,43 +256,5 @@ fn top() { mid(); }
             (0, 0),
             "no repo → empty base graph, no crash"
         );
-    }
-
-    #[test]
-    fn communities_split_two_call_clusters() {
-        // Two independent call chains that never touch → two communities.
-        let dir = tempfile::tempdir().unwrap();
-        write(
-            dir.path(),
-            "lib.rs",
-            "\
-fn a_leaf() {}
-fn a_mid() { a_leaf(); }
-fn a_top() { a_mid(); a_leaf(); }
-fn b_leaf() {}
-fn b_mid() { b_leaf(); }
-fn b_top() { b_mid(); b_leaf(); }
-",
-        );
-        let graph = CodeGraph::build(dir.path()).unwrap();
-        let comms = graph.communities();
-        assert_eq!(comms.len(), 2, "expected two clusters: {comms:?}");
-        // Ids are dense and largest-first (6 symbols, 3 per cluster here).
-        assert_eq!(comms[0].id, 0);
-        assert_eq!(comms[1].id, 1);
-        // Every member of a community shares its `a_`/`b_` prefix.
-        for comm in &comms {
-            let prefixes: std::collections::BTreeSet<&str> =
-                comm.members.iter().map(|m| &m.name[..2]).collect();
-            assert_eq!(prefixes.len(), 1, "cluster mixes chains: {comm:?}");
-        }
-        // Deterministic across runs.
-        let again = CodeGraph::build(dir.path()).unwrap().communities();
-        let names = |cs: &[Community]| -> Vec<Vec<String>> {
-            cs.iter()
-                .map(|c| c.members.iter().map(|m| m.name.clone()).collect())
-                .collect()
-        };
-        assert_eq!(names(&comms), names(&again));
     }
 }
