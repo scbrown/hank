@@ -1,0 +1,62 @@
+name: Release
+
+# Publish a downloadable hank binary on every version tag. CI (ci.yml) proves the
+# code builds/tests; this proves it SHIPS — a build with no release artifact is a
+# tool nobody downstream can install (aegis-dh32).
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write # create the GitHub release + upload the asset
+
+jobs:
+  binary:
+    name: Release binary (x86_64-linux-gnu)
+    # ubuntu-22.04 ships glibc 2.35 — older than every consumer host, so a
+    # dynamically-linked binary built here runs on all of them (build on the
+    # OLDEST glibc you must support; forward-compat only). Static musl is a
+    # follow-up once the C-dep toolchain (musl-tools) is wired in.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+            ${{ runner.os }}-cargo-
+
+      # mcp + langs-extra = the useful runtime set (`hank serve` + all grammars);
+      # both arms already pass in ci.yml, so this is a proven build.
+      - name: Build release binary
+        run: cargo build --release --features mcp,langs-extra
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          bin=target/release/hank
+          test -x "$bin" || { echo "no binary at $bin"; exit 1; }
+          "$bin" --version
+          tarball="hank-${GITHUB_REF_NAME}-x86_64-linux-gnu.tar.gz"
+          tar -czf "$tarball" -C target/release hank
+          sha256sum "$tarball" | tee "$tarball.sha256"
+          echo "TARBALL=$tarball" >> "$GITHUB_ENV"
+
+      - name: Publish release + asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Create the release if the tag has none yet; either way, attach the asset.
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 \
+            || gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --generate-notes
+          gh release upload "${GITHUB_REF_NAME}" "${TARBALL}" "${TARBALL}.sha256" --clobber
