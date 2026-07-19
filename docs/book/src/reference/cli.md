@@ -32,6 +32,7 @@ GLOBAL FLAGS:
 
 ```bash
 hank analyze src
+hank analyze src --at main     # structure of the tree at a baseline commit (FR-13)
 hank refs authenticate src --json
 hank status                    # resolves base_ref to a commit SHA (in a git repo)
 hank impact src/auth.rs::authenticate --hops 5
@@ -43,6 +44,12 @@ hank promote --commit HEAD
 `hank status` resolves the configured `base_ref` (default `main`) to a concrete
 commit via the system `git`; outside a git repository the base commit shows as
 unresolved and Hank falls back to the working tree.
+
+`hank analyze --at <ref>` builds the summary from the **git tree** at a baseline
+commit (FR-13) rather than the working copy — the shared read-only base the
+Phase-3 resident graph will hold. It reads blob content at the ref (never the
+working tree), and degrades to an empty result outside a repo or for an
+unresolved ref.
 
 `hank communities` partitions the call graph into densely-connected symbol
 clusters using deterministic Louvain (FR-9) — the same partition on every run,

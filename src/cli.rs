@@ -61,6 +61,11 @@ enum Commands {
         /// Directory or file to analyze (defaults to the current directory).
         #[arg(default_value = ".")]
         path: PathBuf,
+        /// Analyze the tree at a git ref (a baseline commit) instead of the
+        /// working tree — the FR-13 base. Repo-relative; degrades to empty
+        /// outside a repo or for an unresolved ref.
+        #[arg(long)]
+        at: Option<String>,
     },
     /// Find the definition sites of a symbol by name.
     Refs {
@@ -175,7 +180,7 @@ impl Cli {
     /// Run the parsed command.
     pub async fn run(self) -> anyhow::Result<()> {
         match &self.command {
-            Commands::Analyze { path } => self.analyze(path),
+            Commands::Analyze { path, at } => self.analyze(path, at.as_deref()),
             Commands::Refs { symbol, path } => self.refs(symbol, path),
             Commands::Status => self.status(),
             Commands::Hook { event } => match event {
@@ -242,28 +247,61 @@ impl Cli {
         }
     }
 
-    /// Build the base graph for `path` and print a summary.
-    fn analyze(&self, path: &Path) -> anyhow::Result<()> {
-        let mut files = 0usize;
-        let mut symbols = 0usize;
-        for file in rust_files(path) {
-            let source = std::fs::read_to_string(&file)?;
-            let found = extract_symbols(&source, "rust")?;
-            files += 1;
-            symbols += found.len();
-        }
+    /// Build the base graph for `path` and print a summary. With `at`, source
+    /// the summary from the git tree at that ref (the FR-13 base) rather than
+    /// the working tree.
+    fn analyze(&self, path: &Path, at: Option<&str>) -> anyhow::Result<()> {
+        let (files, symbols) = match at {
+            Some(reference) => Self::analyze_at_ref(path, reference)?,
+            None => Self::analyze_working_tree(path)?,
+        };
 
         if self.json {
-            let out =
+            let mut out =
                 serde_json::json!({ "files": files, "symbols": symbols, "tier": "treesitter" });
+            if let Some(reference) = at {
+                out["at"] = serde_json::json!(reference);
+            }
             println!("{}", serde_json::to_string_pretty(&out)?);
         } else if !self.quiet {
+            let at_note = at.map_or_else(String::new, |r| format!(" @ {r}"));
             println!(
-                "{} {files} file(s), {symbols} symbol(s) [tree-sitter]",
+                "{} {files} file(s), {symbols} symbol(s) [tree-sitter]{at_note}",
                 "analyzed".green().bold()
             );
         }
         Ok(())
+    }
+
+    /// Count files and symbols across the working tree under `path`.
+    fn analyze_working_tree(path: &Path) -> anyhow::Result<(usize, usize)> {
+        let mut files = 0usize;
+        let mut symbols = 0usize;
+        for file in rust_files(path) {
+            let source = std::fs::read_to_string(&file)?;
+            files += 1;
+            symbols += extract_symbols(&source, "rust")?.len();
+        }
+        Ok((files, symbols))
+    }
+
+    /// Count files and symbols in the git tree at `reference` (the FR-13 base).
+    fn analyze_at_ref(path: &Path, reference: &str) -> anyhow::Result<(usize, usize)> {
+        let root = std::env::current_dir()?;
+        let prefix = path.strip_prefix(".").unwrap_or(path);
+        let mut files = 0usize;
+        let mut symbols = 0usize;
+        for file in crate::git::list_files_at(&root, reference) {
+            if file.extension().is_none_or(|e| e != "rs") || !file.starts_with(prefix) {
+                continue;
+            }
+            let Some(source) = crate::git::read_blob_at(&root, reference, &file) else {
+                continue;
+            };
+            files += 1;
+            symbols += extract_symbols(&source, "rust")?.len();
+        }
+        Ok((files, symbols))
     }
 
     /// Find definitions of `symbol` by name under `path`.
