@@ -16,6 +16,7 @@ mod cli_cmds;
 pub mod community;
 pub mod config;
 pub mod dataflow;
+pub mod docref;
 pub mod errors;
 pub mod export;
 pub mod extract;
@@ -27,5 +28,6 @@ pub mod mcp;
 pub mod reconcile;
 mod render;
 pub mod types;
+pub mod watch;
 
 pub use errors::{Error, Result};

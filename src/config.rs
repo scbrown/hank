@@ -57,6 +57,10 @@ impl Default for HankConfig {
 pub struct FreshnessConfig {
     /// Debounce for keystroke-driven tree-sitter updates, in milliseconds.
     pub debounce_ms: u64,
+    /// Debounce for the deferred heavy tier (graph/frontier recompute, and later
+    /// LSP/CPG), in milliseconds. Longer than `debounce_ms` so a burst of edits
+    /// does not thrash the expensive recompute (FR-17).
+    pub heavy_debounce_ms: u64,
     /// When to compute LSP facts: `"save"` or `"on_demand"`.
     pub lsp_on: String,
 }
@@ -65,6 +69,7 @@ impl Default for FreshnessConfig {
     fn default() -> Self {
         Self {
             debounce_ms: 300,
+            heavy_debounce_ms: 1500,
             lsp_on: "save".to_string(),
         }
     }

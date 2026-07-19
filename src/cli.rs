@@ -2,7 +2,8 @@
 //!
 //! `analyze`, `refs`, `status`, `serve` (MCP), the Phase-2 call-graph commands
 //! `callers`/`impact` and `dataflow`, `export` (referential structure as Turtle,
-//! §5.10/FR-34), and the `hook` adapter (edit-reactive harness integration,
+//! §5.10/FR-34), the `watch` file-watcher (debounced, tiered re-extraction,
+//! §5.5/FR-17), and the `hook` adapter (edit-reactive harness integration,
 //! §5.9/FR-30) are live. `verify` and `promote` are declared with their final
 //! shape and print a phase notice until their engines land (`docs/hank-spec.md`).
 
@@ -148,6 +149,12 @@ enum Commands {
         #[arg(long, default_value = "HEAD")]
         commit: String,
     },
+    /// Watch a tree and re-extract changed files, debounced and tiered (FR-17).
+    Watch {
+        /// Directory to watch (defaults to the current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
     /// Show base commit, tiers, and configuration.
     Status,
     /// Agent-harness hook adapter (reads the hook payload on stdin).
@@ -182,6 +189,7 @@ impl Cli {
         match &self.command {
             Commands::Analyze { path, at } => self.analyze(path, at.as_deref()),
             Commands::Refs { symbol, path } => self.refs(symbol, path),
+            Commands::Watch { path } => self.watch(path).await,
             Commands::Status => self.status(),
             Commands::Hook { event } => match event {
                 HookEvent::PostEdit => crate::hook::run_post_edit(),
@@ -382,6 +390,34 @@ impl Cli {
                 "  quipu       : enabled={} branch_model={}",
                 config.quipu.enabled, config.quipu.branch_model
             );
+        }
+        Ok(())
+    }
+
+    /// Watch `path` and re-extract changed files on debounced, tiered schedules
+    /// (FR-17). Blocks until interrupted (Ctrl-C).
+    async fn watch(&self, path: &Path) -> anyhow::Result<()> {
+        let config = HankConfig::load(path)?;
+        let scheduler = crate::watch::TieredScheduler::from_config(&config.freshness);
+        let handler = Box::new(crate::watch::GraphRefresh::new(path.to_path_buf()));
+        let _watcher = crate::watch::Watcher::start(
+            path,
+            scheduler,
+            handler,
+            std::time::Duration::from_millis(100),
+        )?;
+        if !self.quiet {
+            println!(
+                "{} {} (tree-sitter @ {}ms, heavy @ {}ms) — Ctrl-C to stop",
+                "watching".green().bold(),
+                path.display(),
+                config.freshness.debounce_ms,
+                config.freshness.heavy_debounce_ms,
+            );
+        }
+        tokio::signal::ctrl_c().await?;
+        if !self.quiet {
+            println!("{}", "watch stopped".yellow());
         }
         Ok(())
     }
