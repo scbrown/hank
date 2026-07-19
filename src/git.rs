@@ -72,6 +72,30 @@ pub fn changed_paths(root: &Path, from: &str, to: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+/// The tracked file paths present in the tree at `reference`, relative to the
+/// repository root. Empty when the ref does not resolve or outside a repo — the
+/// caller treats an empty tree as "nothing to build" rather than an error.
+#[must_use]
+pub fn list_files_at(root: &Path, reference: &str) -> Vec<PathBuf> {
+    let spec = format!("{reference}^{{tree}}");
+    let Some(out) = git(root, &["ls-tree", "-r", "--name-only", "-z", &spec]) else {
+        return Vec::new();
+    };
+    // `-z` gives NUL-separated paths so filenames with newlines are safe.
+    out.split('\0')
+        .filter(|l| !l.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+/// The content of `path` in the tree at `reference`, or `None` when the blob is
+/// absent at that ref, is not valid UTF-8 (binary), or this is not a repo.
+#[must_use]
+pub fn read_blob_at(root: &Path, reference: &str, path: &Path) -> Option<String> {
+    let spec = format!("{reference}:{}", path.display());
+    git(root, &["show", &spec])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,5 +167,50 @@ mod tests {
         assert!(head_commit(dir.path()).is_none());
         assert!(resolve_commit(dir.path(), "main").is_none());
         assert!(changed_paths(dir.path(), "a", "b").is_empty());
+        assert!(list_files_at(dir.path(), "HEAD").is_empty());
+        assert!(read_blob_at(dir.path(), "HEAD", Path::new("a.txt")).is_none());
+    }
+
+    #[test]
+    fn reads_tree_content_at_a_ref() {
+        let dir = tempfile::tempdir().unwrap();
+        if !init_repo(dir.path()) {
+            return; // skip: no git
+        }
+        let first = head_commit(dir.path()).unwrap();
+
+        // Second commit: change a.txt and add b.txt.
+        std::fs::write(dir.path().join("a.txt"), "changed\n").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "two\n").unwrap();
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .output()
+                .unwrap();
+        };
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "second"]);
+
+        // The tree at the first commit has only a.txt, with its original body.
+        let files = list_files_at(dir.path(), &first);
+        assert_eq!(files, vec![PathBuf::from("a.txt")]);
+        assert_eq!(
+            read_blob_at(dir.path(), &first, Path::new("a.txt")).as_deref(),
+            Some("one\n"),
+            "reads the historical blob, not the working tree"
+        );
+        // b.txt did not exist at the first commit.
+        assert!(read_blob_at(dir.path(), &first, Path::new("b.txt")).is_none());
+
+        // HEAD sees both files and the updated content.
+        let head_files = list_files_at(dir.path(), "HEAD");
+        assert!(head_files.contains(&PathBuf::from("a.txt")));
+        assert!(head_files.contains(&PathBuf::from("b.txt")));
+        assert_eq!(
+            read_blob_at(dir.path(), "HEAD", Path::new("a.txt")).as_deref(),
+            Some("changed\n")
+        );
     }
 }
