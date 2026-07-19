@@ -214,6 +214,31 @@ already produces.
   `prevented` (harness exposes a pre-action gate) vs `observed` (detect,
   record, escalate). Never present `observed` as `prevented`.
 
+## Entities in Quipu
+
+The primitives are RDF classes in Quipu's governed ontology — so definition-time
+verification is just SHACL over them, and the plane is *native* to Quipu, not
+bolted on. Where Quipu already has a governance type, reuse it:
+
+| Primitive | Quipu class | Notes |
+|---|---|---|
+| Policy | extends `Directive` | governed rule / intent, human provenance |
+| Verdict / violation | `Observation` | bitemporal, signed, content-bound |
+| Decision (human) | `DecisionRecord` | signed approve / reject / changes |
+| Workflow / Step / Transition | new classes | the composition graph |
+| Artifact / PlanStep | new classes | reference concrete targets / code symbols |
+| Selector / predicate | new classes | evidence-source-bound catalog leaves |
+
+References resolve to existing stack IRIs: a code-grounded Artifact or PlanStep
+points at `bobbin:code/{repo}/{path}::{symbol}` — the same identity Hank mints on
+promotion — so intent, structure, and governance reconcile on one identifier.
+
+Each class ships a SHACL shape; a definition that violates its shape is rejected
+at write (definition-time verification). The governance ontology thus *extends*
+the code-entities ontology (`CodeModule`, `CodeSymbol`, `Document`, `Section`,
+`Bundle`) already in Quipu — governance facts and code facts live in one graph,
+queryable together in a single SPARQL query.
+
 ## Authoring
 
 Two distinct "creations" — do not conflate:
