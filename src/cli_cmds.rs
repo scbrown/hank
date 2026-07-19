@@ -37,6 +37,60 @@ pub(crate) fn callers(json: bool, quiet: bool, symbol: &str, path: &Path) -> any
     Ok(())
 }
 
+/// `hank communities` — densely-connected clusters of symbols (FR-9, Louvain).
+pub(crate) fn communities(json: bool, quiet: bool, path: &Path) -> anyhow::Result<()> {
+    let graph = CodeGraph::build(path)?;
+    let comms = graph.communities();
+
+    if json {
+        let rows: Vec<_> = comms
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "id": c.id,
+                    "size": c.members.len(),
+                    "members": c.members.iter().map(|m| serde_json::json!({
+                        "name": m.name,
+                        "kind": m.kind,
+                        "file": m.file,
+                        "start_line": m.start_line,
+                        "tier": m.tier,
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        let out = serde_json::json!({
+            "count": comms.len(),
+            "communities": rows,
+            "tier": "treesitter",
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else if comms.is_empty() {
+        if !quiet {
+            println!("no communities (empty call graph)");
+        }
+    } else {
+        for c in &comms {
+            println!(
+                "{} {} ({} symbol(s))",
+                "community".green().bold(),
+                c.id,
+                c.members.len()
+            );
+            for m in &c.members {
+                println!(
+                    "  {}:{} {} [{:?}]",
+                    m.file,
+                    m.start_line,
+                    m.name.cyan(),
+                    m.tier
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `hank impact` — the blast radius (transitive callers) of a symbol,
 /// optionally reconciled against a caller-supplied co-change set (FR-11).
 pub(crate) fn impact(

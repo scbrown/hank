@@ -194,6 +194,51 @@ pub struct ImpactResponse {
     pub reconciliation: Option<ReconciliationItem>,
 }
 
+/// Request for `hank_communities` — detected symbol clusters over a subtree.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CommunitiesRequest {
+    /// Directory to build the call graph over (relative to the root).
+    #[schemars(description = "Directory relative to the root. Omit for the whole root.")]
+    pub path: Option<String>,
+}
+
+/// One member symbol of a community in a `hank_communities` response.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct CommunityMemberItem {
+    /// Symbol name.
+    pub name: String,
+    /// Symbol kind (`function`, `struct`, ...).
+    pub kind: String,
+    /// File the symbol is defined in (relative to the root).
+    pub file: String,
+    /// 1-based definition line.
+    pub start_line: usize,
+    /// Provenance tier.
+    pub tier: String,
+}
+
+/// One detected community.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct CommunityItem {
+    /// Stable community id (0-based, largest-cluster-first).
+    pub id: usize,
+    /// Number of member symbols.
+    pub size: usize,
+    /// The member symbols, sorted by location.
+    pub members: Vec<CommunityMemberItem>,
+}
+
+/// Response for `hank_communities`.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct CommunitiesResponse {
+    /// Number of communities detected.
+    pub count: usize,
+    /// The detected communities, largest-first.
+    pub communities: Vec<CommunityItem>,
+    /// Provenance tier of the detection (derived from the tree-sitter graph).
+    pub tier: String,
+}
+
 /// Request for `hank_dataflow` — intra-procedural data dependence.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct DataflowRequest {
