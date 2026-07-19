@@ -298,13 +298,78 @@ The injected guide content is **not authored separately** — it is *derived* fr
 changes, the verdict goes `stale` and staleness propagates up the artifact →
 step → workflow chain (Quipu's reactive reasoner + Hank freshness).
 
+### State: live vs settled
+
+The state machine obeys the same tier split as the rest of the stack — so the
+answer to *"do we write every step to Quipu?"* is **no**.
+
+- **Live tier (Hank).** The hot loop runs in Hank's session runtime over the
+  overlay: live-tier gates, the current-step pointer, plan progress, propulsion.
+  Volatile, per-session, re-derived on demand — *never* written to Quipu
+  tick-by-tick. It is ephemeral precisely because it is re-derivable, the same
+  reason overlays are.
+- **Settled tier (Quipu).** Only **transitions and committed verdicts** are
+  promoted — step entered/exited, gate passed, run completed — each a sparse,
+  audit-worthy bitemporal fact. Quipu's reactive reasoner drives the *settled*
+  transitions (cross-agent handoffs, temporal triggers); Hank drives the *live*
+  ones.
+
+The **Instance** is a Quipu entity (identity, workflow, parameters, last durable
+milestone); Hank holds a live *projection* of it. Agents coordinate through the
+Quipu record, not shared memory — a handoff is: agent A promotes a milestone →
+the reasoner enqueues the next step for agent B's role → agent B's Hank
+rehydrates from that milestone.
+
+### Resumability
+
+Resume is not a context reload — it is `last-promoted-milestone (Quipu) +
+re-derived live verdicts (Hank)`. Durable progress is never lost; the volatile
+delta since the last milestone is cheap to re-derive by re-verifying the current
+working tree. Because verdicts are content-bound, anything the world changed
+while paused surfaces as **stale**, so resume is precise about what shifted —
+which a silent checkpoint cannot be. State lives in the plane, not the context
+window, so a different agent (or harness) can resume the same Instance.
+
+## Intent map (tactical plan)
+
+Hank maps what the code *is*; the intent map adds what the agent *intends to do
+to it*, and binds the two. It is the middle layer between the strategic workflow
+(Quipu) and the raw code graph (Hank) — and the layer that makes tactical resume
+and intent-conformance possible.
+
+A **`PlanStep`** entity references a code symbol (`add-sanitizer → parseInput`)
+and belongs to the running Step / Instance. Only Hank can bind intent to
+structure live, holding both the code graph and the edit overlay at once.
+
+### Sourcing the plan
+
+Hank **infers** a draft plan from the harness's plan / todo output and the
+agent's opening edits, binding each item to symbols. The agent may **declare** a
+plan to override or correct the inference (`hank_plan_declare`), and a declared
+plan wins. Inference is the low-friction default; declaration is the authority.
+Requiring a plan before edits is itself a policy (`plan-declared-before-edit`).
+
+### What it unlocks — all on the existing spine
+
+- **Plan completeness** — `∀ s ∈ blast-radius(change) : s ∈ plan.targets`
+  (`plan-covers-blast-radius`): flags symbols in the blast radius the plan omits.
+  Verification of the *plan's* coherence with the code, not the code's.
+- **Tactical resume** — verdicts on PlanSteps (done / pending / drifted) give
+  resume granularity down to the individual edit.
+- **Intent-conformance** — `∀ edit ∈ run : edit.target ∈ plan.targets` → else
+  scope-creep. **Soft by default** (`warn` / `require-revision`, since
+  re-planning is healthy); **hard only when composed** with a scope policy that
+  already matters (drift *into* a protected module → `deny`).
+- **Targeted context** — Hank and Bobbin inject exactly the symbol, its blast
+  radius, and its tests for the next planned edit instead of dumping context.
+
+Plan drift is expected: the plan is a living artifact, re-verified as it changes.
+
 ## Open questions
 
 - **Home of the plane** — a new peer repo, or grown inside Quipu? (Orchestrating
   live agents is a different responsibility than recording facts.) Working name:
   *the loom*.
-- **Instance state store** — a fast runtime store that promotes completed runs to
-  Quipu, vs. Quipu's append-only log directly.
 - **Enforcement floor** — is `observed` acceptable for harnesses that cannot
   hard-gate, or must every governed action route through a proxy that *can*
   prevent?
