@@ -67,10 +67,12 @@ of `Entity`; the rest are base primitives.
   [Verdict integrity](#verdict-integrity)).
 - **Actor / Role** — who performs a step. Enables fleet-level assignment and
   separation-of-duties policies (*"the reviewer must differ from the author"*).
-- **Binding / Gate** — attaches a policy to an *enforcement point* with an
-  *effect* (`block` / `warn` / `require-approval`). The policy stays pure; the
-  effect is contextual — `tests-green` may `block` at a workflow exit and merely
-  `warn` elsewhere.
+- **Binding / Gate** — attaches a policy to a *boundary* with an *effect*. The
+  boundary is either an **action** (pre-edit) or a **transition** (step
+  completion) — the same policy can be `unknown` at one and decisive at the
+  other. The policy stays pure; the effect is contextual and may be **computed
+  from risk × confidence** (see [Risk and confidence](#risk-and-confidence))
+  rather than fixed.
 - **Instance (Run)** — a definition gone live for a specific run (this bead, this
   session), holding live state + verdicts. Distinct from the definition it
   instantiates.
@@ -130,6 +132,55 @@ registry is a governed, human-authored definition. The scheme does not eliminate
 trust; it concentrates it into a small, human-owned surface and makes everything
 downstream reproducible.
 
+## Risk and confidence
+
+Fixed allow / deny gates are too blunt. Two derived signals let the plane
+*modulate* enforcement instead of hardcoding it.
+
+### Confidence — how sure a verdict is
+
+Derived from the evidence behind it, reusing tier + freshness:
+
+- **tier** — a `has-test` from a tree-sitter heuristic is lower-confidence than
+  one LSP-resolved; a `tests-green` from a signed CI attestation is highest.
+- **freshness** — a `stale` verdict is less trustworthy than a `fresh` one.
+- **verifier reliability** — attested-and-reproduced > attested > self-reported.
+
+Confidence composes **weakest-link**: a policy is only as confident as its
+least-confident leaf (a selector's tier bounds the predicate quantified over it).
+`unknown` has no confidence — it is not a soft `unsatisfied`.
+
+### Risk — how much is at stake
+
+An attribute of an action / change / step:
+
+- **blast radius** (Hank) — more dependents reached, more risk.
+- **criticality** — a human-authored **risk map** (`auth/**`, `payments/**` =
+  high). A governed artifact; sovereignty applies.
+- **reversibility / sensitivity** — a deploy or a data migration outranks a lint.
+
+### Risk-adaptive effect
+
+The gate's effect becomes `effect(risk, confidence)`, not a constant:
+
+- low risk + high confidence → **allow** silently
+- low risk + low confidence → **warn**
+- high risk + low confidence → **require-approval / escalate**
+- high risk + high confidence → allow, but **record**
+
+Two consequences:
+
+- **Confidence sufficiency scales with risk.** A high-risk change can *require* a
+  minimum confidence tier — "for an `auth` change, `tests-green` must be CI-tier,
+  not a tree-sitter guess" (`require-confidence ≥ X when risk ≥ Y`).
+- **The enforcement floor interacts with risk.** On a harness that can only
+  `observe`, high-risk work must be pre-authorized or routed to a hard-gating
+  harness. Risk decides which harness may run which work.
+
+This is the market's *adaptive governance* — assisted by default, promoted or
+blocked by measured gates — expressed as one function over signals the stack
+already produces.
+
 ## Roles in the stack
 
 - **Hank — live verifier, gatekeeper, guide.** Holds the code in memory, so it
@@ -138,11 +189,16 @@ downstream reproducible.
   green. It enforces gates (via a harness adapter) and injects workflow context.
   It also **exports its verification capabilities** into the catalog — predicates
   like `has-tests`, `blast-radius-within`, `doc-section-exists` that only the
-  live map can evaluate. Runs as a **service**, out-of-band from the agent.
-- **Quipu — entity / definition / verdict store + committed verifier.** Holds the
-  entities, references, and durable bitemporal verdicts; verifies the committed
-  tier; enforces definition-time well-formedness via SHACL; keeps the audit
-  trail.
+  live map can evaluate. It runs a **co-located decision point**: Quipu pushes the
+  relevant policy *bundle* and Hank evaluates the live-tier leaves locally at the
+  edit boundary — no per-tick round-trip (the OPA-bundle pattern). Runs as a
+  **service**, out-of-band from the agent.
+- **Quipu — the policy / workflow engine of record.** Holds the entities,
+  references, and durable bitemporal verdicts; verifies the committed tier;
+  enforces definition-time well-formedness via SHACL; keeps the audit trail. It
+  owns **composition, storage, committed-tier evaluation, reproducibility, and
+  the reactive reasoner** — generalizing SHACL (policy-as-schema is one policy
+  kind) into a capability Quipu can also apply to its *own* data.
 - **Bobbin — authoring intelligence + surfacing.** Powers conversational
   authoring (drafting in the vocabulary of *this* codebase) and surfaces
   governance state to agents.
@@ -367,9 +423,10 @@ Plan drift is expected: the plan is a living artifact, re-verified as it changes
 
 ## Open questions
 
-- **Home of the plane** — a new peer repo, or grown inside Quipu? (Orchestrating
-  live agents is a different responsibility than recording facts.) Working name:
-  *the loom*.
+- **Home** — leaning: the policy / workflow **engine lives in Quipu** (widely
+  applicable, usable by Quipu on its own data), with Hank as a co-located
+  decision point and no new repo. Confirm before building. (Capability name still
+  open — working name *the loom*.)
 - **Enforcement floor** — is `observed` acceptable for harnesses that cannot
   hard-gate, or must every governed action route through a proxy that *can*
   prevent?
