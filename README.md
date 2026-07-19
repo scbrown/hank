@@ -203,7 +203,7 @@ references — all tagged `TreeSitter`) is wired for Bobbin's full grammar set.
 
 | Language       | Feature       | Extensions                                     |
 | -------------- | ------------- | ---------------------------------------------- |
-| Rust           | _(always on)_ | `.rs`                                           |
+| Rust           | *(always on)* | `.rs`                                           |
 | TypeScript     | `langs-extra` | `.ts` `.mts` `.cts` `.js` `.mjs` `.cjs`         |
 | TSX / JSX      | `langs-extra` | `.tsx` `.jsx`                                   |
 | Python         | `langs-extra` | `.py` `.pyi`                                     |
