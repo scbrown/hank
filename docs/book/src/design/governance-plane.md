@@ -93,9 +93,15 @@ of `Entity`; the rest are base primitives.
   test result, ADR, commit, review). Verified at the leaf.
 - **Step** — one unit of work: `{ produces: [Artifact], requires: [Artifact],
   gated-by: [Policy], actor: Role }`.
-- **Transition** — a step → step edge, fired when the source step's verdicts are
-  satisfied.
-- **Workflow** — an ordered / dependency graph of Steps.
+- **Transition** — a *guarded* edge from a step: `{on: <outcome>, to: <step>}`. A
+  step may have several — `approve → next`, `request-changes → back to
+  implement`, `reject → terminal`, `escalate → higher role` — so the workflow is
+  a branching, possibly looping graph, not a line. The guard is a predicate over
+  the step's verdicts / decision, evaluated by the same machinery. Loops are
+  bounded (an iteration cap or temporal trigger) so a review ↔ changes cycle
+  cannot spin forever.
+- **Workflow** — a directed graph of Steps and guarded Transitions (branches,
+  loops, terminals).
 
 ## Verdict integrity
 
@@ -420,6 +426,70 @@ Requiring a plan before edits is itself a policy (`plan-declared-before-edit`).
   radius, and its tests for the next planned edit instead of dumping context.
 
 Plan drift is expected: the plan is a living artifact, re-verified as it changes.
+
+## Human in the loop
+
+Human review needs **no new machinery** — a human decision is just another
+*attested evidence source*, the same shape as a CI attestation. A
+`require-approval` gate (which risk-adaptive effect already produces for
+high-risk / low-confidence) sits `unknown` until a human **signs** a decision,
+which lands as a fact and satisfies the gate. *Obtaining* the decision is a Step
+assigned to a human **Actor**; *checking* it is a policy. The decision is a
+signed Artifact — `{instance, gate, approve | reject | changes, by, rationale,
+valid-time}`.
+
+### Asynchronous by default
+
+A fleet of persistent agents cannot block on a synchronous human, so the flow
+suspends and resumes:
+
+```text
+gate → require-approval → verdict unknown
+  → Instance suspends (milestone promoted to Quipu — durable)
+  → DecisionRequest dispatched to the human's queue (adapter / notification)
+  → the agent is freed
+  ⟳ … human responds whenever …
+  → signed Decision lands as a fact
+  → reactive reasoner re-evaluates → resume / branch / terminate,
+     re-dispatching to whatever agent fills the role
+```
+
+The decision **wakes the workflow, not the agent** — human latency is decoupled
+from agent lifetime, because state lives in the plane (this is
+[Resumability](#resumability) earning its rent). The operator becomes an **async
+approver over a governance inbox** (part of Quipu's web surface), each request
+pre-loaded with the context the plane already computed — diff, blast radius,
+failing verdict, risk score. The same DecisionRequest routes sync (harness-inline
+when present) or async (inbox) by availability.
+
+### Async-specific guarantees
+
+- **Approvals are content-bound.** The human approves *hash H*; if the artifact
+  changes while the request waits, the approval is **stale** and does not
+  auto-apply — re-request. This kills approve-then-sneak-in-changes, and is just
+  verdict content-binding reused.
+- **Approvals are role-restricted signed attestations** under the verifier
+  registry. An agent can no more forge or self-issue an approval than forge a
+  Hank verdict; separation-of-duties (`different-actor-than`) prevents
+  self-approval. Sovereignty enforced cryptographically.
+- **Waits are bounded by temporal triggers.** No decision within the SLA →
+  escalate to another role / auto-reject / notify.
+
+### The spectrum
+
+One mechanism, different triggers:
+
+- **Approval gate** — sign off before a transition.
+- **Review with changes** — approve / reject / **request-changes**, the last
+  branching the workflow back to a prior step.
+- **Ambiguity escalation** — triggered by *low confidence* (not high risk): the
+  plane asks a human a call it cannot make.
+- **Human-authored step** — the work is inherently human; a policy verifies the
+  produced artifact.
+- **Break-glass override** — the human is the trust root and may overrule a
+  `deny`, but *only* via a signed, recorded override fact — never a silent
+  bypass. Gates are overridable by default; a small `non-overridable` set (e.g.
+  legal / compliance) requires **N-of-M** human sign-off instead.
 
 ## Open questions
 
