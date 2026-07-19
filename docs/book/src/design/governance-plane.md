@@ -638,3 +638,43 @@ Deferred (v1):
 - **Compensation** — runs with irreversible side effects use **halt-and-escalate**
   rather than defined Saga-style undo.
 - **Capability naming** — *the loom* is a working name, not final.
+
+## Implementation phasing
+
+Build order across the three repos. Each phase that wires a Cargo feature adds it
+to the CI matrix in the same change (don't ship dark), and every verdict it
+produces is tagged `tier` + `freshness` + `confidence`.
+
+- **Phase 0 — Foundations (cross-cutting).** Verifier registry + signing keys
+  (the root of trust); content-hash evidence binding; the human-authored risk-map
+  format. Everything downstream depends on these.
+- **Phase 1 — Quipu: ontology + engine.** Governance classes + SHACL shapes;
+  definition-time validation; bitemporal verdict storage; committed-tier
+  evaluation over the Datalog reasoner; retain `evidence-hash + predicate-id` for
+  reproducibility. Extends the existing `shacl` + reasoner machinery.
+- **Phase 2 — Hank: policy module + live verdicts.** `policy/{model,eval}.rs`
+  over `serve/{refs,impact,dataflow,callgraph}`; bundle pull + cache; signed live
+  verdict emission; `hank_policy_check` (MCP + REST); wire the pre-edit hook to
+  `deny`. Initial Hank-grounded catalog leaves. Behind a `policy` feature.
+- **Phase 3 — Hank: intent map.** `PlanStep` binding; inference + `hank_plan_declare`
+  / `hank_plan_status`; `plan-present`, `plan-covers-blast-radius`,
+  intent-conformance.
+- **Phase 4 — Harness adapters.** Claude Code (`SessionStart` / `UserPromptSubmit`
+  inject, `PreToolUse` gate, `PostToolUse` advance, `Stop` gate); the fleet
+  daemon; the enforcement gradient (`prevented` / `observed`).
+- **Phase 5 — Orchestration + HITL.** Guarded transitions, instance lifecycle,
+  milestone promotion, reactive handoffs; `DecisionRecord` flow, the governance
+  inbox (Quipu web components), temporal triggers, break-glass; risk-adaptive
+  effects fully wired.
+- **Phase 6 — Authoring.** Catalog composition + escape hatch; dry-run via
+  `speculate`; conversational (Bobbin), visual (Quipu web), and mined front-ends.
+
+**MVP** is the [worked example](#worked-example)'s spine: Phases 0–2 (minimal) +
+one workflow (`feature-sdlc`), one live gate (`plan-covers-blast-radius` +
+`has-test`), and the Claude Code adapter's pre-edit `deny` + `Stop` gate. That
+proves propel + constrain + verify end-to-end on one harness.
+
+**Scope boundary (v1):** a **single trust domain**. Enforceable multi-tenant
+isolation is a known, decided-deferred gap in Quipu (`group_id` is provenance
+only); multi-operator separation is a prerequisite to lift before the plane
+governs across trust boundaries, not a v1 deliverable.
