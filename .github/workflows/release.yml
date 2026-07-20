@@ -56,7 +56,32 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # The API is the flaky part, not the build. v0.1.0's first run built and
+          # packaged fine and then lost the whole release to a transient
+          # "HTTP 503: No server is currently available" from api.github.com. A
+          # release that discards a good binary because an API blipped is a
+          # publish step that fails for reasons unrelated to the artifact — so
+          # retry with backoff before giving up.
+          retry() {
+            local n=1
+            until "$@"; do
+              if [ "$n" -ge 5 ]; then
+                echo "::error::giving up after $n attempts: $*"
+                return 1
+              fi
+              echo "attempt $n failed: $* — retrying in $((n * 15))s"
+              sleep $((n * 15))
+              n=$((n + 1))
+            done
+          }
           # Create the release if the tag has none yet; either way, attach the asset.
-          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 \
-            || gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --generate-notes
-          gh release upload "${GITHUB_REF_NAME}" "${TARBALL}" "${TARBALL}.sha256" --clobber
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            retry gh release create "${GITHUB_REF_NAME}" \
+              --title "${GITHUB_REF_NAME}" --generate-notes
+          fi
+          retry gh release upload "${GITHUB_REF_NAME}" \
+            "${TARBALL}" "${TARBALL}.sha256" --clobber
+          # Assert the effect, not the exit code: the asset must actually be listed.
+          gh release view "${GITHUB_REF_NAME}" --json assets \
+            --jq '.assets[].name' | grep -q "${TARBALL}"
+          echo "published ${TARBALL} on ${GITHUB_REF_NAME}"
