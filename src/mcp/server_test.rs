@@ -248,3 +248,17 @@ async fn every_fact_serving_response_carries_a_tier() {
         );
     }
 }
+
+#[tokio::test]
+async fn status_advertises_only_implemented_tiers() {
+    // aegis-qe5z: hank_status must claim a tier only when it is real. The extractor
+    // assigns TreeSitter alone, so status advertises exactly ["treesitter"] — never
+    // lsp/cpg, which have no implementation and are no longer even Cargo features.
+    let dir = fixture();
+    let payload = served(server(&dir).hank_status().await);
+    assert_eq!(
+        payload["tiers"],
+        serde_json::json!(["treesitter"]),
+        "status advertised a tier with no implementation: {payload}"
+    );
+}

@@ -80,7 +80,7 @@ impl HankMcpServer {
                 .tenant
                 .clone()
                 .unwrap_or_else(|| "(single-tenant)".to_string()),
-            tiers: tier_availability(),
+            tiers: Tier::served(),
             quipu_enabled: config.quipu.enabled,
             branch_model: config.quipu.branch_model,
         };
@@ -442,18 +442,6 @@ fn reach_item(reached: &Reached) -> ReachItem {
         via: reached.via.to_string(),
         tier: graph_tier(),
     }
-}
-
-/// The extraction tiers this build can serve.
-fn tier_availability() -> Vec<String> {
-    let mut tiers = vec!["treesitter".to_string()];
-    if cfg!(feature = "lsp") {
-        tiers.push("lsp".to_string());
-    }
-    if cfg!(feature = "cpg") {
-        tiers.push("cpg".to_string());
-    }
-    tiers
 }
 
 // The FR-3 enforcement walk (aegis-8yrn) lives in a size-exempt sibling file so

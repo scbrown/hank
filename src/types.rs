@@ -55,6 +55,26 @@ impl Tier {
             Tier::Cpg => "cpg",
         }
     }
+
+    /// The tiers this build can ACTUALLY serve — the single source of truth for
+    /// `hank status` / `hank_status` (aegis-qe5z).
+    ///
+    /// It reports a tier only when that tier has a registered extractor. Today
+    /// that is tree-sitter ALONE: the LSP tier (FR-2) and the CPG tier (FR-7) are
+    /// unimplemented, so they are NOT advertised. `status` used to push `lsp`/`cpg`
+    /// on `cfg!(feature = "lsp"/"cpg")`, but those were EMPTY Cargo features that
+    /// gated no code — so `--features lsp` produced a binary that advertised a
+    /// precision tier while every fact it served was still `TreeSitter`. That is
+    /// the exact "present an approximation as precise" failure FR-3 and AGENTS.md
+    /// forbid, one level up at the feature flag (sibling of aegis-8yrn).
+    ///
+    /// When a tier gains a real implementation, add it HERE, gated on that
+    /// implementation (a `Vec` push behind the module that provides it) — never on
+    /// a bare feature flag, which can be enabled without the code existing.
+    #[must_use]
+    pub fn served() -> Vec<String> {
+        vec![Tier::TreeSitter.as_str().to_string()]
+    }
 }
 
 /// The kind of a named code symbol. Values mirror the enumeration in Quipu's
@@ -164,4 +184,20 @@ pub struct Fact {
     pub tier: Tier,
     /// How current the fact is.
     pub freshness: Freshness,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn served_tiers_are_only_implemented_ones() {
+        // aegis-qe5z: status must advertise a tier only when it is real. Today
+        // the extractor assigns TreeSitter alone, so that is all `served()` may
+        // claim — never `lsp`/`cpg`, which have no implementation. A push of an
+        // unimplemented tier here (or a re-introduced empty feature) fails this.
+        assert_eq!(Tier::served(), vec!["treesitter".to_string()]);
+        assert!(!Tier::served().contains(&"lsp".to_string()));
+        assert!(!Tier::served().contains(&"cpg".to_string()));
+    }
 }

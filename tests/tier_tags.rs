@@ -81,3 +81,25 @@ fn refs_not_found_message_is_unchanged() {
         .success()
         .stdout(predicate::str::contains("not found in the call graph"));
 }
+
+#[test]
+fn status_json_advertises_only_implemented_tiers() {
+    // aegis-qe5z: `hank status` used to push "lsp"/"cpg" onto the advertised tier
+    // list under empty Cargo features that gated no code, so `--features lsp` made
+    // the tool claim a precision tier it did not have. status now advertises exactly
+    // the tiers with a real extractor — treesitter alone today.
+    let out = Command::cargo_bin("hank")
+        .unwrap()
+        .args(["status", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let v: serde_json::Value = serde_json::from_slice(&out).expect("stdout is JSON");
+    assert_eq!(
+        v["tiers"],
+        serde_json::json!(["treesitter"]),
+        "status advertised an unimplemented tier: {v}"
+    );
+}

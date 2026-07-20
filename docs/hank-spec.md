@@ -702,9 +702,14 @@ dependency becomes compelling (§16, open question 1).
   Off by default so Hank compiles and serves without the promotion toolchain, and
   — critically — **CI builds and tests both with and without it**, the single
   most-emphasized convention in Bobbin (the "don't let a feature ship dark" rule).
-- `cpg` — gates the Phase-2 CPG/dataflow extractor (and any JVM boundary).
-- `lsp` — gates the LSP tier if we want tree-sitter-only builds for constrained
-  environments.
+- `cpg` / `lsp` — **planned, NOT yet Cargo features** (aegis-qe5z). They will gate
+  the Phase-2 CPG/dataflow extractor and the LSP tier respectively. They were
+  briefly present as `cpg = []` / `lsp = []` — empty features gating no code — and
+  were removed: an empty feature can be enabled without the implementation
+  existing, which made `hank status` advertise a precision tier the binary did not
+  have. Re-introduce each ONLY alongside the extractor it gates, and add the tier
+  to `Tier::served()` in the same change, so the flag and the capability move
+  together.
 
 **Lints.** Adopt Quipu's in-manifest `[lints.rust]` / `[lints.clippy]` block
 verbatim (`unsafe_code = "deny"`, `unused_must_use = "deny"`, `missing_docs =
@@ -1272,16 +1277,19 @@ a phase notice.
 (with `cochange`), `hank_dataflow`, `hank_verify`. Over stdio +
 streamable-HTTP.
 
-**Cargo features:** `default = []`; `mcp`, `langs-extra`, `cpg`, `lsp`, `quipu`
-(all off by default; `mcp` in the CI matrix). `langs-extra` deps are declared but
-extractors are Rust-only so far.
+**Cargo features:** `default = []`; `mcp`, `langs-extra`, `quipu` (all off by
+default; `mcp` in the CI matrix). `langs-extra` deps are declared but extractors
+are Rust-only so far. `cpg` and `lsp` are planned but are NOT features yet — an
+empty feature that gates nothing lets a build advertise a tier it cannot serve
+(aegis-qe5z); each returns when it gates a real extractor.
 
 **Tests:** 27 (19 unit + 8 integration via `assert_cmd`), green on `default` and
 `mcp`. Quality gate green: `cargo fmt`, `clippy -D warnings` (both arms),
 markdownlint, mdBook.
 
 **Not yet built:** the resident daemon / per-tenant overlays (Phase 3); LSP
-precision tier (`lsp`); CPG control-dependence + inter-procedural taint (`cpg`);
+precision tier (planned `lsp` feature); CPG control-dependence + inter-procedural
+taint (planned `cpg` feature);
 Quipu promotion wiring (`quipu`, `--to quipu`); doc→code reference extraction
 (FR-33); `pre-edit` guard; position-based tool variants; the `langs-extra`
 grammar extractors.
