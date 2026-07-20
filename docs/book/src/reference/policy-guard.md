@@ -200,6 +200,18 @@ With `mode = "advise"` the guard reports what it *would* have denied via
 `systemMessage` and never blocks — run a new scope in `advise` for a while
 before promoting it to `enforce`.
 
+**An advise run is visible to the operator, not to the agent.** `systemMessage`
+surfaces in the user's pane; it does not enter the model's context, and the tool
+result of an advised edit is indistinguishable from an unguarded one. Confirmed
+by running the same violating edit in both modes on a live pane: `advise`
+returned an ordinary success to the model, `enforce` returned the reason.
+
+Two consequences when staging a scope. Agents will not self-correct during an
+advise run, so the violation counts you collect are the *uncorrected* rate —
+which is what you want for sizing a ceiling. And "agents behaved no differently
+under advise" is not evidence that they saw the advisory; they did not. Only
+`enforce` puts the reason in front of the model.
+
 ## What the guard checks
 
 1. **Path scope** (FR-25) — is the edited file inside this tenant's writable
