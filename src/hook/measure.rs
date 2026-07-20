@@ -49,6 +49,21 @@ pub enum Sizing {
 }
 
 impl Sizing {
+    /// A short, stable tag naming which not-sized case this is — used to key the
+    /// once-per-session notice so different gaps in one session do not mute each
+    /// other (see `first_notice_for_session`). Distinct from `unmeasured_reason`, which
+    /// is prose for the operator.
+    #[must_use]
+    pub fn kind_tag(&self) -> &'static str {
+        match self {
+            Self::Measured(_) => "measured",
+            Self::NoGrammar { .. } => "no-grammar",
+            Self::NoAnchors => "no-anchors",
+            Self::Deadline => "deadline",
+            Self::Unreadable => "unreadable",
+        }
+    }
+
     /// The one-line reason this edit was not sized, or `None` when it was.
     /// Callers surface this; they must never fold it into "allowed".
     #[must_use]

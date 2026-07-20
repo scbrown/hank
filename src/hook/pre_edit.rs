@@ -71,7 +71,7 @@ pub fn guard(
     // never a silent revert to the ambient config the operator meant to bypass.
     let config = match HankConfig::resolve(config_override, &root) {
         Ok(config) => config,
-        Err(e) => return fail_open(&input, &format!("unreadable config ({e})")),
+        Err(e) => return fail_open(&input, "config", &format!("unreadable config ({e})")),
     };
 
     // No scope for this tenant — mode is off, or the tenant is unconstrained.
@@ -89,6 +89,7 @@ pub fn guard(
             .collect();
         return fail_open(
             &input,
+            "globs",
             &format!(
                 "scope for tenant `{tenant}` has malformed path globs: {}",
                 detail.join(", ")
@@ -127,7 +128,8 @@ pub fn guard(
                 .unmeasured_reason()
                 .unwrap_or_else(|| "unmeasured".to_string());
             eprintln!("hank: blast radius UNMEASURED for `{rel}`: {reason}");
-            if first_notice_for_session(input.session_id.as_deref()) {
+            let kind = format!("unmeasured-{}-{rel}", unmeasured.kind_tag());
+            if first_notice_for_session(input.session_id.as_deref(), &kind) {
                 return Outcome::Notify(format!(
                     "hank: blast-radius rules were NOT EVALUATED for `{rel}` — \
                      {reason}. The edit is allowed (the guard fails open), but \
@@ -158,9 +160,9 @@ fn decide(mode: Mode, message: String) -> Outcome {
 /// Degrade to "allow", loudly. Writes the stderr line the contract requires and,
 /// once per session, a user-visible notice — because a hook's stderr is
 /// surfaced only on exit `2`, so stderr alone would be silent in practice.
-fn fail_open(input: &HookInput, reason: &str) -> Outcome {
+fn fail_open(input: &HookInput, kind: &str, reason: &str) -> Outcome {
     eprintln!("hank: policy guard failed open: {reason}");
-    if first_notice_for_session(input.session_id.as_deref()) {
+    if first_notice_for_session(input.session_id.as_deref(), kind) {
         return Outcome::Notify(format!(
             "hank: policy guard failed open ({reason}) — edits are UNGUARDED this session."
         ));
@@ -392,6 +394,60 @@ mod tests {
         let _ = std::fs::remove_file(
             std::env::temp_dir().join(format!("hank-guard-failopen-{session}")),
         );
+    }
+
+    #[test]
+    fn two_different_gaps_in_one_session_both_notify() {
+        // Regression (aegis-nz2x): the once-per-session notice was keyed on the
+        // session alone, so the FIRST fail-open of any kind consumed the marker and
+        // every later, DIFFERENT gap in that session went silent. A config error in
+        // one repo would mute a blown blast-radius deadline in another. Demonstrated
+        // on the shipped binary before this fix: edit 1 (bad config) notified, edit 2
+        // (blown deadline) emitted nothing at all.
+        let session = unique_session();
+        let mkpayload = |dir: &Path, file: &str| {
+            serde_json::json!({
+                "session_id": session,
+                "cwd": dir.to_str().unwrap(),
+                "tool_name": "Edit",
+                "tool_input": {
+                    "file_path": dir.join(file).to_str().unwrap(),
+                    "old_string": "fn leaf() {}",
+                    "new_string": "fn leaf() { x(); }",
+                },
+            })
+            .to_string()
+        };
+
+        // Gap 1: an unreadable config.
+        let a = tempfile::tempdir().unwrap();
+        std::fs::write(a.path().join("leaf.rs"), "fn leaf() {}\n").unwrap();
+        write_policy(a.path(), "this is not [[[ valid toml");
+        let Outcome::Notify(m1) = guard(&mkpayload(a.path(), "leaf.rs"), a.path(), Some("t"), None)
+        else {
+            panic!("gap 1 (config) must notify");
+        };
+        assert!(m1.contains("failed open"), "{m1}");
+
+        // Gap 2: SAME session, a blown blast-radius deadline — a different kind.
+        let b = wide_repo();
+        write_policy(
+            b.path(),
+            "[hank.policy]\nmode = \"enforce\"\ndeadline_ms = 0\n\
+             [hank.policy.scopes.t]\nmax_impacted_files = 1\n",
+        );
+        match guard(&mkpayload(b.path(), "leaf.rs"), b.path(), Some("t"), None) {
+            Outcome::Notify(m2) => assert!(m2.contains("NOT EVALUATED"), "{m2}"),
+            other => {
+                panic!("gap 2 (deadline) was SILENCED by gap 1's marker — the exact bug: {other:?}")
+            }
+        }
+
+        for kind in ["config", "unmeasured-deadline-leaf.rs"] {
+            let _ = std::fs::remove_file(
+                std::env::temp_dir().join(format!("hank-guard-failopen-{session}-{kind}")),
+            );
+        }
     }
 
     #[test]
