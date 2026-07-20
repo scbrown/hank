@@ -260,10 +260,19 @@ mod tests {
         // A DIFFERENT kind of gap in the same session must still warn — the whole
         // point of keying on kind. Before, this returned false and the second gap
         // went silent.
-        assert!(first_notice_for_session(Some(&session), "deadline-src/a.rs"));
-        assert!(!first_notice_for_session(Some(&session), "deadline-src/a.rs"));
+        assert!(first_notice_for_session(
+            Some(&session),
+            "deadline-src/a.rs"
+        ));
+        assert!(!first_notice_for_session(
+            Some(&session),
+            "deadline-src/a.rs"
+        ));
         // ... and a deadline in a DIFFERENT file is a different gap again.
-        assert!(first_notice_for_session(Some(&session), "deadline-src/b.rs"));
+        assert!(first_notice_for_session(
+            Some(&session),
+            "deadline-src/b.rs"
+        ));
         for kind in ["config", "deadline-src/a.rs", "deadline-src/b.rs"] {
             let safe_kind: String = kind
                 .chars()

@@ -438,9 +438,9 @@ mod tests {
         );
         match guard(&mkpayload(b.path(), "leaf.rs"), b.path(), Some("t"), None) {
             Outcome::Notify(m2) => assert!(m2.contains("NOT EVALUATED"), "{m2}"),
-            other => panic!(
-                "gap 2 (deadline) was SILENCED by gap 1's marker — the exact bug: {other:?}"
-            ),
+            other => {
+                panic!("gap 2 (deadline) was SILENCED by gap 1's marker — the exact bug: {other:?}")
+            }
         }
 
         for kind in ["config", "unmeasured-deadline-leaf.rs"] {
