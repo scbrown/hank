@@ -553,3 +553,79 @@ fn status_warns_on_enforce_without_a_scope_for_the_tenant() {
             "\"enforcing_without_scope\": true",
         ));
 }
+
+// --- config keys made real (aegis-ltjo) -------------------------------------
+
+/// `.bobbin/config.toml` under `dir` with the given `[hank]` body.
+fn with_config(dir: &std::path::Path, body: &str) {
+    let bobbin = dir.join(".bobbin");
+    std::fs::create_dir_all(&bobbin).unwrap();
+    std::fs::write(bobbin.join("config.toml"), body).unwrap();
+}
+
+#[cfg(feature = "langs-extra")] // needs the python grammar compiled in
+#[test]
+fn languages_restricts_what_analyze_counts() {
+    // A mixed-language tree: 2 Rust + 2 Python + 1 TypeScript symbols.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.rs"), "fn r(){}\nfn r2(){}\n").unwrap();
+    std::fs::write(
+        dir.path().join("b.py"),
+        "def p():\n    pass\ndef p2():\n    pass\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("c.ts"), "export function t(){}\n").unwrap();
+    let p = dir.path().to_str().unwrap();
+
+    // languages = ["rust"] -> only the 2 Rust symbols.
+    with_config(dir.path(), "[hank]\nlanguages = [\"rust\"]\n");
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["analyze", "--json", p])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"symbols\": 2"));
+
+    // Adding python -> 4. The key RESTRICTS; a user who narrows it gets narrowing.
+    with_config(dir.path(), "[hank]\nlanguages = [\"rust\",\"python\"]\n");
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["analyze", "--json", p])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"symbols\": 4"));
+}
+
+#[test]
+fn serve_read_only_refuses_a_write() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("x.rs"), "fn x(){}\n").unwrap();
+    // git init so promote's own preconditions don't mask the guard.
+    Command::new("git")
+        .arg("init")
+        .arg("-q")
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    // read_only = true -> promotion (the write) is REFUSED with a distinguishable
+    // error naming the key. This is the guard the docs claimed and did not perform.
+    with_config(dir.path(), "[hank.serve]\nread_only = true\n");
+    Command::cargo_bin("hank")
+        .unwrap()
+        .arg("promote")
+        .current_dir(dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("read_only"))
+        .stderr(predicate::str::contains("refused"));
+
+    // read_only = false -> the (Phase-4 stub) write is allowed to proceed.
+    with_config(dir.path(), "[hank.serve]\nread_only = false\n");
+    Command::cargo_bin("hank")
+        .unwrap()
+        .arg("promote")
+        .current_dir(dir.path())
+        .assert()
+        .success();
+}

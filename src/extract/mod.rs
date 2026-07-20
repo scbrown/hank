@@ -151,6 +151,23 @@ pub fn source_files(path: &Path) -> Vec<(PathBuf, &'static str)> {
         .collect()
 }
 
+/// Like [`source_files`], but restricted to the languages named in `allowed`.
+///
+/// This is where the `languages` config key becomes real (aegis-ltjo). It was
+/// documented as "languages to extract" and read by nothing: a user who set
+/// `languages = ["rust"]` to RESTRICT analysis got no restriction, because every
+/// walk yielded every compiled grammar. Now `hank analyze` passes the configured
+/// set here and the count reflects it. `allowed` holds language NAMES (the
+/// canonical `language_for_extension` output — "rust", "python", …), so a name
+/// this build cannot parse simply matches nothing rather than erroring.
+#[must_use]
+pub fn source_files_in(path: &Path, allowed: &[String]) -> Vec<(PathBuf, &'static str)> {
+    source_files(path)
+        .into_iter()
+        .filter(|(_, language)| allowed.iter().any(|a| a == language))
+        .collect()
+}
+
 /// Walk `path` for Rust source files, honoring `.gitignore`.
 #[must_use]
 pub fn rust_files(path: &Path) -> Vec<PathBuf> {

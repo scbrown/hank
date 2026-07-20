@@ -149,6 +149,28 @@ impl Default for QuipuConfig {
 }
 
 impl HankConfig {
+    /// Refuse a mutating operation when `serve.read_only` is set.
+    ///
+    /// The write guard the docs promise (config.md: "Write guard for the broker /
+    /// promotion endpoints"). Before this it was documented, settable, and INERT —
+    /// an operator who set `read_only = true` before exposing `hank serve` to a
+    /// broker got no guard and no warning, which is strictly worse than an absent
+    /// switch: a safety control that does nothing invites the trust it cannot
+    /// honour (aegis-ltjo). Now the one write hank performs — promotion — calls
+    /// this and REFUSES with a distinguishable error naming the key, so the guard
+    /// is real and any future served write is one `write_guard` call from being
+    /// covered too.
+    pub fn write_guard(&self, operation: &str) -> Result<()> {
+        if self.serve.read_only {
+            return Err(Error::Config(format!(
+                "refused: `serve.read_only = true` — this hank instance is \
+                 configured read-only, so {operation} (a write) is refused. \
+                 Unset serve.read_only to allow writes."
+            )));
+        }
+        Ok(())
+    }
+
     /// Load the merged configuration for a project rooted at `root`.
     ///
     /// Starts from defaults, overlays the user config if present, then the
@@ -466,5 +488,114 @@ mod tests {
         std::fs::write(&path, "[something_else]\nkey = 1\n").unwrap();
         let config = HankConfig::load_from(&path).unwrap();
         assert_eq!(config.base_ref, "main");
+    }
+
+    /// `serve.read_only` refuses a write, and is silent otherwise — the guard the
+    /// docs promised and did not perform (aegis-ltjo).
+    #[test]
+    fn read_only_guards_a_write() {
+        let mut config = HankConfig::default();
+        assert!(
+            config.write_guard("promotion").is_ok(),
+            "default must allow writes"
+        );
+
+        config.serve.read_only = true;
+        let err = config.write_guard("promotion").unwrap_err().to_string();
+        assert!(
+            err.contains("read_only"),
+            "the error must name the key: {err}"
+        );
+        assert!(
+            err.contains("promotion"),
+            "the error must name the operation: {err}"
+        );
+    }
+
+    /// THE anti-drift guard the bead asked for: every `pub` field on the config
+    /// structs must either be READ somewhere outside config.rs, or be listed here
+    /// with the phase that will honour it. A new inert key — documented, settable,
+    /// doing nothing — fails this test until it is wired OR explicitly declared
+    /// phased. That is the whole defect: a control that looks live and is not.
+    #[test]
+    fn every_config_key_is_read_or_explicitly_phased() {
+        // key -> why it is not yet read. Anything not here MUST have a reader.
+        let phased: &[(&str, &str)] = &[
+            ("enable_lsp", "Phase 2/3 — LSP tier not built"),
+            ("enable_cpg", "Phase 2 — CPG tier not built"),
+            ("lsp_on", "LSP tier not built"),
+            (
+                "tenancy",
+                "Phase 3 — overlay manager not built (whole sub-table)",
+            ),
+            ("max_overlays", "Phase 3 — overlay manager not built"),
+            (
+                "high_fanin_threshold",
+                "Phase 3 — overlay manager not built",
+            ),
+            ("overlay_eviction", "Phase 3 — overlay manager not built"),
+            ("promote_on", "Phase 4 — Quipu promotion not built"),
+            ("shapes_path", "Phase 4 — Quipu promotion not built"),
+        ];
+
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        let config_rs = std::path::Path::new(manifest).join("src/config.rs");
+        let this = std::fs::read_to_string(&config_rs).unwrap();
+
+        // Every `pub <ident>:` field declared in this file.
+        let fields: Vec<&str> = this
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("pub "))
+            .filter_map(|rest| rest.split(':').next())
+            .filter(|ident| ident.chars().all(|c| c.is_ascii_lowercase() || c == '_'))
+            .filter(|ident| !ident.is_empty())
+            .collect();
+        assert!(fields.len() >= 15, "field parse looks wrong: {fields:?}");
+
+        // All of src EXCEPT config.rs — the "is it read anywhere else" corpus.
+        let mut elsewhere = String::new();
+        collect_rs(
+            std::path::Path::new(manifest).join("src").as_path(),
+            &config_rs,
+            &mut elsewhere,
+        );
+
+        for field in fields {
+            let read = elsewhere.contains(field);
+            let is_phased = phased.iter().any(|(k, _)| *k == field);
+            assert!(
+                read || is_phased,
+                "config key `{field}` is read by NOTHING outside config.rs and is \
+                 not in the phased allowlist. Wire it, or add it to `phased` with \
+                 the phase that will honour it — a documented, settable, inert key \
+                 is the defect aegis-ltjo closed."
+            );
+        }
+
+        // And the allowlist must not rot the other way: a key listed as phased
+        // that HAS gained a reader should be removed from the list.
+        for (key, _why) in phased {
+            assert!(
+                !elsewhere.contains(key),
+                "`{key}` is in the phased allowlist but now HAS a reader outside \
+                 config.rs — remove it from the list and mark it live in the docs."
+            );
+        }
+    }
+
+    fn collect_rs(dir: &std::path::Path, skip: &std::path::Path, out: &mut String) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_rs(&path, skip, out);
+            } else if path.extension().is_some_and(|e| e == "rs") && path != skip {
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    out.push_str(&text);
+                }
+            }
+        }
     }
 }
