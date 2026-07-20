@@ -75,6 +75,14 @@ model to act on: what was exceeded, by how much, and what to do instead.
 hard-block an agent — a panic exits `101`, which Claude Code treats as a
 non-blocking error and the tool call proceeds.
 
+That guarantee covers Hank's own code, and argument parsing happens before any
+of it runs. A Hank that predates a hook subcommand answers it with the argument
+parser's "invalid value" error and exit `2` — so **staleness fails closed even
+though absence fails open.** Since this version, an unparseable `hank hook …`
+invocation degrades to a silent allow instead (exit `0`, empty stdout, a loud
+stderr line). Binaries older than that fix cannot be repaired retroactively,
+which is why the invocation in (d) is written to be skew-proof on its own.
+
 ## (c) Latency — the sub-100ms budget
 
 The hook is synchronous in the agent's loop (FR-31). Hank enforces its **own**
@@ -99,11 +107,30 @@ unavailable.
 
 | Failure | Result |
 |---|---|
-| `hank` not on `PATH` | Claude Code non-blocking error → edit proceeds |
+| `hank` not on `PATH` | exit `127` → non-blocking error → edit proceeds |
+| `hank` too old to know the subcommand | exit `2` → **would block**; see below |
 | Hank panics | exit `101` → non-blocking error → edit proceeds |
 | Deadline exceeded | exit `0`, silent → edit proceeds |
 | Daemon unreachable, unreadable config, unparseable payload | exit `0` + loud line → edit proceeds |
 | Policy says deny | exit `0` + deny JSON → **edit blocked** |
+
+### Invoke it so version skew cannot block the fleet
+
+Every row above fails open except one, and that one is not exotic: it is what
+you get by rolling the hook out ahead of the binary, which is the normal
+ordering of a deploy. Invoke the guard through this wrapper rather than bare:
+
+```sh
+out=$(hank hook pre-edit 2>/dev/null) || exit 0
+printf '%s' "$out"
+```
+
+`|| exit 0` converts *every* non-zero exit — `127` absent, `2` stale, `101`
+panic — into an allow. Capturing first and printing only on success also means
+a Hank that dies mid-write contributes **nothing** to stdout, so a truncated
+run can never be parsed as a permission decision. Emitting the command bare is
+safe only once every host is known to be past the skew fix; the wrapper is safe
+now, and stays correct afterwards.
 
 ### "Loud" means `systemMessage`, not stderr
 
