@@ -1,0 +1,122 @@
+# code-edges.ttl — SHACL shapes for the structural EDGES Hank promotes (§9.2, #13).
+#
+# `code-entities.ttl` covers the nodes (modules, symbols, Document, Section).
+# These are the edges — the facts Hank exists to produce — and FR-20 requires
+# every promotion write to validate against them BEFORE it reaches Quipu.
+#
+# ── THE NAMESPACE IS DATA IDENTITY, NOT COSMETICS ───────────────────────────
+# `bobbin:` MUST be <http://aegis.gastown.local/ontology/>. Repointing it does
+# not error — it silently mints a parallel set of IRIs that never join to the
+# graph they were meant to extend. Do not assume entity resolution will merge
+# them later — a deployment may have resolution disabled, in which case the
+# fragments are permanent and have to be unpicked by hand.
+# VERIFY IT AGAINST A LIVE GRAPH, NOT AGAINST CONFIG. Done 2026-07-20: predicates
+# already in use there are ?/groupId, ?/src, ?/part_of, ?/contentHash,
+# ?/depends_on under exactly this base, and a promoted node under it joins to
+# pre-existing entities (see the header of code-edges-validation below).
+#
+# ── PERMISSIVE ON PURPOSE (§9.2, vision risk §14.7) ─────────────────────────
+# The spec's guidance is "start permissive, tighten deliberately": a code
+# ontology over-constrained will reject legitimate facts from messy real code,
+# and a promotion that refuses valid facts is worse than one that admits loose
+# ones, because the refusal is silent to the caller who never wrote them.
+# So each edge here constrains SHAPE (the object is an IRI, the edge has an
+# object at all) and NOT CLASS. §9.2's sample shows `sh:class bobbin:CodeSymbol`
+# — that is the TIGHTENING step, kept below as commented intent, to be enabled
+# per-predicate once real promoted data validates cleanly against it. Enabling
+# it before then would reject facts about symbols Hank has typed but not yet
+# classified, which is most of a first promotion.
+
+@prefix sh:     <http://www.w3.org/ns/shacl#> .
+@prefix xsd:    <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix bobbin: <http://aegis.gastown.local/ontology/> .
+
+# --- CodeSymbol -> CodeSymbol edges -----------------------------------------
+
+bobbin:CallsShape a sh:NodeShape ;
+    rdfs:comment "caller invokes callee (tree-sitter / cpg)" ;
+    sh:targetSubjectsOf bobbin:calls ;
+    sh:property [
+        sh:path bobbin:calls ;
+        sh:nodeKind sh:IRI ;
+        sh:minCount 1 ;
+        # TIGHTEN LATER: sh:class bobbin:CodeSymbol
+    ] .
+
+bobbin:ReferencesShape a sh:NodeShape ;
+    rdfs:comment "use site of a definition (lsp)" ;
+    sh:targetSubjectsOf bobbin:references ;
+    sh:property [
+        sh:path bobbin:references ;
+        sh:nodeKind sh:IRI ;
+        sh:minCount 1 ;
+        # TIGHTEN LATER: sh:class bobbin:CodeSymbol
+    ] .
+
+bobbin:DataDependsOnShape a sh:NodeShape ;
+    rdfs:comment "data-dependence edge (cpg)" ;
+    sh:targetSubjectsOf bobbin:dataDependsOn ;
+    sh:property [
+        sh:path bobbin:dataDependsOn ;
+        sh:nodeKind sh:IRI ;
+        sh:minCount 1 ;
+        # TIGHTEN LATER: sh:class bobbin:CodeSymbol
+    ] .
+
+bobbin:ControlDependsOnShape a sh:NodeShape ;
+    rdfs:comment "control-dependence edge (cpg)" ;
+    sh:targetSubjectsOf bobbin:controlDependsOn ;
+    sh:property [
+        sh:path bobbin:controlDependsOn ;
+        sh:nodeKind sh:IRI ;
+        sh:minCount 1 ;
+        # TIGHTEN LATER: sh:class bobbin:CodeSymbol
+    ] .
+
+# --- CodeModule -> CodeModule ------------------------------------------------
+
+bobbin:ImportsShape a sh:NodeShape ;
+    rdfs:comment "module dependency (tree-sitter)" ;
+    sh:targetSubjectsOf bobbin:imports ;
+    sh:property [
+        sh:path bobbin:imports ;
+        sh:nodeKind sh:IRI ;
+        sh:minCount 1 ;
+        # TIGHTEN LATER: sh:class bobbin:CodeModule
+    ] .
+
+# --- provenance --------------------------------------------------------------
+#
+# hasTier is the confidence/provenance tag on a fact, and it is the one place
+# this file is NOT permissive. A tier is the reader's only signal for how much
+# to trust an edge (tree-sitter vs lsp vs cpg), so an unconstrained or absent
+# tier is worse than a missing edge: it is an edge that looks as authoritative
+# as any other. Constrained to a known vocabulary from the start.
+
+bobbin:HasTierShape a sh:NodeShape ;
+    rdfs:comment "provenance/confidence tag carried by a promoted fact" ;
+    sh:targetSubjectsOf bobbin:hasTier ;
+    sh:property [
+        sh:path bobbin:hasTier ;
+        sh:datatype xsd:string ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:in ( "tree-sitter" "lsp" "cpg" ) ;
+    ] .
+
+# --- Section -> references (§5.10) -------------------------------------------
+#
+# A documentation Section that cites a code symbol. This is the edge that makes
+# "which docs describe this function" answerable, and it is why Document/Section
+# are in the entity shapes at all.
+
+bobbin:SectionReferencesShape a sh:NodeShape ;
+    rdfs:comment "a documentation Section citing a code entity (§5.10)" ;
+    sh:targetClass bobbin:Section ;
+    sh:property [
+        sh:path bobbin:references ;
+        sh:nodeKind sh:IRI ;
+        # NO minCount: a Section that references nothing is legitimate prose,
+        # not a violation. Requiring one here would refuse most documentation.
+    ] .

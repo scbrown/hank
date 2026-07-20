@@ -1,0 +1,9 @@
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix bobbin: <http://aegis.gastown.local/ontology/> .
+bobbin:code_hank_src_auth_rs__authenticate a bobbin:CodeSymbol ;
+  rdfs:label "authenticate" ; bobbin:hasTier "lsp" ;
+  bobbin:calls bobbin:code_hank_src_db_rs__lookup_user ;
+  bobbin:references bobbin:code_hank_src_types_rs__User .
+bobbin:code_hank_src_auth_rs a bobbin:CodeModule ;
+  bobbin:imports bobbin:code_hank_src_db_rs .
+bobbin:doc_readme_s1 a bobbin:Section .
