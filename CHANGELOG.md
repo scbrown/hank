@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Docs
+
+- **FR-27 (parallel HTTP API) marked phased, matching reality.** Five doc sites
+  described a REST HTTP API parallel to MCP that does not exist — the whole axum
+  router is one `nest_service("/mcp")`. FR-27 is the resident daemon's shared
+  backplane (FR-31, Phase 3), and every capability is already reachable over TCP
+  via the streamable-HTTP MCP transport, so the API is now documented as Phase 3
+  and added to the §12 checklist rather than presented as present (aegis-ubvd).
+
 ## [0.2.0] - 2026-07-20
 
 ### Fixed

@@ -1,8 +1,13 @@
 # MCP Tools
 
-Hank exposes its capabilities as MCP tools (over stdio and streamable-HTTP) and
-a parallel HTTP API. Tools use the `hank_*` naming convention, alongside
-Bobbin's `bobbin_*` and Quipu's `quipu_*` on the same agent.
+Hank exposes its capabilities as MCP tools, over stdio and streamable-HTTP.
+Tools use the `hank_*` naming convention, alongside Bobbin's `bobbin_*` and
+Quipu's `quipu_*` on the same agent.
+
+A parallel REST HTTP API (a per-tool endpoint beside the MCP mount, for the
+broker and other non-MCP consumers) is planned for Phase 3, landing with the
+resident daemon it fronts (FR-27). Until then those consumers reach the same
+tools over the streamable-HTTP MCP transport (`hank serve --http`).
 
 Build with the `mcp` feature and run `hank serve` (stdio) or `hank serve --http`
 (streamable-HTTP on `[hank.serve] mcp_http_port`, default 3040).

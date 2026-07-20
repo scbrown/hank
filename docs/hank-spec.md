@@ -17,7 +17,8 @@
 Hank is an **in-memory, multi-tenant code-analysis engine** written in Rust. It
 extracts precise structure from a codebase — AST, symbols, call graph, control-
 and data-dependence, and LSP-grade type/reference facts — keeps that structure
-hot in memory, and serves it over MCP and a local HTTP API. It does so **per
+hot in memory, and serves it over MCP (stdio and streamable-HTTP; a parallel REST
+API is Phase 3, FR-27). It does so **per
 tenant**, so an entire team can edit concurrently without corrupting each
 other's view of the graph, using a **shared-base-plus-copy-on-write-overlay**
 model in which *blast radius doubles as the incremental-update primitive*.
@@ -115,7 +116,7 @@ the *heavy, precise, toolchain-bound* analysis, not all parsing.
 | Freshness | Re-index on change | On commit/merge (promotion) | On save / debounced keystroke |
 | Primary store | LanceDB (+ SQLite coupling) | SQLite EAVT triple log | In-memory graph (+ overlay cache) |
 | Signals | Embeddings, co-change | Committed structure, time | Structure, semantics, dataflow |
-| Interface | MCP + HTTP + CLI | MCP handlers + REST + CLI | MCP + HTTP + CLI |
+| Interface | MCP + HTTP + CLI | MCP handlers + REST + CLI | MCP + CLI (parallel HTTP API: Phase 3) |
 | On request path? | When fusion helps | For governed/temporal queries | For single-signal analysis |
 
 **Data flow (steady state):**
@@ -371,7 +372,7 @@ resident engine:
 |---|---|---|---|
 | **Harness hook** (`hank hook …`) | in-harness agents (Claude Code) | synchronous, edit-reactive, automatic | FR-30 |
 | **MCP tools** | agents, Bobbin | pull, on-demand queries | FR-26 |
-| **HTTP API** | broker / daemon backplane | the resident engine all surfaces share | FR-27 |
+| **HTTP API** *(Phase 3)* | broker / daemon backplane | the resident engine all surfaces share | FR-27 |
 | **CLI** | humans, scripts, CI | one-shot | FR-28 |
 | **LSP server** (optional) | human editors | unsaved-buffer precision + push diagnostics | FR-32 |
 
@@ -379,9 +380,15 @@ resident engine:
 stdio and streamable-HTTP transports, using `rmcp` exactly as Bobbin does
 (`#[tool_router]` / `#[tool]` / `Parameters<T>` / `schemars`).
 
-**FR-27: HTTP API.** Expose the same capabilities over a local Axum HTTP server
-for the broker and non-MCP consumers, mirroring Quipu's REST-parallel-to-MCP
-pattern.
+**FR-27: HTTP API *(Phase 3, with the FR-31 resident daemon).*** Expose the same
+capabilities over a local Axum HTTP server for the broker and non-MCP consumers,
+mirroring Quipu's REST-parallel-to-MCP pattern. This is the resident engine's
+shared backplane, so it lands **with** that engine (FR-31), not before it: a
+REST facade over a per-request transient graph build would carry the daemon's
+latency without its benefit. Until then every capability is already reachable
+over TCP via the **streamable-HTTP MCP transport** (`hank serve --http`, mounted
+at `/mcp`); the gap FR-27 closes is protocol ergonomics for non-MCP consumers, not
+reach. Tracked in §12 Phase 3.
 
 **FR-28: CLI.** Provide a `hank` binary (clap, like Bobbin) with subcommands for
 serving, one-shot analysis, and inspection (§Appendix A).
@@ -548,7 +555,7 @@ requires an eviction policy and a high-fan-in special case, and requires Hank to
 
 ```text
 ┌────────────────────────────────────────────────────────────────────┐
-│                        MCP (rmcp)  ·  HTTP (axum)  ·  CLI (clap)     │
+│              MCP (rmcp: stdio + HTTP/axum)  ·  CLI (clap)            │
 ├────────────────────────────────────────────────────────────────────┤
 │                            Query / Serve layer                       │
 │   refs · defs · callgraph · dataflow · blast-radius · verify         │
@@ -606,7 +613,8 @@ src/
     turtle.rs        # emit facts as Turtle (oxrdf/oxttl)
     quipu.rs         # #[cfg(feature="quipu")] promotion via quipu_knot / Store::transact
   mcp/               # rmcp server (server.rs handlers, tools.rs DTOs) — Bobbin pattern
-  http/              # axum server + handlers (broker + REST)
+  http/              # axum server: streamable-HTTP MCP transport today;
+                     #   parallel REST handlers land in Phase 3 (FR-27)
   types.rs           # Fact, Tier, Freshness, Symbol, Edge, Tenant, Overlay
 ```
 
@@ -943,8 +951,9 @@ see FR-3), and every request that reads structure accepts a `tenant` parameter
 `#[tool_router]` impl, `#[tool(description = …)]` async fns taking
 `Parameters<Req>` where `Req: Deserialize + schemars::JsonSchema`, responses
 serialized with `serde_json::to_string_pretty` into `CallToolResult::success`.
-The HTTP API exposes a parallel endpoint per tool (Quipu's REST-mirrors-MCP
-pattern) for the broker.
+The HTTP API will expose a parallel endpoint per tool (Quipu's REST-mirrors-MCP
+pattern) for the broker — **Phase 3, alongside the FR-31 resident daemon** (FR-27).
+Today the broker reaches these same tools over the streamable-HTTP MCP transport.
 
 > **Refinement — name-based today, position-based for the LSP tier.** The
 > current tools resolve by symbol *name* (the tree-sitter tier). The precise
@@ -1037,6 +1046,7 @@ criterion; every phase must keep the `quipu` feature compiling both on and off
 - [ ] File-watch (`notify`) + debounce + tiered scheduling (FR-17).
 - [ ] Overlay lifecycle + high-fan-in handling + eviction (FR-18, §14.2).
 - [ ] `tenant` parameter across the MCP/HTTP surface; `hank_status` shows overlays.
+- [ ] Parallel REST HTTP API beside the MCP mount (FR-27): a per-tool endpoint (`GET /status`, `POST /impact`, …) returning the same payloads as the `hank_*` tools, for the broker and non-MCP consumers. Lands here because it is the resident daemon's shared backplane — a REST facade over a per-request transient build would carry the daemon's latency without its benefit. Until then those consumers reach the tools over the streamable-HTTP MCP transport.
 - **Exit:** N developers edit concurrently; each sees a correct, isolated `base + overlay`; overlays cost O(touched + frontier).
 
 ### Phase 4 — Promote to Quipu
@@ -1164,7 +1174,7 @@ USAGE:
     hank <COMMAND>
 
 COMMANDS:
-    serve       Run the MCP (stdio + HTTP) and HTTP API servers
+    serve       Run the MCP server (stdio, or streamable-HTTP with --http)
     analyze     One-shot: build the base graph and print stats
     refs        Definitions and references for a symbol/position
     callers     Callers / callees of a symbol

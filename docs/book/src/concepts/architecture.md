@@ -7,7 +7,8 @@ machinery), holds a hot structural graph, and feeds three consumers: Bobbin
 blast radius as a trust boundary).
 
 ```text
-   MCP (rmcp)  ·  HTTP (axum)  ·  CLI (clap)
+   MCP (rmcp: stdio + HTTP/axum)  ·  CLI (clap)
+   (a parallel REST HTTP API is Phase 3 — FR-27)
                     │
               Query / Serve layer
    refs · defs · callgraph · dataflow · blast-radius · verify
