@@ -5,8 +5,13 @@ use clap::error::ErrorKind;
 use clap::Parser;
 
 fn main() -> anyhow::Result<()> {
-    hank::cli::init_tracing();
+    // Parse before initializing tracing so `--verbose` can set the default
+    // level. Clap writes its own errors (and `--help`/`--version`) straight to
+    // the terminal, not through tracing, so nothing is lost by initializing it
+    // second; the hook fail-open path in `parse_or_fail_open` exits before this
+    // point and needs no subscriber.
     let cli = parse_or_fail_open();
+    hank::cli::init_tracing(cli.verbose());
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(cli.run())
 }

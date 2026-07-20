@@ -23,10 +23,21 @@ COMMANDS:
 GLOBAL FLAGS:
     --json      Machine-readable output
     --quiet     Suppress non-essential output
-    --verbose   Detailed progress
+    --verbose   Raise the default log level to debug (RUST_LOG still wins)
     --tenant    Tenant/session id (default: single-tenant)
-    --config    Path to config file
+    --config    Path to config file (replaces discovery; must exist)
 ```
+
+`--config <path>` **replaces** config discovery rather than adding to it: it
+loads exactly that file over the compiled defaults, and the ambient
+`.bobbin/config.toml` is not consulted (FR-29 ranks a flag above project and
+user config). A `--config` path that does not exist is a loud error, never a
+silent fall-back to discovery — so pointing the pre-edit guard at a scope file
+with a mistyped path fails visibly instead of quietly enforcing the wrong scope.
+
+`--verbose` raises the default tracing level from `info` to `debug`. `RUST_LOG`,
+when set, still wins and can target individual modules, so the precedence is
+`RUST_LOG` > `--verbose` > the `info` default.
 
 ## Examples
 

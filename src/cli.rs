@@ -201,6 +201,22 @@ enum ExportFormat {
 }
 
 impl Cli {
+    /// Whether `--verbose` was passed. Consulted by `main` to raise the default
+    /// tracing verbosity (see [`init_tracing`]).
+    #[must_use]
+    pub fn verbose(&self) -> bool {
+        self.verbose
+    }
+
+    /// Load configuration honouring the global `--config` override.
+    ///
+    /// Every command that reads config goes through here, so `--config` is
+    /// honoured uniformly rather than silently ignored on all but a chosen few
+    /// (aegis-ll3p).
+    fn load_config(&self, root: &Path) -> anyhow::Result<HankConfig> {
+        HankConfig::resolve(self.config.as_deref(), root).map_err(Into::into)
+    }
+
     /// Run the parsed command.
     pub async fn run(self) -> anyhow::Result<()> {
         match &self.command {
@@ -210,7 +226,9 @@ impl Cli {
             Commands::Status => self.status(),
             Commands::Hook { event } => match event {
                 HookEvent::PostEdit => crate::hook::run_post_edit(),
-                HookEvent::PreEdit => crate::hook::run_pre_edit(self.tenant.as_deref()),
+                HookEvent::PreEdit => {
+                    crate::hook::run_pre_edit(self.tenant.as_deref(), self.config.as_deref())
+                }
             },
             Commands::Completions { shell } => {
                 let mut cmd = Cli::command();
@@ -452,7 +470,7 @@ impl Cli {
     /// Print base ref, tier availability, and config.
     fn status(&self) -> anyhow::Result<()> {
         let root = std::env::current_dir()?;
-        let config = HankConfig::load(&root)?;
+        let config = self.load_config(&root)?;
         let tenant = self.tenant.as_deref().unwrap_or("(single-tenant)");
         // Resolve the configured base ref to a concrete commit (None outside a
         // repo / unresolved ref — degrade, never fail).
@@ -488,7 +506,7 @@ impl Cli {
     /// Watch `path` and re-extract changed files on debounced, tiered schedules
     /// (FR-17). Blocks until interrupted (Ctrl-C).
     async fn watch(&self, path: &Path) -> anyhow::Result<()> {
-        let config = HankConfig::load(path)?;
+        let config = self.load_config(path)?;
         let scheduler = crate::watch::TieredScheduler::from_config(&config.freshness);
         let handler = Box::new(crate::watch::GraphRefresh::new(path.to_path_buf()));
         let _watcher = crate::watch::Watcher::start(
@@ -519,17 +537,19 @@ impl Cli {
         {
             let root = std::env::current_dir()?;
             let tenant = self.tenant.clone();
+            let config_override = self.config.clone();
             if http {
-                let config = HankConfig::load(&root)?;
+                let config = self.load_config(&root)?;
                 crate::mcp::run_http(
                     root,
                     tenant,
+                    config_override,
                     config.serve.bind_address,
                     config.serve.mcp_http_port,
                 )
                 .await
             } else {
-                crate::mcp::run_stdio(root, tenant).await
+                crate::mcp::run_stdio(root, tenant, config_override).await
             }
         }
         #[cfg(not(feature = "mcp"))]
@@ -567,11 +587,37 @@ fn tier_availability() -> Vec<String> {
     tiers
 }
 
-/// Initialize the tracing subscriber (logs to stderr, `RUST_LOG`-controlled).
-pub fn init_tracing() {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+/// Initialize the tracing subscriber (logs to stderr).
+///
+/// `RUST_LOG` wins when set — the conventional Rust escape hatch, and it can
+/// target specific modules, which a boolean flag cannot. Absent it, `--verbose`
+/// raises the default from `info` to `debug`. So precedence is
+/// `RUST_LOG` > `--verbose` > the `info` default.
+pub fn init_tracing(verbose: bool) {
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(default_log_level(verbose)));
     let _ = tracing_subscriber::fmt()
         .with_writer(io::stderr)
         .with_env_filter(filter)
         .try_init();
+}
+
+/// The default tracing level when `RUST_LOG` is unset.
+fn default_log_level(verbose: bool) -> &'static str {
+    if verbose {
+        "debug"
+    } else {
+        "info"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verbose_raises_the_default_log_level() {
+        assert_eq!(default_log_level(false), "info");
+        assert_eq!(default_log_level(true), "debug");
+    }
 }

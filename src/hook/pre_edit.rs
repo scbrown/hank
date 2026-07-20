@@ -33,12 +33,12 @@ pub enum Outcome {
 /// Run the `pre-edit` guard: read the harness payload from stdin, decide, and
 /// print at most one JSON object. Always returns `Ok` — the process must exit 0
 /// so the harness never treats the guard as a fail-closed block.
-pub fn run_pre_edit(tenant: Option<&str>) -> anyhow::Result<()> {
+pub fn run_pre_edit(tenant: Option<&str>, config_override: Option<&Path>) -> anyhow::Result<()> {
     let mut buf = String::new();
     std::io::stdin().lock().read_to_string(&mut buf).ok();
     let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
-    match guard(&buf, &root, tenant) {
+    match guard(&buf, &root, tenant, config_override) {
         Outcome::Allow => {}
         Outcome::Deny(reason) => println!("{}", deny_envelope(&reason)),
         Outcome::Notify(message) => println!("{}", system_message(&message)),
@@ -48,7 +48,12 @@ pub fn run_pre_edit(tenant: Option<&str>) -> anyhow::Result<()> {
 
 /// Decide an edit. Pure apart from reading the repo, so it is directly testable.
 #[must_use]
-pub fn guard(input_json: &str, default_root: &Path, tenant: Option<&str>) -> Outcome {
+pub fn guard(
+    input_json: &str,
+    default_root: &Path,
+    tenant: Option<&str>,
+    config_override: Option<&Path>,
+) -> Outcome {
     let started = Instant::now();
 
     // An unparseable payload is an ALLOW: the guard only speaks up about edits
@@ -61,7 +66,10 @@ pub fn guard(input_json: &str, default_root: &Path, tenant: Option<&str>) -> Out
     };
     let root = input.root(default_root);
 
-    let config = match HankConfig::load(&root) {
+    // Honour `--config` if the operator scoped the guard at a specific file. A
+    // bad override path errors here and lands in `fail_open` — a loud allow,
+    // never a silent revert to the ambient config the operator meant to bypass.
+    let config = match HankConfig::resolve(config_override, &root) {
         Ok(config) => config,
         Err(e) => return fail_open(&input, &format!("unreadable config ({e})")),
     };
@@ -215,7 +223,7 @@ mod tests {
     fn allows_when_no_policy_is_configured() {
         let dir = wide_repo();
         let payload = edit_payload(dir.path(), "leaf.rs", "fn leaf() {}");
-        assert_eq!(guard(&payload, dir.path(), Some("t")), Outcome::Allow);
+        assert_eq!(guard(&payload, dir.path(), Some("t"), None), Outcome::Allow);
     }
 
     #[test]
@@ -226,7 +234,7 @@ mod tests {
             "[hank.policy]\nmode = \"off\"\n[hank.policy.scopes.t]\nmax_impacted_symbols = 0\n",
         );
         let payload = edit_payload(dir.path(), "leaf.rs", "fn leaf() {}");
-        assert_eq!(guard(&payload, dir.path(), Some("t")), Outcome::Allow);
+        assert_eq!(guard(&payload, dir.path(), Some("t"), None), Outcome::Allow);
     }
 
     #[test]
@@ -238,7 +246,7 @@ mod tests {
              [hank.policy.scopes.t]\nallow_paths = [\"caller*.rs\"]\n",
         );
         let payload = edit_payload(dir.path(), "leaf.rs", "fn leaf() {}");
-        let Outcome::Deny(reason) = guard(&payload, dir.path(), Some("t")) else {
+        let Outcome::Deny(reason) = guard(&payload, dir.path(), Some("t"), None) else {
             panic!("expected a deny");
         };
         assert!(reason.contains("leaf.rs"));
@@ -254,7 +262,7 @@ mod tests {
              [hank.policy.scopes.t]\nmax_impacted_files = 1\n",
         );
         let payload = edit_payload(dir.path(), "leaf.rs", "fn leaf() {}");
-        let Outcome::Deny(reason) = guard(&payload, dir.path(), Some("t")) else {
+        let Outcome::Deny(reason) = guard(&payload, dir.path(), Some("t"), None) else {
             panic!("expected a deny");
         };
         // leaf is called from three files; the ceiling is one.
@@ -270,7 +278,7 @@ mod tests {
              [hank.policy.scopes.t]\nmax_impacted_files = 10\n",
         );
         let payload = edit_payload(dir.path(), "leaf.rs", "fn leaf() {}");
-        assert_eq!(guard(&payload, dir.path(), Some("t")), Outcome::Allow);
+        assert_eq!(guard(&payload, dir.path(), Some("t"), None), Outcome::Allow);
     }
 
     #[test]
@@ -282,7 +290,7 @@ mod tests {
              [hank.policy.scopes.t]\nmax_impacted_files = 1\n",
         );
         let payload = edit_payload(dir.path(), "leaf.rs", "fn leaf() {}");
-        let Outcome::Notify(message) = guard(&payload, dir.path(), Some("t")) else {
+        let Outcome::Notify(message) = guard(&payload, dir.path(), Some("t"), None) else {
             panic!("expected an advisory, not a block");
         };
         assert!(message.contains("not blocking"));
@@ -297,9 +305,9 @@ mod tests {
              [hank.policy.scopes.other]\nallow_paths = [\"nothing/**\"]\n",
         );
         let payload = edit_payload(dir.path(), "leaf.rs", "fn leaf() {}");
-        assert_eq!(guard(&payload, dir.path(), Some("t")), Outcome::Allow);
+        assert_eq!(guard(&payload, dir.path(), Some("t"), None), Outcome::Allow);
         // ...and so is an agent with no tenant at all.
-        assert_eq!(guard(&payload, dir.path(), None), Outcome::Allow);
+        assert_eq!(guard(&payload, dir.path(), None, None), Outcome::Allow);
     }
 
     #[test]
@@ -318,7 +326,7 @@ mod tests {
         // which is the same value a clean edit produces — so the suite could not
         // tell "we did not look" from "we looked and it was fine", and neither
         // could an operator.
-        match guard(&payload, dir.path(), Some("t")) {
+        match guard(&payload, dir.path(), Some("t"), None) {
             Outcome::Notify(message) => {
                 assert!(message.contains("NOT EVALUATED"), "{message}");
                 assert!(message.contains("deadline_ms"), "{message}");
@@ -337,7 +345,7 @@ mod tests {
         );
         let payload = edit_payload(dir.path(), "leaf.rs", "fn leaf() {}");
         assert!(matches!(
-            guard(&payload, dir.path(), Some("t")),
+            guard(&payload, dir.path(), Some("t"), None),
             Outcome::Deny(_)
         ));
     }
@@ -345,9 +353,12 @@ mod tests {
     #[test]
     fn garbage_and_unknown_payloads_allow() {
         let dir = wide_repo();
-        assert_eq!(guard("not json", dir.path(), Some("t")), Outcome::Allow);
+        assert_eq!(
+            guard("not json", dir.path(), Some("t"), None),
+            Outcome::Allow
+        );
         let no_file = serde_json::json!({ "tool_input": {} }).to_string();
-        assert_eq!(guard(&no_file, dir.path(), Some("t")), Outcome::Allow);
+        assert_eq!(guard(&no_file, dir.path(), Some("t"), None), Outcome::Allow);
     }
 
     #[test]
@@ -370,14 +381,14 @@ mod tests {
         })
         .to_string();
 
-        let Outcome::Notify(message) = guard(&payload, dir.path(), Some("t")) else {
+        let Outcome::Notify(message) = guard(&payload, dir.path(), Some("t"), None) else {
             panic!("expected a fail-open notice, not a block");
         };
         assert!(message.contains("UNGUARDED"));
         assert!(message.contains("malformed path globs"));
 
         // Second edit in the same session: still allowed, but no longer noisy.
-        assert_eq!(guard(&payload, dir.path(), Some("t")), Outcome::Allow);
+        assert_eq!(guard(&payload, dir.path(), Some("t"), None), Outcome::Allow);
         let _ = std::fs::remove_file(
             std::env::temp_dir().join(format!("hank-guard-failopen-{session}")),
         );
@@ -399,7 +410,7 @@ mod tests {
         // indistinguishable from one that passed. That is the whole bug: a fleet
         // was days from turning blocking on over ceilings that silently did not
         // apply to .py/.ts/.go.
-        match guard(&payload, dir.path(), Some("t")) {
+        match guard(&payload, dir.path(), Some("t"), None) {
             Outcome::Notify(message) => {
                 assert!(message.contains("NOT EVALUATED"), "{message}");
                 assert!(message.contains("no grammar for `.md`"), "{message}");
@@ -439,7 +450,7 @@ mod tests {
                  [hank.policy.scopes.t]\nmax_impacted_files = 0\n",
             );
             let payload = edit_payload(dir.path(), &format!("leaf.{ext}"), anchor);
-            match guard(&payload, dir.path(), Some("t")) {
+            match guard(&payload, dir.path(), Some("t"), None) {
                 Outcome::Deny(message) => assert!(
                     message.contains("reaches"),
                     ".{ext}: denied, but not for reach: {message}"
@@ -450,5 +461,59 @@ mod tests {
                 ),
             }
         }
+    }
+
+    /// The load-bearing test for aegis-ll3p: a scope supplied ONLY via
+    /// `--config` must actually govern the edit. The ambient config allows
+    /// (no policy), so a deny here can only come from the override being read.
+    #[test]
+    fn a_config_override_scopes_the_guard() {
+        let dir = wide_repo(); // no `.bobbin/config.toml` — ambient allows everything
+        let scope_file = dir.path().join("elsewhere").join("scope.toml");
+        std::fs::create_dir_all(scope_file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &scope_file,
+            "[hank.policy]\nmode = \"enforce\"\n\
+             [hank.policy.scopes.t]\nallow_paths = [\"src/**\"]\n",
+        )
+        .unwrap();
+        let payload = edit_payload(dir.path(), "leaf.rs", "fn leaf() {}");
+
+        // Negative control: without the override, the ambient (absent) config
+        // allows the edit.
+        assert_eq!(guard(&payload, dir.path(), Some("t"), None), Outcome::Allow);
+
+        // With the override, `leaf.rs` is outside `src/**` and is denied.
+        let Outcome::Deny(reason) = guard(&payload, dir.path(), Some("t"), Some(&scope_file))
+        else {
+            panic!("the --config scope must govern the edit");
+        };
+        assert!(reason.contains("leaf.rs"));
+        assert!(reason.contains("outside the writable capability scope"));
+    }
+
+    /// A `--config` path that does not exist must fail OPEN loudly, never
+    /// silently revert to the ambient config — reverting is the disarm this
+    /// override exists to prevent. Fail-open (allow) is still correct for a
+    /// guard, but it must be the loud, once-per-session kind.
+    #[test]
+    fn a_missing_config_override_fails_open_loudly() {
+        let dir = wide_repo();
+        // An ambient policy that WOULD deny, to prove the fail-open is the
+        // override erroring — not the ambient config quietly taking over.
+        write_policy(
+            dir.path(),
+            "[hank.policy]\nmode = \"enforce\"\n\
+             [hank.policy.scopes.t]\nallow_paths = [\"src/**\"]\n",
+        );
+        let missing = dir.path().join("does-not-exist.toml");
+        let payload = edit_payload(dir.path(), "leaf.rs", "fn leaf() {}");
+
+        let Outcome::Notify(message) = guard(&payload, dir.path(), Some("t"), Some(&missing))
+        else {
+            panic!("a bad --config must fail open loudly, not deny and not silently revert");
+        };
+        assert!(message.contains("UNGUARDED"));
+        assert!(message.contains("does not exist"));
     }
 }
