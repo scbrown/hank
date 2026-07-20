@@ -42,7 +42,40 @@ fn refs_finds_definition() {
         .args(["refs", "target", dir.path().to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("target"));
+        // Assert on what ONLY a RESOLVED hit prints (src/cli.rs refs(): the hits
+        // branch renders `<file>:<line> <name> (<kind>) [<tier>]`). The old
+        // assertion was `contains("target")` — and the EMPTY branch prints
+        // "no definition found for target", which also contains "target". So the
+        // test passed whether or not refs resolved anything: gutting refs() to push
+        // no hits left it green (aegis-fo30). `a.rs:1` (the resolved location) and
+        // "(Function)" (the resolved kind) appear ONLY when a definition is found,
+        // and the explicit not() pins that the not-found path is NOT what satisfied
+        // the test.
+        .stdout(
+            predicate::str::contains("a.rs:1")
+                .and(predicate::str::contains("(Function)"))
+                .and(predicate::str::contains("no definition found").not()),
+        );
+}
+
+#[test]
+fn refs_json_contains_the_resolved_definition() {
+    // The programmatic FR-4/FR-5 surface (Bobbin + agents consume --json). Mirrors
+    // refs_json_is_empty_array_when_absent, but for the POSITIVE case, and asserts
+    // on fields the empty result `[]` cannot carry: a resolved hit emits "kind" and
+    // "start_line": 1. This is the clean discriminator the empty branch prints
+    // nothing of.
+    let dir = project_with("a.rs", "fn target() {}\n");
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["refs", "target", dir.path().to_str().unwrap(), "--json"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("\"kind\"")
+                .and(predicate::str::contains("\"start_line\": 1"))
+                .and(predicate::str::contains("\"name\": \"target\"")),
+        );
 }
 
 #[test]
