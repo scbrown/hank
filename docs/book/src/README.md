@@ -3,8 +3,9 @@
 **Hank** is an in-memory, multi-tenant code-analysis engine — the structural
 signal for the Bobbin × Quipu stack. It extracts precise structure from a
 codebase (AST, symbols, call graph, and — in later phases — control/data
-dependence and LSP facts), keeps it hot per tenant, and serves it over MCP and a
-local HTTP API.
+dependence and LSP facts), keeps it hot per tenant, and serves it over MCP
+(stdio and streamable-HTTP). A parallel REST HTTP API for non-MCP consumers is
+planned for Phase 3 (FR-27).
 
 > *Bobbin holds the thread. Quipu ties the knots. Hank keeps the working coil —
 > live, per-tenant, ready.*
