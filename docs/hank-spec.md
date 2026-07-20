@@ -221,6 +221,14 @@ a numbered capability from the vision (§"The concrete capability set").
 - Every served fact MUST carry a `tier` ∈ {`treesitter`, `lsp`, `cpg`} and a
   `freshness` ∈ {`fresh`, `stale`, `recomputing`}. Agents must be able to tell a
   tree-sitter-fast-but-approximate fact from an LSP-precise one.
+- **Status (aegis-8yrn):** the `tier` half is served on every response.
+  **The `freshness` half is Phase 3**, not yet served: freshness state is a
+  property of the resident graph + file-watcher (FR-16/17, §12 Phase 3), and the
+  current serve path rebuilds on demand per request — no cached fact can be stale,
+  so there is nothing yet to tag. Until Phase 3 lands, a response omits
+  `freshness` rather than stamping a constant `fresh` that would imply a tracking
+  system that does not exist. `types::Fact`/`types::Freshness` are the defined but
+  not-yet-wired carrier.
 
 ### 5.2 Ground-truth reference & definition resolution *(multilspy → Hank; cap. 1)*
 
@@ -924,9 +932,9 @@ clients namespace as `bobbin_*`; Quipu uses explicit `quipu_*`. Hank uses
 | `hank_status` | Base commit, tenant overlays, tiers, freshness | §5.5 |
 | `hank_promote` | Trigger promotion of a commit to Quipu (write-guarded) | §5.6 |
 
-Every tool response carries `tier` and `freshness` per FR-3, and every request
-that reads structure accepts a `tenant` parameter (defaulting to a single-tenant
-session in Phase 1). Registration follows Bobbin's `rmcp` pattern exactly:
+Every tool response carries `tier` per FR-3 (the `freshness` half is Phase 3 —
+see FR-3), and every request that reads structure accepts a `tenant` parameter
+(defaulting to a single-tenant session in Phase 1). Registration follows Bobbin's `rmcp` pattern exactly:
 `#[tool_router]` impl, `#[tool(description = …)]` async fns taking
 `Parameters<Req>` where `Req: Deserialize + schemars::JsonSchema`, responses
 serialized with `serde_json::to_string_pretty` into `CallToolResult::success`.
@@ -997,7 +1005,8 @@ criterion; every phase must keep the `quipu` feature compiling both on and off
 - [ ] Project scaffold: Cargo (edition 2021), `[lints]` block, `just` + pre-commit + CI (both feature arms), mdBook skeleton.
 - [ ] Tree-sitter extraction (Bobbin's grammar set): symbol tree + intra-file calls.
 - [ ] LSP client (multilspy-style) for ≥ Rust + one more language: defs/refs/types.
-- [ ] Tier/freshness tagging (FR-3) from day one.
+- [ ] Tier tagging (FR-3) on every served response from day one. (Freshness
+      tagging is Phase 3 — it needs the resident graph + watcher, FR-16/17.)
 - [ ] Single-tenant in-memory graph; `hank_definition` / `hank_references` / `hank_symbols` / `hank_callers` over MCP (stdio + HTTP).
 - [ ] CLI: `serve`, `analyze`, `refs`, `status`.
 - **Exit:** Bobbin fuses Hank's precise references with its co-change/embeddings; "probably relevant" becomes "provably connected."

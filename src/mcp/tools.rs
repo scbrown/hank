@@ -149,6 +149,9 @@ pub struct ReachItem {
     pub distance: u32,
     /// Relationship to the seed (`calls` / `called_by`).
     pub via: String,
+    /// Provenance tier (FR-3). The call graph is tree-sitter today, so an agent
+    /// never reads a `treesitter` reachability edge as if it were LSP-precise.
+    pub tier: String,
 }
 
 /// Response for `hank_callers` / `hank_callees`.
@@ -162,6 +165,10 @@ pub struct NeighborsResponse {
     pub count: usize,
     /// The direct neighbors.
     pub neighbors: Vec<ReachItem>,
+    /// Provenance tier of the whole answer (FR-3). Top-level so a `found: false`
+    /// or empty result — which has no items to tag — still declares its tier
+    /// rather than arriving unlabelled and reading as authoritative.
+    pub tier: String,
 }
 
 /// The three-way reconciliation of structural vs. historical coupling (FR-11).
@@ -192,6 +199,11 @@ pub struct ImpactResponse {
     pub structural_files: Vec<String>,
     /// Reconciliation against the supplied co-change set, if any.
     pub reconciliation: Option<ReconciliationItem>,
+    /// Provenance tier of the blast radius (FR-3). This is the surface capability
+    /// scoping (FR-25) and the trust boundary read from, so an unlabelled
+    /// tree-sitter approximation here is exactly what FR-3 forbids. Top-level so a
+    /// not-found seed still declares its tier.
+    pub tier: String,
 }
 
 /// Request for `hank_communities` — detected symbol clusters over a subtree.
@@ -300,6 +312,10 @@ pub struct DataflowResponse {
     pub flow: Vec<FlowStepItem>,
     /// All dependence edges when no variable was given.
     pub edges: Vec<DepEdgeItem>,
+    /// Provenance tier of the dataflow (FR-3). Intra-procedural dependence is
+    /// derived from the tree-sitter model; tagged so it is never mistaken for a
+    /// CPG/LSP-precise result. Top-level so a not-found function still declares it.
+    pub tier: String,
 }
 
 /// Response for `hank_status`.

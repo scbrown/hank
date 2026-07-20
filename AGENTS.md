@@ -21,8 +21,9 @@ bitemporal graph). Keep Hank's stack coherent with theirs.
 - **Keep source files small.** The pre-commit file-size check warns at 400 lines
   and fails at 500 (tests exempt). One responsibility per module (see the layout
   in `docs/hank-spec.md` §7.2).
-- **Tag every fact.** Anything Hank serves carries a `tier` and `freshness`
-  (FR-3) — never present a tree-sitter approximation as LSP-precise.
+- **Tag every fact.** Everything Hank serves carries a `tier` (FR-3) — never
+  present a tree-sitter approximation as LSP-precise. (FR-3's `freshness` half is
+  Phase 3, not yet served; a response omits it rather than faking a `fresh` tag.)
 - **Don't let a feature ship dark.** When a phase wires a Cargo feature (`mcp`,
   `quipu`, `cpg`, `lsp`), add it to the CI matrix in the same change.
 
