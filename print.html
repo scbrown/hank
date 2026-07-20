@@ -839,6 +839,26 @@ affect more symbols or files than the scope permits?</li>
 <p>Both are computed at the <strong>tree-sitter tier</strong> against the <em>requesting tenant's</em>
 graph, and every verdict carries that tier tag (FR-3). A tree-sitter blast radius
 is an approximation; the ceilings should be set with that in mind.</p>
+<h2 id="observing-the-guard--hank-status"><a class="header" href="#observing-the-guard--hank-status">Observing the guard — <code>hank status</code></a></h2>
+<p>A guard you cannot observe is a guard you cannot trust: enforcement that has
+quietly stopped looks exactly like enforcement that found nothing wrong. So the
+policy layer is visible in <code>hank status</code>, resolved for the queried <code>--tenant</code>:</p>
+<pre><code class="language-text">  policy      : mode=enforce  scope=configured (allow=1 deny=0 sym≤— files≤3)
+  rule set    : none — never loaded (local config only)
+</code></pre>
+<p>Two states are reported <strong>loudly</strong> rather than left to silence:</p>
+<ul>
+<li><strong><code>enforce</code> with no scope for the tenant</strong> — armed in appearance, inert in
+effect — prints a <code>⚠</code> caveat (<code>enforcing_without_scope: true</code> in <code>--json</code>).
+This is the disarm-that-reads-as-healthy shape behind more than one past bug.</li>
+<li><strong>No signed rule set loaded.</strong> The resident, signed rule cache does not exist
+yet; <code>status</code> reports its absence (<code>signed_rule_set.state: "never-loaded"</code>)
+rather than omitting it, so the surface is present and its absence is never
+silent. When the cache lands it populates the live rule-set version and age
+into this same field.</li>
+</ul>
+<p><code>--json</code> emits the full <code>policy</code> object (mode, <code>scope_configured</code>, ceilings) and
+the <code>signed_rule_set</code> state for <code>st doctor</code> and other tooling to gate on.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="specification"><a class="header" href="#specification">Specification</a></h1>
 <p>The full PRD-style build specification lives at the repository root:</p>
 <ul>
