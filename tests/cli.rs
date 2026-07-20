@@ -136,3 +136,156 @@ fn impact_reports_transitive_callers() {
         .stdout(predicate::str::contains("\"top\""))
         .stdout(predicate::str::contains("\"count\": 2"));
 }
+
+// ── The pre-edit policy guard (§5.8/FR-25, FR-30) ────────────────────────
+//
+// These drive the real binary end to end, because the guard's contract is about
+// process behaviour — exit code and stdout — not just its return value. The one
+// rule the harness depends on: **exit 0, always**. Exit 2 is Claude Code's
+// fail-*closed* channel, so a guard that ever emitted it could hard-block an
+// agent.
+
+/// A repo where `leaf` is called from three other files, with a policy applied.
+fn guarded_project(policy: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("leaf.rs"), "fn leaf() {}\n").unwrap();
+    for i in 0..3 {
+        std::fs::write(
+            dir.path().join(format!("caller{i}.rs")),
+            format!("fn c{i}() {{ leaf(); }}\n"),
+        )
+        .unwrap();
+    }
+    let bobbin = dir.path().join(".bobbin");
+    std::fs::create_dir_all(&bobbin).unwrap();
+    std::fs::write(bobbin.join("config.toml"), policy).unwrap();
+    dir
+}
+
+/// A `PreToolUse` payload editing `file` in `dir`.
+fn pre_edit_payload(dir: &std::path::Path, file: &str, old: &str) -> String {
+    serde_json::json!({
+        "session_id": format!("it-{}-{file}", std::process::id()),
+        "cwd": dir.to_str().unwrap(),
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Edit",
+        "tool_input": {
+            "file_path": dir.join(file).to_str().unwrap(),
+            "old_string": old,
+            "new_string": "fn leaf() { changed(); }",
+        },
+    })
+    .to_string()
+}
+
+#[test]
+fn pre_edit_denies_an_edit_beyond_the_blast_radius() {
+    let dir = guarded_project(
+        "[hank.policy]\nmode = \"enforce\"\ndeadline_ms = 30000\n\
+         [hank.policy.scopes.polecat]\nmax_impacted_files = 1\n",
+    );
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["hook", "pre-edit", "--tenant", "polecat"])
+        .write_stdin(pre_edit_payload(dir.path(), "leaf.rs", "fn leaf() {}"))
+        .assert()
+        // Deny is exit 0 + JSON; the harness never sees a failing process.
+        .success()
+        .stdout(predicate::str::contains("\"permissionDecision\":\"deny\""))
+        .stdout(predicate::str::contains("\"hookEventName\":\"PreToolUse\""))
+        // The reason must be actionable: what was exceeded, and by how much.
+        .stdout(predicate::str::contains("3 files (ceiling 1)"));
+}
+
+#[test]
+fn pre_edit_denies_a_path_outside_the_capability_scope() {
+    let dir = guarded_project(
+        "[hank.policy]\nmode = \"enforce\"\n\
+         [hank.policy.scopes.polecat]\nallow_paths = [\"caller*.rs\"]\n",
+    );
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["hook", "pre-edit", "--tenant", "polecat"])
+        .write_stdin(pre_edit_payload(dir.path(), "leaf.rs", "fn leaf() {}"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"permissionDecision\":\"deny\""))
+        .stdout(predicate::str::contains(
+            "outside the writable capability scope",
+        ));
+}
+
+#[test]
+fn pre_edit_allows_an_ordinary_edit_silently() {
+    let dir = guarded_project(
+        "[hank.policy]\nmode = \"enforce\"\ndeadline_ms = 30000\n\
+         [hank.policy.scopes.polecat]\nmax_impacted_files = 10\n",
+    );
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["hook", "pre-edit", "--tenant", "polecat"])
+        .write_stdin(pre_edit_payload(dir.path(), "leaf.rs", "fn leaf() {}"))
+        .assert()
+        .success()
+        // Allow is *silence*. Emitting permissionDecision:"allow" would suppress
+        // the user's own permission prompt — the guard only ever subtracts.
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn pre_edit_resolves_the_tenant_from_bobbin_role() {
+    let dir = guarded_project(
+        "[hank.policy]\nmode = \"enforce\"\n\
+         [hank.policy.scopes.polecat]\nallow_paths = [\"caller*.rs\"]\n",
+    );
+    // Shantytown sets BOBBIN_ROLE per agent, so one hook registration serves
+    // every role; this is the path that actually runs in the field.
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["hook", "pre-edit"])
+        .env("BOBBIN_ROLE", "polecat")
+        .write_stdin(pre_edit_payload(dir.path(), "leaf.rs", "fn leaf() {}"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"permissionDecision\":\"deny\""));
+}
+
+#[test]
+fn pre_edit_fails_open_on_garbage_and_on_no_policy() {
+    // Unparseable payload.
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["hook", "pre-edit", "--tenant", "polecat"])
+        .write_stdin("not json at all")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    // A repo with no policy configured at all.
+    let dir = project_with("a.rs", "fn foo() {}\n");
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["hook", "pre-edit", "--tenant", "polecat"])
+        .write_stdin(pre_edit_payload(dir.path(), "a.rs", "fn foo() {}"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn pre_edit_never_denies_in_advise_mode() {
+    let dir = guarded_project(
+        "[hank.policy]\nmode = \"advise\"\ndeadline_ms = 30000\n\
+         [hank.policy.scopes.polecat]\nmax_impacted_files = 1\n",
+    );
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["hook", "pre-edit", "--tenant", "polecat"])
+        .write_stdin(pre_edit_payload(dir.path(), "leaf.rs", "fn leaf() {}"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("systemMessage"))
+        .stdout(predicate::str::contains("not blocking"))
+        // Staging a scope must never block, however badly it is misconfigured.
+        .stdout(predicate::str::contains("permissionDecision").not());
+}

@@ -43,11 +43,43 @@ Impacted files: src/api/login.rs, src/api/session.rs
 The advisory is emitted only when there is cross-file impact, and the hook never
 fails the harness (no output = nothing to say).
 
-## Pre-edit guard (planned, Phase 5)
+## Pre-edit guard (available now)
 
-`hank hook pre-edit` (`PreToolUse`) will verify the *proposed* buffer before the
-edit lands and — for capability-scoped agents — optionally block it with a
-reason. Blocking is opt-in; the default stays advisory.
+`hank hook pre-edit` (`PreToolUse`) checks an edit *before* it lands against the
+calling tenant's capability scope, and can **deny** it with a reason the model
+can act on. Blocking is **opt-in and off by default**.
+
+```json
+{
+  "env": { "BOBBIN_ROLE": "polecat-3" },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "hank hook pre-edit", "timeout": 5 }
+        ]
+      }
+    ]
+  }
+}
+```
+
+With a scope configured for that tenant (see
+[Configuration](../reference/config.md)), an over-reaching edit comes back as:
+
+```text
+hank: editing `src/core.rs` reaches 4 symbols (ceiling 2) and 4 files
+(ceiling 1) — beyond the blast radius allowed for tenant `polecat-demo`.
+Split this into a narrower change that touches fewer callers, or ask for a
+wider capability scope. (tree-sitter tier: the reach is an approximation.)
+```
+
+The guard **always fails open**: every error, timeout, and unparseable payload
+allows the edit, because a guard that fails closed would brick every agent the
+moment Hank is unavailable. Read
+[the full contract](../reference/policy-guard.md) before wiring it into a fleet
+— particularly the rules that allow is *silence* and that Hank never exits `2`.
 
 ## Performance note
 
