@@ -310,6 +310,22 @@ impl Cli {
     /// Count files and symbols in the git tree at `reference` (the FR-13 base).
     fn analyze_at_ref(path: &Path, reference: &str) -> anyhow::Result<(usize, usize)> {
         let root = std::env::current_dir()?;
+        // REFUSE rather than report an empty baseline. `analyze --at no-such-ref`
+        // printed "0 file(s), 0 symbol(s)" and exited 0, which is what a ref
+        // holding no parseable files looks like — so a typo in a ref name read as
+        // a real, empty measurement.
+        if !crate::git::is_repo(&root) {
+            anyhow::bail!(
+                "not a git work tree (or `git` is unavailable), so NO BASELINE was \
+                 built at `{reference}` — this is not an empty baseline"
+            );
+        }
+        if crate::git::resolve_commit(&root, reference).is_none() {
+            anyhow::bail!(
+                "`{reference}` does not resolve to a commit, so NO BASELINE was \
+                 built — this is not an empty baseline"
+            );
+        }
         let prefix = path.strip_prefix(".").unwrap_or(path);
         let mut files = 0usize;
         let mut symbols = 0usize;

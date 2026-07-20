@@ -47,6 +47,33 @@ pub struct CodeGraph {
     by_name: HashMap<String, Vec<NodeIndex>>,
 }
 
+/// Why a baseline could not be built. Distinct from a baseline that is EMPTY:
+/// the first says the question was never answered, the second is an answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BaselineError {
+    /// Not a git work tree, or `git` is unavailable.
+    NoRepo,
+    /// The ref does not resolve to a commit.
+    UnresolvedRef(String),
+}
+
+impl std::fmt::Display for BaselineError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoRepo => write!(
+                f,
+                "not a git work tree (or `git` is unavailable), so NO BASELINE was \
+                 built — this is not an empty baseline"
+            ),
+            Self::UnresolvedRef(r) => write!(
+                f,
+                "`{r}` does not resolve to a commit, so NO BASELINE was built — \
+                 this is not an empty baseline"
+            ),
+        }
+    }
+}
+
 impl CodeGraph {
     /// Build the call graph for the Rust files under `root`.
     ///
@@ -73,10 +100,45 @@ impl CodeGraph {
         Ok(Self::from_sources(sources))
     }
 
+    /// The baseline at `reference`, or WHY it could not be built.
+    ///
+    /// [`Self::build_at_ref`] degrades to an empty graph outside a repo or for an
+    /// unresolved ref — deliberately, and documented — but "the ref does not
+    /// exist" and "the ref names a tree with nothing parseable in it" then look
+    /// identical: both are zero files, zero symbols, exit 0. Measured on a real
+    /// repo before this existed:
+    ///
+    /// ```text
+    /// $ hank analyze --at main          analyzed 1 file(s), 1 symbol(s) @ main
+    /// $ hank analyze --at no-such-ref   analyzed 0 file(s), 0 symbol(s) @ no-such-ref
+    /// ```
+    ///
+    /// A baseline that failed to build must SAY SO. A change-time rule diffs
+    /// against this base, so an empty base does not merely under-report — it
+    /// makes every entity in the change look ADDED, or the whole change look
+    /// clean, depending on which side is missing. That is a wrong answer wearing
+    /// a normal-looking one.
+    pub fn build_at_ref_checked(
+        root: &Path,
+        reference: &str,
+    ) -> std::result::Result<Self, BaselineError> {
+        if !crate::git::is_repo(root) {
+            return Err(BaselineError::NoRepo);
+        }
+        if crate::git::resolve_commit(root, reference).is_none() {
+            return Err(BaselineError::UnresolvedRef(reference.to_string()));
+        }
+        Self::build_at_ref(root, reference).map_err(|_| BaselineError::NoRepo)
+    }
+
     /// Build the call graph from the tree content at a git `reference` — the
     /// shared read-only base at a baseline commit (FR-13/§5.5), not the working
     /// tree. Paths are repo-root-relative. Outside a repo, or for an unresolved
     /// ref, the tree is empty and so is the graph (degrade, never fail).
+    ///
+    /// PREFER [`Self::build_at_ref_checked`] anywhere the result is REPORTED to a
+    /// human or a rule: this one cannot distinguish "no such ref" from "a ref
+    /// with nothing parseable in it", and both come back as an empty graph.
     pub fn build_at_ref(root: &Path, reference: &str) -> Result<Self> {
         let sources = crate::git::list_files_at(root, reference)
             .into_iter()
@@ -311,5 +373,51 @@ fn top() { mid(); }
             files.len() <= 2,
             "cross-language edges inflated the radius: {files:?}"
         );
+    }
+
+    /// A ref that does not resolve must be an ERROR, not an empty baseline.
+    /// Measured before this existed: `analyze --at no-such-ref` printed
+    /// "0 file(s), 0 symbol(s)" and exited 0 — identical to a real ref holding
+    /// nothing parseable.
+    #[test]
+    fn an_unresolved_ref_fails_to_build_rather_than_building_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .output()
+                .unwrap();
+        };
+        run(&["init", "-q", "-b", "main"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(dir.path().join("leaf.rs"), "fn leaf() {}\n").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-qm", "base"]);
+
+        // The real ref builds, and is non-empty — the positive control, without
+        // which "it errored" proves nothing.
+        let Ok(built) = CodeGraph::build_at_ref_checked(dir.path(), "main") else {
+            panic!("a real ref must build")
+        };
+        assert!(built.has_symbol("leaf"));
+
+        let Err(err) = CodeGraph::build_at_ref_checked(dir.path(), "no-such-ref") else {
+            panic!("an unresolved ref must NOT build an empty baseline")
+        };
+        assert_eq!(err, BaselineError::UnresolvedRef("no-such-ref".to_string()));
+        assert!(err.to_string().contains("NO BASELINE was built"));
+    }
+
+    #[test]
+    fn outside_a_repo_no_baseline_is_built_and_it_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let Err(err) = CodeGraph::build_at_ref_checked(dir.path(), "HEAD") else {
+            panic!("outside a repo there is no baseline to build")
+        };
+        assert_eq!(err, BaselineError::NoRepo);
+        assert!(err.to_string().contains("not an empty baseline"));
     }
 }
