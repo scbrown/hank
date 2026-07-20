@@ -154,21 +154,66 @@ impl HankConfig {
     /// Starts from defaults, overlays the user config if present, then the
     /// project's `.bobbin/config.toml` `[hank]` table. Missing files are not an
     /// error; a malformed file is.
+    ///
+    /// "Overlay" is per-key, not per-file. Replacing the whole table would mean
+    /// a project config that sets one unrelated key silently discards every
+    /// other setting the user config established — and when the discarded
+    /// setting is `[hank.policy]`, the capability guard goes inert while
+    /// looking exactly like a clean run. A fleet keeps its scopes in one
+    /// user-level file precisely so they cannot drift, so that file has to
+    /// survive a workspace defining `base_ref`.
     pub fn load(root: &Path) -> Result<Self> {
-        let mut config = Self::default();
+        Self::load_layered(user_config_path().as_deref(), root)
+    }
 
-        if let Some(user) = user_config_path() {
-            if let Some(table) = read_hank_table(&user)? {
-                config = table;
-            }
-        }
-
+    /// The layering itself, with the user-config path injected.
+    ///
+    /// Taking it as an argument keeps this testable without reassigning
+    /// `$HOME`: that variable is process-global, and Cargo runs tests in
+    /// threads, so a test that moved it would race every other test reading it.
+    fn load_layered(user: Option<&Path>, root: &Path) -> Result<Self> {
         let project = root.join(".bobbin").join("config.toml");
-        if let Some(table) = read_hank_table(&project)? {
-            config = table;
+        let sources = [user, Some(project.as_path())];
+
+        let mut merged: Option<toml::Value> = None;
+        for path in sources.into_iter().flatten() {
+            let Some(table) = read_hank_table(path)? else {
+                continue;
+            };
+            merged = Some(match merged {
+                Some(base) => merge(base, table),
+                None => table,
+            });
         }
 
-        Ok(config)
+        match merged {
+            None => Ok(Self::default()),
+            Some(value) => value
+                .try_into()
+                .map_err(|e| Error::Config(format!("[hank]: {e}"))),
+        }
+    }
+}
+
+/// Deep-merge `overlay` onto `base`: tables merge key-by-key, everything else
+/// is replaced outright.
+///
+/// Arrays replace rather than concatenate. Accumulating them would let a
+/// workspace's `allow_paths` silently *widen* a scope the user config narrowed,
+/// which inverts the direction a capability scope is allowed to move.
+fn merge(base: toml::Value, overlay: toml::Value) -> toml::Value {
+    match (base, overlay) {
+        (toml::Value::Table(mut base), toml::Value::Table(overlay)) => {
+            for (key, value) in overlay {
+                let merged = match base.remove(&key) {
+                    Some(existing) => merge(existing, value),
+                    None => value,
+                };
+                base.insert(key, merged);
+            }
+            toml::Value::Table(base)
+        }
+        (_, overlay) => overlay,
     }
 }
 
@@ -182,8 +227,17 @@ fn user_config_path() -> Option<PathBuf> {
     })
 }
 
-/// Read the `[hank]` table from a config file, if the file exists.
-fn read_hank_table(path: &Path) -> Result<Option<HankConfig>> {
+/// Read the raw `[hank]` table from a config file, if the file exists.
+///
+/// Returns the un-deserialized [`toml::Value`] so callers can merge tables
+/// before building the struct — deserializing each file separately would bake
+/// in defaults for its absent keys, and those defaults would then overwrite
+/// real values from a lower-precedence file.
+///
+/// Each file is still type-checked here, even though the result is discarded,
+/// so a malformed `[hank]` is reported against the file that actually contains
+/// it rather than surfacing later as an error about the merged whole.
+fn read_hank_table(path: &Path) -> Result<Option<toml::Value>> {
     if !path.exists() {
         return Ok(None);
     }
@@ -192,11 +246,11 @@ fn read_hank_table(path: &Path) -> Result<Option<HankConfig>> {
         toml::from_str(&text).map_err(|e| Error::Config(format!("{}: {e}", path.display())))?;
     match root.get("hank") {
         Some(section) => {
-            let config = section
+            let _: HankConfig = section
                 .clone()
                 .try_into()
                 .map_err(|e| Error::Config(format!("{}: [hank]: {e}", path.display())))?;
-            Ok(Some(config))
+            Ok(Some(section.clone()))
         }
         None => Ok(None),
     }
@@ -236,5 +290,96 @@ mod tests {
         assert_eq!(config.base_ref, "develop");
         // Unspecified keys fall back to defaults.
         assert_eq!(config.serve.mcp_http_port, 3040);
+    }
+
+    /// The shape a fleet actually deploys: capability scopes live in ONE
+    /// user-level config so six workspaces cannot drift, and each workspace
+    /// sets its own unrelated keys. The workspace file must not take the policy
+    /// down with it — a guard that silently stops enforcing is indistinguishable
+    /// from a guard finding nothing wrong.
+    #[test]
+    fn a_project_config_does_not_wipe_user_level_policy() {
+        let user = tempfile::tempdir().unwrap();
+        let user_config = user.path().join("config.toml");
+        std::fs::write(
+            &user_config,
+            "[hank.policy]\nmode = \"enforce\"\n\
+             [hank.policy.scopes.weaver]\nallow_paths = [\"src/**\"]\n",
+        )
+        .unwrap();
+
+        let project = tempfile::tempdir().unwrap();
+        let bobbin = project.path().join(".bobbin");
+        std::fs::create_dir_all(&bobbin).unwrap();
+        // Sets one unrelated key; says nothing about policy.
+        std::fs::write(
+            bobbin.join("config.toml"),
+            "[hank]\nbase_ref = \"develop\"\n",
+        )
+        .unwrap();
+
+        let config = HankConfig::load_layered(Some(&user_config), project.path()).unwrap();
+        // The workspace's own key wins...
+        assert_eq!(config.base_ref, "develop");
+        // ...without disarming the guard.
+        assert_eq!(config.policy.mode, crate::policy::Mode::Enforce);
+        let scope = config
+            .policy
+            .scope_for(Some("weaver"))
+            .expect("user-level scope must survive a project config");
+        assert_eq!(scope.allow_paths, vec!["src/**".to_string()]);
+    }
+
+    /// Merging must not cost precedence: the project still wins key-for-key.
+    #[test]
+    fn a_project_config_overrides_the_same_key() {
+        let user = tempfile::tempdir().unwrap();
+        let user_config = user.path().join("config.toml");
+        std::fs::write(
+            &user_config,
+            "[hank]\nbase_ref = \"main\"\n[hank.policy]\nmode = \"enforce\"\n",
+        )
+        .unwrap();
+
+        let project = tempfile::tempdir().unwrap();
+        let bobbin = project.path().join(".bobbin");
+        std::fs::create_dir_all(&bobbin).unwrap();
+        std::fs::write(
+            bobbin.join("config.toml"),
+            "[hank.policy]\nmode = \"off\"\n",
+        )
+        .unwrap();
+
+        let config = HankConfig::load_layered(Some(&user_config), project.path()).unwrap();
+        assert_eq!(config.policy.mode, crate::policy::Mode::Off);
+        // Untouched keys from the user config survive the override.
+        assert_eq!(config.base_ref, "main");
+    }
+
+    /// A scope narrowed by the user config must not be widened by a workspace
+    /// appending to it — arrays replace, they do not accumulate.
+    #[test]
+    fn a_project_config_replaces_rather_than_widens_allow_paths() {
+        let user = tempfile::tempdir().unwrap();
+        let user_config = user.path().join("config.toml");
+        std::fs::write(
+            &user_config,
+            "[hank.policy]\nmode = \"enforce\"\n\
+             [hank.policy.scopes.weaver]\nallow_paths = [\"src/**\"]\n",
+        )
+        .unwrap();
+
+        let project = tempfile::tempdir().unwrap();
+        let bobbin = project.path().join(".bobbin");
+        std::fs::create_dir_all(&bobbin).unwrap();
+        std::fs::write(
+            bobbin.join("config.toml"),
+            "[hank.policy.scopes.weaver]\nallow_paths = [\"docs/**\"]\n",
+        )
+        .unwrap();
+
+        let config = HankConfig::load_layered(Some(&user_config), project.path()).unwrap();
+        let scope = config.policy.scope_for(Some("weaver")).unwrap();
+        assert_eq!(scope.allow_paths, vec!["docs/**".to_string()]);
     }
 }
