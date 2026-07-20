@@ -240,6 +240,13 @@ model to act on: what was exceeded, by how much, and what to do instead.</p>
 (block, stderr to the model). Reserving it means no Hank crash path can ever
 hard-block an agent — a panic exits <code>101</code>, which Claude Code treats as a
 non-blocking error and the tool call proceeds.</p>
+<p>That guarantee covers Hank's own code, and argument parsing happens before any
+of it runs. A Hank that predates a hook subcommand answers it with the argument
+parser's "invalid value" error and exit <code>2</code> — so <strong>staleness fails closed even
+though absence fails open.</strong> Since this version, an unparseable <code>hank hook …</code>
+invocation degrades to a silent allow instead (exit <code>0</code>, empty stdout, a loud
+stderr line). Binaries older than that fix cannot be repaired retroactively,
+which is why the invocation in (d) is written to be skew-proof on its own.</p>
 <h2 id="c-latency--the-sub-100ms-budget"><a class="header" href="#c-latency--the-sub-100ms-budget">(c) Latency — the sub-100ms budget</a></h2>
 <p>The hook is synchronous in the agent's loop (FR-31). Hank enforces its <strong>own</strong>
 wall-clock deadline, <code>[hank.policy] deadline_ms</code> (default <strong>100</strong>). When the
@@ -257,13 +264,27 @@ teeth on big repos when the daemon does.</p>
 through this hook; a guard that fails closed bricks the fleet the moment Hank is
 unavailable.</p>
 <div class="table-wrapper"><table><thead><tr><th>Failure</th><th>Result</th></tr></thead><tbody>
-<tr><td><code>hank</code> not on <code>PATH</code></td><td>Claude Code non-blocking error → edit proceeds</td></tr>
+<tr><td><code>hank</code> not on <code>PATH</code></td><td>exit <code>127</code> → non-blocking error → edit proceeds</td></tr>
+<tr><td><code>hank</code> too old to know the subcommand</td><td>exit <code>2</code> → <strong>would block</strong>; see below</td></tr>
 <tr><td>Hank panics</td><td>exit <code>101</code> → non-blocking error → edit proceeds</td></tr>
 <tr><td>Deadline exceeded</td><td>exit <code>0</code>, silent → edit proceeds</td></tr>
 <tr><td>Daemon unreachable, unreadable config, unparseable payload</td><td>exit <code>0</code> + loud line → edit proceeds</td></tr>
 <tr><td>Policy says deny</td><td>exit <code>0</code> + deny JSON → <strong>edit blocked</strong></td></tr>
 </tbody></table>
 </div>
+<h3 id="invoke-it-so-version-skew-cannot-block-the-fleet"><a class="header" href="#invoke-it-so-version-skew-cannot-block-the-fleet">Invoke it so version skew cannot block the fleet</a></h3>
+<p>Every row above fails open except one, and that one is not exotic: it is what
+you get by rolling the hook out ahead of the binary, which is the normal
+ordering of a deploy. Invoke the guard through this wrapper rather than bare:</p>
+<pre><code class="language-sh">out=$(hank hook pre-edit 2&gt;/dev/null) || exit 0
+printf '%s' "$out"
+</code></pre>
+<p><code>|| exit 0</code> converts <em>every</em> non-zero exit — <code>127</code> absent, <code>2</code> stale, <code>101</code>
+panic — into an allow. Capturing first and printing only on success also means
+a Hank that dies mid-write contributes <strong>nothing</strong> to stdout, so a truncated
+run can never be parsed as a permission decision. Emitting the command bare is
+safe only once every host is known to be past the skew fix; the wrapper is safe
+now, and stays correct afterwards.</p>
 <h3 id="loud-means-systemmessage-not-stderr"><a class="header" href="#loud-means-systemmessage-not-stderr">"Loud" means <code>systemMessage</code>, not stderr</a></h3>
 <p>A hook's stderr is shown <strong>only when it exits <code>2</code></strong>; on exit <code>0</code> it goes to the
 debug log, where nobody looks. So a fail-open that only wrote to stderr would be
