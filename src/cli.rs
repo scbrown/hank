@@ -134,7 +134,7 @@ enum Commands {
         #[arg(long, default_value_t = 5)]
         hops: u32,
     },
-    /// Verdict on a proposed edit buffer (Phase 5).
+    /// Verdict on a proposed edit buffer (FR-23/FR-24).
     Verify {
         /// The file being edited.
         #[arg(long)]
@@ -240,13 +240,8 @@ impl Cli {
                 *forward,
                 *hops,
             ),
-            Commands::Verify { .. } => {
-                self.planned(
-                    "verify",
-                    5,
-                    "monitor-guided edit verification lands in Phase 5",
-                );
-                Ok(())
+            Commands::Verify { file, buffer } => {
+                cli_cmds::verify(self.json, self.quiet, file, buffer)
             }
             Commands::Promote { .. } => {
                 self.planned(

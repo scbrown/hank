@@ -316,3 +316,43 @@ pub struct StatusResponse {
     /// The configured branch model.
     pub branch_model: String,
 }
+
+/// Request for `hank_verify` — a verdict on a proposed edit buffer (FR-23).
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct VerifyRequest {
+    /// The file the buffer is proposed as.
+    #[schemars(description = "File path relative to the root, e.g. 'src/auth.rs'")]
+    pub file: String,
+
+    /// The full proposed contents of that file.
+    #[schemars(description = "The complete proposed contents of the file, as text")]
+    pub buffer: String,
+}
+
+/// One violation in a `hank_verify` verdict.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ViolationItem {
+    /// `identifier-does-not-exist`, `wrong-arity`, `unresolved-import`, ...
+    pub kind: String,
+    /// The offending name.
+    pub symbol: String,
+    /// 1-based line in the proposed buffer (0 when not line-specific).
+    pub line: usize,
+    /// What is wrong.
+    pub message: String,
+}
+
+/// Response for `hank_verify`.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct VerifyResponse {
+    /// The file that was verified.
+    pub file: String,
+    /// The boolean verdict: no violations found (FR-24).
+    pub ok: bool,
+    /// What was found.
+    pub violations: Vec<ViolationItem>,
+    /// What this tier could NOT check — do not read `ok` as "this compiles".
+    pub unchecked: Vec<String>,
+    /// Provenance tier (FR-3).
+    pub tier: String,
+}

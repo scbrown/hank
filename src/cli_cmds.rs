@@ -294,3 +294,60 @@ fn not_found(json: bool, quiet: bool, name: &str, what: &str) -> anyhow::Result<
     }
     Ok(())
 }
+
+/// `hank verify` — a verdict on a proposed edit buffer (FR-23/FR-24).
+///
+/// Exits non-zero when the buffer has violations, so CI and scripts can gate on
+/// it. The verdict always reports the tier it was reached at and what that tier
+/// could not check, so a clean result is never over-read (FR-3).
+pub(crate) fn verify(json: bool, quiet: bool, file: &Path, buffer: &Path) -> anyhow::Result<()> {
+    let proposed = std::fs::read_to_string(buffer)?;
+    // The current contents are the baseline: violations already present before
+    // the edit are not attributed to it.
+    let baseline = std::fs::read_to_string(file).ok();
+    let root = std::env::current_dir()?;
+    let verdict = crate::verify::verify_buffer(&root, file, &proposed, baseline.as_deref())?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&verdict)?);
+    } else if verdict.ok {
+        if !quiet {
+            println!(
+                "{} {} [{:?}]",
+                "verified".green().bold(),
+                file.display(),
+                verdict.tier
+            );
+            println!("  not checked at this tier:");
+            for item in &verdict.unchecked {
+                println!("    - {item}");
+            }
+        }
+    } else {
+        println!(
+            "{} {} [{:?}]",
+            "violations".red().bold(),
+            file.display(),
+            verdict.tier
+        );
+        for violation in &verdict.violations {
+            let where_ = if violation.line == 0 {
+                String::new()
+            } else {
+                format!(":{}", violation.line)
+            };
+            println!(
+                "  {}{} {}",
+                violation.symbol.cyan(),
+                where_,
+                violation.message
+            );
+        }
+    }
+
+    if verdict.ok {
+        Ok(())
+    } else {
+        std::process::exit(1);
+    }
+}

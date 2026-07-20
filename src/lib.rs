@@ -29,6 +29,7 @@ pub mod policy;
 pub mod reconcile;
 mod render;
 pub mod types;
+pub mod verify;
 pub mod watch;
 
 pub use errors::{Error, Result};
