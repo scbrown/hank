@@ -4,8 +4,9 @@
 //! `callers`/`impact` and `dataflow`, `export` (referential structure as Turtle,
 //! §5.10/FR-34), the `watch` file-watcher (debounced, tiered re-extraction,
 //! §5.5/FR-17), and the `hook` adapter (edit-reactive harness integration,
-//! §5.9/FR-30) are live. `verify` and `promote` are declared with their final
-//! shape and print a phase notice until their engines land (`docs/hank-spec.md`).
+//! §5.9/FR-30) and `verify` (the FR-23/FR-24 edit-buffer verdict) are live. Only
+//! `promote` is still declared with its final shape and prints a phase notice
+//! until its engine lands (`docs/hank-spec.md`).
 
 use std::io;
 use std::path::{Path, PathBuf};

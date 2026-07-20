@@ -46,7 +46,7 @@ hank analyze src
 hank analyze src --at main     # structure of the tree at a baseline commit (FR-13)
 hank refs authenticate src --json
 hank status                    # resolves base_ref to a commit SHA (in a git repo)
-hank impact src/auth.rs::authenticate --hops 5
+hank impact authenticate src --hops 5   # lookup is by bare symbol name, not file::symbol
 hank communities src --json         # symbol clusters, largest-first
 hank verify --file src/auth.rs --buffer /tmp/edited.rs
 hank promote --commit HEAD

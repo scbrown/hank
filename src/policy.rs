@@ -103,8 +103,8 @@ impl PolicyConfig {
     ///
     /// Observability is the whole point (aegis-hac0): an operator must be able
     /// to see whether the guard is armed for a tenant and against what. The
-    /// scope is read straight from the table here — NOT via [`scope_for`], which
-    /// hides it under [`Mode::Off`] — so status can distinguish "mode off but a
+    /// scope is read straight from the table here — NOT via [`Self::scope_for`],
+    /// which hides it under [`Mode::Off`] — so status can distinguish "mode off but a
     /// scope exists" from "no scope configured at all".
     #[must_use]
     pub fn status_for(&self, tenant: Option<&str>) -> PolicyStatus {
