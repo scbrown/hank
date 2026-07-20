@@ -14,7 +14,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use super::measure::{measure_within, relative};
+use super::measure::{measure_within, relative, Measured};
 use super::{deny_envelope, first_notice_for_session, system_message, HookInput};
 use crate::config::HankConfig;
 use crate::policy::Mode;
@@ -63,7 +63,7 @@ pub fn guard(input_json: &str, default_root: &Path, tenant: Option<&str>) -> Out
 
     let config = match HankConfig::load(&root) {
         Ok(config) => config,
-        Err(e) => return fail_open(&input, &format!("unreadable config ({e})")),
+        Err(e) => return fail_open(&input, "config", &format!("unreadable config ({e})")),
     };
 
     // No scope for this tenant — mode is off, or the tenant is unconstrained.
@@ -81,6 +81,7 @@ pub fn guard(input_json: &str, default_root: &Path, tenant: Option<&str>) -> Out
             .collect();
         return fail_open(
             &input,
+            "globs",
             &format!(
                 "scope for tenant `{tenant}` has malformed path globs: {}",
                 detail.join(", ")
@@ -104,11 +105,36 @@ pub fn guard(input_json: &str, default_root: &Path, tenant: Option<&str>) -> Out
     if scope.max_impacted_symbols.is_none() && scope.max_impacted_files.is_none() {
         return Outcome::Allow; // Nothing to measure against.
     }
-    let Some(radius) = measure_within(&root, &file, &rel, &input, config.policy.max_hops, budget)
-    else {
-        // Deadline blown or nothing measurable. Allowing is the contract: the
-        // guard gets teeth on big repos when the FR-31 resident daemon lands.
-        return Outcome::Allow;
+    let radius = match measure_within(&root, &file, &rel, &input, config.policy.max_hops, budget) {
+        Measured::Radius(radius) => radius,
+        // NOTHING TO SIZE. Not a gap — allow, and stay quiet. The graph is Rust-only
+        // today, so every .py/.ts edit arrives here; warning would be noise from day
+        // one and would bury the case below.
+        Measured::NotMeasurable => return Outcome::Allow,
+        // THE DEADLINE EXPIRED, so the blast-radius rules DID NOT RUN. Still allow —
+        // that contract is deliberate and stays (hank #35: a stale hank once blocked
+        // every edit everywhere, and a guard that fails CLOSED is worse than one that
+        // fails open). What changes is that it is no longer SILENT.
+        //
+        // Silence here was indistinguishable from a clean pass, so a repo simply being
+        // large would turn its own enforcement off and nothing would say so. MEASURED
+        // 2026-07-20 against the shipped default of 100 ms: a 33k-line tree takes
+        // ~152 ms and a 69k-line tree ~313 ms, so once a scope is enabled on a repo
+        // that size this branch is taken on every edit. The same edit that is denied
+        // with a real budget was allowed with empty output at the default — same repo,
+        // same policy, opposite enforcement, no visible difference.
+        Measured::TimedOut => {
+            return fail_open(
+                &input,
+                // Per-repo: a session touching two oversized trees must hear about both.
+                &format!("deadline-{}", root.display()),
+                &format!(
+                    "blast-radius deadline exceeded ({} ms) — size rules did NOT run for `{rel}`; \
+                     raise hank.policy.deadline_ms or the guard is off on this repo",
+                    config.policy.deadline_ms
+                ),
+            )
+        }
     };
 
     match scope.check_blast(radius, &rel, tenant) {
@@ -130,11 +156,13 @@ fn decide(mode: Mode, message: String) -> Outcome {
 /// Degrade to "allow", loudly. Writes the stderr line the contract requires and,
 /// once per session, a user-visible notice — because a hook's stderr is
 /// surfaced only on exit `2`, so stderr alone would be silent in practice.
-fn fail_open(input: &HookInput, reason: &str) -> Outcome {
-    eprintln!("hank: policy guard failed open: {reason}");
-    if first_notice_for_session(input.session_id.as_deref()) {
+fn fail_open(input: &HookInput, kind: &str, reason: &str) -> Outcome {
+    eprintln!("hank: policy guard UNMEASURED: {reason}");
+    // `kind` keeps distinct gaps from muting each other — see first_notice_for_session.
+    if first_notice_for_session(input.session_id.as_deref(), kind) {
         return Outcome::Notify(format!(
-            "hank: policy guard failed open ({reason}) — edits are UNGUARDED this session."
+            "hank: policy guard UNMEASURED ({reason}) — this edit was NOT checked, and \
+             edits like it are UNGUARDED this session."
         ));
     }
     Outcome::Allow
@@ -283,7 +311,20 @@ mod tests {
     }
 
     #[test]
-    fn a_blown_deadline_allows_the_edit() {
+    fn a_blown_deadline_allows_the_edit_but_SAYS_SO() {
+        // aegis-nz2x. Two claims, and both matter.
+        //
+        // It still ALLOWS: the fail-open contract is deliberate and stays. hank #35
+        // was a stale hank blocking every edit everywhere, and a guard that fails
+        // closed is worse than one that fails open. This test is what stops a future
+        // "make the deadline strict" change from re-paying that bill.
+        //
+        // And it is now AUDIBLE. It used to return a bare Allow — byte-identical to
+        // a clean pass — so a repo large enough to blow the budget would turn its own
+        // blast-radius rules off and nothing would say so. MEASURED against the
+        // shipped default of 100 ms: a 33k-line tree takes ~152 ms and a 69k-line
+        // tree ~313 ms, so this branch is reachable on real-sized repos, not only a
+        // hypothetical one.
         let dir = wide_repo();
         write_policy(
             dir.path(),
@@ -293,7 +334,40 @@ mod tests {
         let payload = edit_payload(dir.path(), "leaf.rs", "fn leaf() {}");
         // The same edit is denied with a real budget (see the test above), so
         // this proves the deadline — not the policy — is what let it through.
-        assert_eq!(guard(&payload, dir.path(), Some("t")), Outcome::Allow);
+        match guard(&payload, dir.path(), Some("t")) {
+            Outcome::Notify(msg) => {
+                assert!(
+                    msg.contains("deadline") || msg.contains("failed open"),
+                    "a blown deadline must name itself, got: {msg}"
+                );
+            }
+            Outcome::Allow => panic!(
+                "a blown deadline allowed the edit SILENTLY — indistinguishable from a \
+                 clean pass, which is the whole defect (aegis-nz2x)"
+            ),
+            other => panic!("a blown deadline must never block: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nothing_measurable_stays_QUIET() {
+        // The other half of the split, and it is what keeps the warning meaningful.
+        // The graph is Rust-only today (aegis-81t2), so every .py/.ts edit reaches
+        // this branch. If it warned, the first day would bury the real signal — the
+        // one above — under noise from files that were never measurable to begin with.
+        let dir = wide_repo();
+        std::fs::write(dir.path().join("notes.md"), "# hi\n").unwrap();
+        write_policy(
+            dir.path(),
+            "[hank.policy]\nmode = \"enforce\"\ndeadline_ms = 30000\n\
+             [hank.policy.scopes.t]\nmax_impacted_files = 1\n",
+        );
+        let payload = edit_payload(dir.path(), "notes.md", "# hi");
+        assert_eq!(
+            guard(&payload, dir.path(), Some("t")),
+            Outcome::Allow,
+            "an unmeasurable file is not an enforcement gap and must not warn"
+        );
     }
 
     #[test]
