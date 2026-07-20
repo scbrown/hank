@@ -26,6 +26,8 @@
 
 - [Specification](design/specification.md)
 - [Vision](design/vision.md)
+- [Governed Relations](design/governed-relations.md)
+- [Workflow-Gated Edits](design/workflow-gated-edits.md)
 
 # Operations
 
