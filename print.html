@@ -285,18 +285,22 @@ config (<code>~/.config/bobbin/config.toml</code>), then the project's
 its default.</p>
 <pre><code class="language-toml">[hank]
 base_ref = "main"
-enable_lsp = true
-enable_cpg = false
+# Restricts `hank analyze` to these languages.
 languages = ["rust", "typescript", "python", "go", "java", "cpp"]
 
 [hank.serve]
 bind_address = "127.0.0.1"
 mcp_http_port = 3040
+# When true, hank refuses mutating operations (promotion).
+read_only = false
 
 [hank.quipu]
 enabled = false
 branch_model = "named_graph"
 </code></pre>
+<p><code>enable_lsp</code>, <code>enable_cpg</code>, and the <code>[hank.tenancy]</code> limits exist but are not yet
+read — see the <a href="getting-started/../reference/config.html">Configuration Reference</a>, where each is
+marked with the phase that will honour it.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="harness-integration-claude-code-hooks"><a class="header" href="#harness-integration-claude-code-hooks">Harness Integration (Claude Code Hooks)</a></h1>
 <p>Hank can plug into an agent harness so it responds to edits <strong>synchronously</strong>,
 the way a language server reacts to a keystroke. The agent's edit tool call <em>is</em>
@@ -574,33 +578,38 @@ unspecified keys fall back to the defaults shown below.</p>
 <pre><code class="language-toml">[hank]
 # Baseline the shared read-only graph is built at.
 base_ref = "main"
-# Run the LSP tier for precise facts where a build resolves.
+# (Phase 2/3 — not yet read) Run the LSP tier for precise facts where a build resolves.
 enable_lsp = true
-# Run the CPG/dataflow tier (Phase 2).
+# (Phase 2 — not yet read) Run the CPG/dataflow tier.
 enable_cpg = false
-# Languages to extract (defaults to Bobbin's grammar set).
+# Languages to extract. RESTRICTS `hank analyze`: a file whose language is not
+# listed is not counted.
 languages = ["rust", "typescript", "python", "go", "java", "cpp"]
 
 [hank.freshness]
 # Debounce for keystroke-driven tree-sitter updates (ms).
 debounce_ms = 300
-# When to compute LSP facts: "save" | "on_demand".
+# (LSP tier — not yet read) When to compute LSP facts: "save" | "on_demand".
 lsp_on = "save"
 
 [hank.tenancy]
+# (Phase 3 — not yet read) Maximum concurrent per-tenant overlays over one base.
 max_overlays = 32
-# Symbols with fan-in above this get special frontier handling.
+# (Phase 3 — not yet read) Symbols with fan-in above this get special frontier handling.
 high_fanin_threshold = 200
-# "on_session_close" | "lru".
+# (Phase 3 — not yet read) "on_session_close" | "lru".
 overlay_eviction = "on_session_close"
 
 [hank.serve]
 bind_address = "127.0.0.1"
 # Distinct from Bobbin's server and Quipu's 3030.
 mcp_http_port = 3040
-# Write guard for the broker / promotion endpoints.
+# Write guard: when true, hank REFUSES mutating operations (promotion) with a
+# distinguishable error. The served MCP/HTTP surface is read-only regardless
+# today; this guards the write path and any future served write.
 read_only = false
 
+# (Phase 4) Quipu promotion. `promote_on` and `shapes_path` are not yet read.
 [hank.quipu]
 enabled = false
 # "commit" | "merge" | "manual".

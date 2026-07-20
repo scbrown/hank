@@ -190,18 +190,22 @@ config (<code>~/.config/bobbin/config.toml</code>), then the project's
 its default.</p>
 <pre><code class="language-toml">[hank]
 base_ref = "main"
-enable_lsp = true
-enable_cpg = false
+# Restricts `hank analyze` to these languages.
 languages = ["rust", "typescript", "python", "go", "java", "cpp"]
 
 [hank.serve]
 bind_address = "127.0.0.1"
 mcp_http_port = 3040
+# When true, hank refuses mutating operations (promotion).
+read_only = false
 
 [hank.quipu]
 enabled = false
 branch_model = "named_graph"
 </code></pre>
+<p><code>enable_lsp</code>, <code>enable_cpg</code>, and the <code>[hank.tenancy]</code> limits exist but are not yet
+read — see the <a href="../reference/config.html">Configuration Reference</a>, where each is
+marked with the phase that will honour it.</p>
 
                     </main>
 
