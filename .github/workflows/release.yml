@@ -62,15 +62,24 @@ jobs:
           # release that discards a good binary because an API blipped is a
           # publish step that fails for reasons unrelated to the artifact — so
           # retry with backoff before giving up.
+          # Be patient: a tag fires this workflow once, so giving up early
+          # strands the release behind a blip that has already passed. v0.1.0's
+          # second run burned all 5 attempts inside a ~4min uploads.github.com
+          # 503/504 window and failed with a perfectly good binary in hand; the
+          # same job re-run untouched published first try. Backoff caps at 60s
+          # and runs ~9min total — longer than the outages actually observed,
+          # still bounded so a real failure doesn't hang the runner.
           retry() {
-            local n=1
+            local n=1 max=12 delay
             until "$@"; do
-              if [ "$n" -ge 5 ]; then
+              if [ "$n" -ge "$max" ]; then
                 echo "::error::giving up after $n attempts: $*"
                 return 1
               fi
-              echo "attempt $n failed: $* — retrying in $((n * 15))s"
-              sleep $((n * 15))
+              delay=$((n * 15))
+              [ "$delay" -gt 60 ] && delay=60
+              echo "attempt $n failed: $* — retrying in ${delay}s"
+              sleep "$delay"
               n=$((n + 1))
             done
           }
