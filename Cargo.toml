@@ -118,10 +118,14 @@ langs-extra = [
     "dep:tree-sitter-java",
     "dep:tree-sitter-cpp",
 ]
-# Phase 2: CPG + dataflow (Joern boundary or Rust-native traversals).
-cpg = []
-# Phase 2/1: LSP-precise facts where a build resolves.
-lsp = []
+# NB: the `cpg` (FR-7) and `lsp` (FR-2) tiers are NOT Cargo features yet. They
+# were `cpg = []` / `lsp = []` — EMPTY features that gated no code, so building
+# `--features lsp` produced a binary whose `hank status` advertised a precision
+# tier it did not have while every fact stayed tree-sitter (aegis-qe5z). A feature
+# that can be enabled without the code existing is a way to advertise a lie, so it
+# is removed until it gates a real extractor. When the LSP or CPG tier lands,
+# re-introduce the feature HERE alongside the code it gates AND add the tier to
+# `Tier::served()` (src/types.rs) — the two must move together.
 # Phase 4: promote committed facts into Quipu, SHACL-validated.
 quipu = ["dep:oxrdf", "dep:oxttl", "dep:oxrdfio", "dep:rudof_lib"]
 

@@ -17,7 +17,7 @@ use tracing_subscriber::EnvFilter;
 use crate::cli_cmds;
 use crate::config::HankConfig;
 use crate::extract::{extract_symbols, rust_files};
-use crate::types::Symbol;
+use crate::types::{Symbol, Tier};
 
 /// Hank — live, per-tenant code structure for the Bobbin × Quipu stack.
 #[derive(Debug, Parser)]
@@ -483,7 +483,7 @@ impl Cli {
                 "base_ref": config.base_ref,
                 "base_commit": base_commit,
                 "tenant": tenant,
-                "tiers": tier_availability(),
+                "tiers": Tier::served(),
                 "quipu": { "enabled": config.quipu.enabled, "branch_model": config.quipu.branch_model },
                 "policy": policy,
                 // The signed rule set (aegis-hac0) does not exist yet; report its
@@ -502,7 +502,7 @@ impl Cli {
             println!("  base ref    : {}", config.base_ref);
             println!("  base commit : {commit}");
             println!("  tenant      : {tenant}");
-            println!("  tiers       : {}", tier_availability().join(", "));
+            println!("  tiers       : {}", Tier::served().join(", "));
             println!(
                 "  quipu       : enabled={} branch_model={}",
                 config.quipu.enabled, config.quipu.branch_model
@@ -619,18 +619,6 @@ fn print_policy_status(policy: &crate::policy::PolicyStatus) {
         "  rule set    : {} (local config only)",
         "none — never loaded".yellow()
     );
-}
-
-/// The extraction tiers this build can serve.
-fn tier_availability() -> Vec<String> {
-    let mut tiers = vec!["treesitter".to_string()];
-    if cfg!(feature = "lsp") {
-        tiers.push("lsp".to_string());
-    }
-    if cfg!(feature = "cpg") {
-        tiers.push("cpg".to_string());
-    }
-    tiers
 }
 
 /// Initialize the tracing subscriber (logs to stderr).

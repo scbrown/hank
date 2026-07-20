@@ -7,9 +7,12 @@ mistakes an approximation for ground truth.
 ## Tier — how a fact was derived
 
 - `treesitter` — fast, build-free, approximate. Always-on breadth; works on a
-  syntactically-broken buffer.
-- `lsp` — precise defs/refs/types where a build resolves.
-- `cpg` — control/data dependence from the code property graph (Phase 2).
+  syntactically-broken buffer. **This is the only tier served today** — every fact
+  Hank currently produces is `treesitter`, and `hank status` advertises only it.
+- `lsp` — precise defs/refs/types where a build resolves. *Planned (FR-2); not yet
+  implemented or served.*
+- `cpg` — control/data dependence from the code property graph. *Planned (Phase 2,
+  FR-7); not yet implemented or served.*
 
 ## Freshness — how current a fact is
 
@@ -17,6 +20,8 @@ mistakes an approximation for ground truth.
 - `stale` — known to be behind a pending edit.
 - `recomputing` — a recompute is in flight.
 
-Tree-sitter structure updates on save or debounced keystroke; LSP/CPG facts
-update on save or on demand. Agents that need certainty ask for `lsp`/`cpg`
-tiers; agents that need breadth take `treesitter` and know it.
+Tree-sitter structure updates on save or debounced keystroke. Once the LSP and
+CPG tiers land, agents that need certainty will ask for `lsp`/`cpg` and agents
+that need breadth will take `treesitter` and know it — but today only
+`treesitter` is served, so a fact's tier tells you which of these you actually
+got, never a precision the build cannot provide.
