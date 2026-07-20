@@ -194,8 +194,8 @@ COMMANDS:
     impact      Blast radius; --cochange reconciles against history (FR-11)
     dataflow    Intra-procedural data dependence within a function
     export      Emit the referential structure as Turtle (bobbin: ontology)
-    hook        Harness hook adapter (reads hook payload on stdin)
-    verify      Verdict on a proposed edit buffer                 [Phase 5]
+    hook        Harness hook adapter (post-edit advisory / pre-edit guard)
+    verify      Verdict on a proposed edit buffer (FR-23/FR-24)
     promote     Promote a commit's structural facts into Quipu    [Phase 4]
     status      Show base commit, tiers, and configuration
     completions Generate shell completions
@@ -218,6 +218,32 @@ hank communities src --json         # symbol clusters, largest-first
 hank verify --file src/auth.rs --buffer /tmp/edited.rs
 hank promote --commit HEAD
 </code></pre>
+<h2 id="hank-verify"><a class="header" href="#hank-verify"><code>hank verify</code></a></h2>
+<p>Checks a <em>proposed</em> buffer against the graph Hank already holds and returns a
+boolean verdict plus violations (FR-23/FR-24). Exits <strong>non-zero</strong> when the buffer
+has violations, so scripts and CI can gate on it.</p>
+<pre><code class="language-console">$ hank verify --file src/a.rs --buffer /tmp/proposed.rs
+violations src/a.rs [TreeSitter]
+  ghost:2 `ghost` is called here but is defined nowhere in this buffer or the
+          project graph, and is not brought into scope by a `use`.
+  takes_two:2 `takes_two` is called with 1 argument(s) but is defined at line 1
+          taking 2.
+</code></pre>
+<p>Only violations the edit <em>introduces</em> are reported: the file's current contents
+are the baseline, so pre-existing breakage is not blamed on this edit.</p>
+<p><strong>Read the <code>unchecked</code> list before trusting a clean verdict.</strong> At the tree-sitter
+tier there is no type information and no name resolution, so:</p>
+<div class="table-wrapper"><table><thead><tr><th>Violation (FR-23)</th><th>At this tier</th></tr></thead><tbody>
+<tr><td><code>identifier-does-not-exist</code></td><td>free calls only, and only ones the edit introduces</td></tr>
+<tr><td><code>wrong-arity</code></td><td>free calls resolving to exactly one known definition</td></tr>
+<tr><td><code>unresolved-import</code></td><td>bodiless <code>mod foo;</code> with no sibling file</td></tr>
+<tr><td><code>type-violation</code></td><td><strong>not checked</strong> — needs the LSP tier</td></tr>
+</tbody></table>
+</div>
+<p>The bias is against false positives throughout: method calls, path-qualified
+calls, imports, locals, closures, and function-typed parameters are all left
+alone rather than guessed at. <code>ok: true</code> means "nothing this tier can see is
+wrong", not "this compiles".</p>
 <p><code>hank status</code> resolves the configured <code>base_ref</code> (default <code>main</code>) to a concrete
 commit via the system <code>git</code>; outside a git repository the base commit shows as
 unresolved and Hank falls back to the working tree.</p>
