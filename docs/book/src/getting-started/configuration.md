@@ -11,15 +11,20 @@ its default.
 ```toml
 [hank]
 base_ref = "main"
-enable_lsp = true
-enable_cpg = false
+# Restricts `hank analyze` to these languages.
 languages = ["rust", "typescript", "python", "go", "java", "cpp"]
 
 [hank.serve]
 bind_address = "127.0.0.1"
 mcp_http_port = 3040
+# When true, hank refuses mutating operations (promotion).
+read_only = false
 
 [hank.quipu]
 enabled = false
 branch_model = "named_graph"
 ```
+
+`enable_lsp`, `enable_cpg`, and the `[hank.tenancy]` limits exist but are not yet
+read — see the [Configuration Reference](../reference/config.md), where each is
+marked with the phase that will honour it.

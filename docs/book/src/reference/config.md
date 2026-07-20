@@ -7,33 +7,38 @@ unspecified keys fall back to the defaults shown below.
 [hank]
 # Baseline the shared read-only graph is built at.
 base_ref = "main"
-# Run the LSP tier for precise facts where a build resolves.
+# (Phase 2/3 — not yet read) Run the LSP tier for precise facts where a build resolves.
 enable_lsp = true
-# Run the CPG/dataflow tier (Phase 2).
+# (Phase 2 — not yet read) Run the CPG/dataflow tier.
 enable_cpg = false
-# Languages to extract (defaults to Bobbin's grammar set).
+# Languages to extract. RESTRICTS `hank analyze`: a file whose language is not
+# listed is not counted.
 languages = ["rust", "typescript", "python", "go", "java", "cpp"]
 
 [hank.freshness]
 # Debounce for keystroke-driven tree-sitter updates (ms).
 debounce_ms = 300
-# When to compute LSP facts: "save" | "on_demand".
+# (LSP tier — not yet read) When to compute LSP facts: "save" | "on_demand".
 lsp_on = "save"
 
 [hank.tenancy]
+# (Phase 3 — not yet read) Maximum concurrent per-tenant overlays over one base.
 max_overlays = 32
-# Symbols with fan-in above this get special frontier handling.
+# (Phase 3 — not yet read) Symbols with fan-in above this get special frontier handling.
 high_fanin_threshold = 200
-# "on_session_close" | "lru".
+# (Phase 3 — not yet read) "on_session_close" | "lru".
 overlay_eviction = "on_session_close"
 
 [hank.serve]
 bind_address = "127.0.0.1"
 # Distinct from Bobbin's server and Quipu's 3030.
 mcp_http_port = 3040
-# Write guard for the broker / promotion endpoints.
+# Write guard: when true, hank REFUSES mutating operations (promotion) with a
+# distinguishable error. The served MCP/HTTP surface is read-only regardless
+# today; this guards the write path and any future served write.
 read_only = false
 
+# (Phase 4) Quipu promotion. `promote_on` and `shapes_path` are not yet read.
 [hank.quipu]
 enabled = false
 # "commit" | "merge" | "manual".

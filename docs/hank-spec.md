@@ -968,18 +968,18 @@ Bobbin defines (e.g. `BOBBIN_ROLE` for tenant identity, reused).
 base_ref = "main"
 
 # Which extraction tiers to run.
-enable_lsp = true          # LSP precision where a build resolves
-enable_cpg = false         # Phase 2: CPG/dataflow
+enable_lsp = true          # (Phase 2/3 — not yet read) LSP precision where a build resolves
+enable_cpg = false         # (Phase 2 — not yet read) CPG/dataflow
 
-# Languages (default = Bobbin's grammar set).
+# Languages (default = Bobbin's grammar set). RESTRICTS `hank analyze`.
 languages = ["rust", "typescript", "python", "go", "java", "cpp"]
 
 [hank.freshness]
 # Debounce keystroke-driven tree-sitter updates (ms); LSP/CPG on save/on-demand.
 debounce_ms = 300
-lsp_on = "save"            # "save" | "on_demand"
+lsp_on = "save"            # (LSP tier — not yet read) "save" | "on_demand"
 
-[hank.tenancy]
+[hank.tenancy]                          # (Phase 3 — none of these keys are read yet)
 max_overlays = 32
 # Symbols with fan-in above this get special frontier handling (§14.2).
 high_fanin_threshold = 200
@@ -988,13 +988,13 @@ overlay_eviction = "on_session_close"   # "on_session_close" | "lru"
 [hank.serve]
 bind_address = "127.0.0.1"
 mcp_http_port = 3040       # distinct from Bobbin's server and Quipu's 3030
-read_only = false          # broker/promotion write guard (http_auth pattern)
+read_only = false          # write guard: when true, hank REFUSES mutating operations (promotion)
 
-[hank.quipu]               # promotion target (feature = "quipu")
+[hank.quipu]               # (Phase 4) promotion target (feature = "quipu")
 enabled = false
-promote_on = "merge"       # "commit" | "merge" | "manual"
+promote_on = "merge"       # (Phase 4 — not yet read) "commit" | "merge" | "manual"
 branch_model = "named_graph" # §9.4: "named_graph" (preferred, needs Quipu quads) | "qualifier" (fallback)
-shapes_path = "shapes/"    # code-entities.ttl (+ code-edges.ttl)
+shapes_path = "shapes/"    # (Phase 4 — not yet read) code-entities.ttl (+ code-edges.ttl)
 ```
 
 ---

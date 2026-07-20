@@ -277,6 +277,13 @@ impl Cli {
                 cli_cmds::verify(self.json, self.quiet, file, buffer)
             }
             Commands::Promote { .. } => {
+                // THE WRITE GUARD, made real (aegis-ltjo). Promotion is the write
+                // hank performs, so `serve.read_only` must refuse it — BEFORE the
+                // stub does anything, so the guard is honoured even while the
+                // operation itself is a Phase-4 placeholder. This is the check the
+                // config claimed and did not perform.
+                let root = std::env::current_dir()?;
+                self.load_config(&root)?.write_guard("promotion")?;
                 self.planned(
                     "promote",
                     4,
@@ -291,9 +298,13 @@ impl Cli {
     /// the summary from the git tree at that ref (the FR-13 base) rather than
     /// the working tree.
     fn analyze(&self, path: &Path, at: Option<&str>) -> anyhow::Result<()> {
+        // The `languages` key becomes real here (aegis-ltjo): analysis is
+        // restricted to the configured set instead of always extracting every
+        // compiled grammar. Discovery roots at the analyze target.
+        let languages = self.load_config(path)?.languages;
         let (files, symbols) = match at {
-            Some(reference) => Self::analyze_at_ref(path, reference)?,
-            None => Self::analyze_working_tree(path)?,
+            Some(reference) => Self::analyze_at_ref(path, reference, &languages)?,
+            None => Self::analyze_working_tree(path, &languages)?,
         };
 
         if self.json {
@@ -313,20 +324,25 @@ impl Cli {
         Ok(())
     }
 
-    /// Count files and symbols across the working tree under `path`.
-    fn analyze_working_tree(path: &Path) -> anyhow::Result<(usize, usize)> {
+    /// Count files and symbols across the working tree under `path`, restricted
+    /// to the configured `languages` (aegis-ltjo).
+    fn analyze_working_tree(path: &Path, languages: &[String]) -> anyhow::Result<(usize, usize)> {
         let mut files = 0usize;
         let mut symbols = 0usize;
-        for file in rust_files(path) {
+        for (file, language) in crate::extract::source_files_in(path, languages) {
             let source = std::fs::read_to_string(&file)?;
             files += 1;
-            symbols += extract_symbols(&source, "rust")?.len();
+            symbols += extract_symbols(&source, language)?.len();
         }
         Ok((files, symbols))
     }
 
     /// Count files and symbols in the git tree at `reference` (the FR-13 base).
-    fn analyze_at_ref(path: &Path, reference: &str) -> anyhow::Result<(usize, usize)> {
+    fn analyze_at_ref(
+        path: &Path,
+        reference: &str,
+        languages: &[String],
+    ) -> anyhow::Result<(usize, usize)> {
         let root = std::env::current_dir()?;
         // REFUSE rather than report an empty baseline. `analyze --at no-such-ref`
         // printed "0 file(s), 0 symbol(s)" and exited 0, which is what a ref
@@ -348,14 +364,25 @@ impl Cli {
         let mut files = 0usize;
         let mut symbols = 0usize;
         for file in crate::git::list_files_at(&root, reference) {
-            if file.extension().is_none_or(|e| e != "rs") || !file.starts_with(prefix) {
+            if !file.starts_with(prefix) {
                 continue;
             }
+            // Honour the configured languages instead of hardcoding Rust: a file
+            // whose extension maps to no compiled grammar, or to one the config
+            // excludes, is skipped (aegis-ltjo).
+            let Some(language) = file
+                .extension()
+                .and_then(std::ffi::OsStr::to_str)
+                .and_then(crate::extract::language_for_extension)
+                .filter(|lang| languages.iter().any(|a| a == lang))
+            else {
+                continue;
+            };
             let Some(source) = crate::git::read_blob_at(&root, reference, &file) else {
                 continue;
             };
             files += 1;
-            symbols += extract_symbols(&source, "rust")?.len();
+            symbols += extract_symbols(&source, language)?.len();
         }
         Ok((files, symbols))
     }
