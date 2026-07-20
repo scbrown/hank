@@ -204,10 +204,19 @@ COMMANDS:
 GLOBAL FLAGS:
     --json      Machine-readable output
     --quiet     Suppress non-essential output
-    --verbose   Detailed progress
+    --verbose   Raise the default log level to debug (RUST_LOG still wins)
     --tenant    Tenant/session id (default: single-tenant)
-    --config    Path to config file
+    --config    Path to config file (replaces discovery; must exist)
 </code></pre>
+<p><code>--config &lt;path&gt;</code> <strong>replaces</strong> config discovery rather than adding to it: it
+loads exactly that file over the compiled defaults, and the ambient
+<code>.bobbin/config.toml</code> is not consulted (FR-29 ranks a flag above project and
+user config). A <code>--config</code> path that does not exist is a loud error, never a
+silent fall-back to discovery — so pointing the pre-edit guard at a scope file
+with a mistyped path fails visibly instead of quietly enforcing the wrong scope.</p>
+<p><code>--verbose</code> raises the default tracing level from <code>info</code> to <code>debug</code>. <code>RUST_LOG</code>,
+when set, still wins and can target individual modules, so the precedence is
+<code>RUST_LOG</code> &gt; <code>--verbose</code> &gt; the <code>info</code> default.</p>
 <h2 id="examples"><a class="header" href="#examples">Examples</a></h2>
 <pre><code class="language-bash">hank analyze src
 hank analyze src --at main     # structure of the tree at a baseline commit (FR-13)
