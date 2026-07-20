@@ -147,7 +147,7 @@ pub fn system_message(message: &str) -> String {
 /// to ignore it. When no session id is available, or the marker cannot be
 /// written, the notice is allowed through: over-warning beats silence.
 #[must_use]
-pub fn first_notice_for_session(session: Option<&str>) -> bool {
+pub fn first_notice_for_session(session: Option<&str>, kind: &str) -> bool {
     let Some(session) = session else {
         return true;
     };
@@ -160,7 +160,17 @@ pub fn first_notice_for_session(session: Option<&str>) -> bool {
     if safe.is_empty() {
         return true;
     }
-    let marker = std::env::temp_dir().join(format!("hank-guard-failopen-{safe}"));
+    // KEYED ON THE KIND OF GAP, not the session alone. With one marker per session
+    // the FIRST fail-open of any kind silenced every later, DIFFERENT one: an
+    // unreadable config in one repo would consume the marker, and a blown blast-radius
+    // deadline in another repo in the same session then said nothing — the mechanism
+    // whose whole job is making gaps visible, suppressing a gap it had never reported.
+    let kind_safe: String = kind
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(80)
+        .collect();
+    let marker = std::env::temp_dir().join(format!("hank-guard-failopen-{safe}-{kind_safe}"));
     match std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -245,12 +255,26 @@ mod tests {
     #[test]
     fn fail_open_notice_fires_once_per_session() {
         let session = format!("test-{}", std::process::id());
-        assert!(first_notice_for_session(Some(&session)));
-        assert!(!first_notice_for_session(Some(&session)));
-        let _ = std::fs::remove_file(
-            std::env::temp_dir().join(format!("hank-guard-failopen-{session}")),
-        );
+        assert!(first_notice_for_session(Some(&session), "config"));
+        assert!(!first_notice_for_session(Some(&session), "config"));
+        // A DIFFERENT kind of gap in the same session must still warn — the whole
+        // point of keying on kind. Before, this returned false and the second gap
+        // went silent.
+        assert!(first_notice_for_session(Some(&session), "deadline-src/a.rs"));
+        assert!(!first_notice_for_session(Some(&session), "deadline-src/a.rs"));
+        // ... and a deadline in a DIFFERENT file is a different gap again.
+        assert!(first_notice_for_session(Some(&session), "deadline-src/b.rs"));
+        for kind in ["config", "deadline-src/a.rs", "deadline-src/b.rs"] {
+            let safe_kind: String = kind
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                .take(80)
+                .collect();
+            let _ = std::fs::remove_file(
+                std::env::temp_dir().join(format!("hank-guard-failopen-{session}-{safe_kind}")),
+            );
+        }
         // Without a session id we cannot rate-limit, so we always warn.
-        assert!(first_notice_for_session(None));
+        assert!(first_notice_for_session(None, "config"));
     }
 }
