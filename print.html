@@ -330,10 +330,36 @@ Impacted files: src/api/login.rs, src/api/session.rs
 </code></pre>
 <p>The advisory is emitted only when there is cross-file impact, and the hook never
 fails the harness (no output = nothing to say).</p>
-<h2 id="pre-edit-guard-planned-phase-5"><a class="header" href="#pre-edit-guard-planned-phase-5">Pre-edit guard (planned, Phase 5)</a></h2>
-<p><code>hank hook pre-edit</code> (<code>PreToolUse</code>) will verify the <em>proposed</em> buffer before the
-edit lands and — for capability-scoped agents — optionally block it with a
-reason. Blocking is opt-in; the default stays advisory.</p>
+<h2 id="pre-edit-guard-available-now"><a class="header" href="#pre-edit-guard-available-now">Pre-edit guard (available now)</a></h2>
+<p><code>hank hook pre-edit</code> (<code>PreToolUse</code>) checks an edit <em>before</em> it lands against the
+calling tenant's capability scope, and can <strong>deny</strong> it with a reason the model
+can act on. Blocking is <strong>opt-in and off by default</strong>.</p>
+<pre><code class="language-json">{
+  "env": { "BOBBIN_ROLE": "polecat-3" },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "hank hook pre-edit", "timeout": 5 }
+        ]
+      }
+    ]
+  }
+}
+</code></pre>
+<p>With a scope configured for that tenant (see
+<a href="getting-started/../reference/config.html">Configuration</a>), an over-reaching edit comes back as:</p>
+<pre><code class="language-text">hank: editing `src/core.rs` reaches 4 symbols (ceiling 2) and 4 files
+(ceiling 1) — beyond the blast radius allowed for tenant `polecat-demo`.
+Split this into a narrower change that touches fewer callers, or ask for a
+wider capability scope. (tree-sitter tier: the reach is an approximation.)
+</code></pre>
+<p>The guard <strong>always fails open</strong>: every error, timeout, and unparseable payload
+allows the edit, because a guard that fails closed would brick every agent the
+moment Hank is unavailable. Read
+<a href="getting-started/../reference/policy-guard.html">the full contract</a> before wiring it into a fleet
+— particularly the rules that allow is <em>silence</em> and that Hank never exits <code>2</code>.</p>
 <h2 id="performance-note"><a class="header" href="#performance-note">Performance note</a></h2>
 <p>This prototype builds the call graph transiently on each invocation. Once the
 Phase-3 resident per-tenant overlay lands, the hook becomes a thin client of the
@@ -542,7 +568,26 @@ promote_on = "merge"
 # "named_graph" (preferred, needs Quipu quads) | "qualifier" (fallback).
 branch_model = "named_graph"
 shapes_path = "shapes/"
+
+[hank.policy]
+# "off" (inert) | "advise" (report only) | "enforce" (deny).
+mode = "off"
+# Wall-clock budget for the whole pre-edit guard (ms). Expiry =&gt; allow.
+deadline_ms = 100
+# Warn the user, once per session, when the guard fails open.
+notify_on_fail_open = true
+# How far to follow the call graph when sizing an edit.
+max_hops = 5
+
+# Per-tenant capability scopes, keyed by tenant/role id. A tenant with no entry
+# is unconstrained. See "Pre-Edit Policy Guard" for the full contract.
+[hank.policy.scopes.polecat-3]
+allow_paths = ["src/**", "tests/**"]   # empty = any path
+deny_paths = ["src/config.rs"]         # beats allow_paths
+max_impacted_symbols = 25
+max_impacted_files = 10
 </code></pre>
+<p>An unrecognized <code>mode</code> is a config <strong>error</strong>, not a silently inert guard.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="mcp-tools"><a class="header" href="#mcp-tools">MCP Tools</a></h1>
 <p>Hank exposes its capabilities as MCP tools (over stdio and streamable-HTTP) and
 a parallel HTTP API. Tools use the <code>hank_*</code> naming convention, alongside
@@ -574,6 +619,151 @@ hank serve --http     # streamable-HTTP at http://127.0.0.1:3040/mcp
 </div>
 <p>Every response carries a <code>tier</code> tag; structure-reading requests will accept a
 <code>tenant</code> parameter as multi-tenancy lands (Phase 3).</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="the-pre-edit-policy-guard--integration-contract"><a class="header" href="#the-pre-edit-policy-guard--integration-contract">The Pre-Edit Policy Guard — Integration Contract</a></h1>
+<p><code>hank hook pre-edit</code> is a Claude Code <strong><code>PreToolUse</code></strong> hook that can <strong>deny</strong> an
+edit whose blast radius or target path exceeds the calling agent's capability
+scope (spec §5.8, FR-25/FR-30).</p>
+<p>This page is the <strong>normative contract</strong> for harness integrators (Gas Town
+shantytown emits this hook per role/card). It is versioned with the binary: if
+any clause below changes, the change lands here in the same commit.</p>
+<p>Blocking is <strong>opt-in and off by default</strong>. A wrong hard-deny is worse than no
+guard at all.</p>
+<h2 id="a-input--the-payload-on-stdin"><a class="header" href="#a-input--the-payload-on-stdin">(a) Input — the payload on stdin</a></h2>
+<p>The hook reads one JSON object on stdin, the standard Claude Code <code>PreToolUse</code>
+payload:</p>
+<pre><code class="language-json">{
+  "session_id": "abc123",
+  "transcript_path": "/home/agent/.claude/projects/.../session.jsonl",
+  "cwd": "/home/agent/work/repo",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/home/agent/work/repo/src/graph/blast.rs",
+    "old_string": "...",
+    "new_string": "..."
+  }
+}
+</code></pre>
+<p>Hank reads <code>cwd</code>, <code>tool_name</code>, and <code>tool_input</code>; everything else is ignored but
+tolerated. <code>tool_input</code> shape by tool:</p>
+<div class="table-wrapper"><table><thead><tr><th>Tool</th><th>Fields Hank uses</th></tr></thead><tbody>
+<tr><td><code>Edit</code></td><td><code>file_path</code>, <code>old_string</code>, <code>new_string</code></td></tr>
+<tr><td><code>Write</code></td><td><code>file_path</code>, <code>content</code></td></tr>
+<tr><td><code>MultiEdit</code></td><td><code>file_path</code>, <code>edits[].old_string</code>, <code>edits[].new_string</code></td></tr>
+</tbody></table>
+</div>
+<p>Every field is optional as far as the parser is concerned. <strong>A payload Hank
+cannot parse, or one naming a file in no known language, is an ALLOW</strong> — the
+guard only ever speaks up about edits it genuinely understands.</p>
+<h2 id="b-output--allow-and-deny"><a class="header" href="#b-output--allow-and-deny">(b) Output — allow and deny</a></h2>
+<p><strong>ALLOW: exit <code>0</code> with empty stdout.</strong> This is the overwhelmingly common path.</p>
+<p>The guard <strong>never emits <code>permissionDecision: "allow"</code>.</strong> That value suppresses
+the user's <em>own</em> permission prompt, and a structural guard has no business
+granting permission it was not asked about. The guard may only ever <em>subtract</em>
+permission, never add it. Staying silent leaves Claude Code's normal permission
+flow exactly as it found it.</p>
+<p><strong>DENY: exit <code>0</code> and print this object on stdout:</strong></p>
+<pre><code class="language-json">{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "hank: edit to src/graph/blast.rs exceeds the blast-radius ceiling for tenant `polecat-3` (impacts 47 symbols across 12 files; ceiling is 25/10). Narrow the change, or request a wider capability scope."
+  }
+}
+</code></pre>
+<p><code>permissionDecisionReason</code> is fed back to the model, so it is written for a
+model to act on: what was exceeded, by how much, and what to do instead.</p>
+<p><strong>Hank never exits <code>2</code>.</strong> Exit <code>2</code> is Claude Code's fail-<em>closed</em> channel
+(block, stderr to the model). Reserving it means no Hank crash path can ever
+hard-block an agent — a panic exits <code>101</code>, which Claude Code treats as a
+non-blocking error and the tool call proceeds.</p>
+<h2 id="c-latency--the-sub-100ms-budget"><a class="header" href="#c-latency--the-sub-100ms-budget">(c) Latency — the sub-100ms budget</a></h2>
+<p>The hook is synchronous in the agent's loop (FR-31). Hank enforces its <strong>own</strong>
+wall-clock deadline, <code>[hank.policy] deadline_ms</code> (default <strong>100</strong>). When the
+deadline expires, the in-flight analysis is abandoned and the edit is
+<strong>allowed</strong>.</p>
+<p>Do not rely on the harness <code>timeout</code> field for this: it is expressed in whole
+seconds and defaults to ten minutes — three orders of magnitude past the budget.
+Set it anyway as a backstop (<code>"timeout": 5</code>), but the real deadline is Hank's.</p>
+<p>Until the Phase-3 resident daemon lands (FR-31), the guard builds the call graph
+transiently and will exceed 100ms on large trees — which, by the rule above,
+means it fails open. That is the intended degradation, not a bug: the guard gets
+teeth on big repos when the daemon does.</p>
+<h2 id="d-fail-open--non-negotiable"><a class="header" href="#d-fail-open--non-negotiable">(d) Fail open — non-negotiable</a></h2>
+<p><strong>Every failure mode allows the edit.</strong> The harness launches every crew agent
+through this hook; a guard that fails closed bricks the fleet the moment Hank is
+unavailable.</p>
+<div class="table-wrapper"><table><thead><tr><th>Failure</th><th>Result</th></tr></thead><tbody>
+<tr><td><code>hank</code> not on <code>PATH</code></td><td>Claude Code non-blocking error → edit proceeds</td></tr>
+<tr><td>Hank panics</td><td>exit <code>101</code> → non-blocking error → edit proceeds</td></tr>
+<tr><td>Deadline exceeded</td><td>exit <code>0</code>, silent → edit proceeds</td></tr>
+<tr><td>Daemon unreachable, unreadable config, unparseable payload</td><td>exit <code>0</code> + loud line → edit proceeds</td></tr>
+<tr><td>Policy says deny</td><td>exit <code>0</code> + deny JSON → <strong>edit blocked</strong></td></tr>
+</tbody></table>
+</div>
+<h3 id="loud-means-systemmessage-not-stderr"><a class="header" href="#loud-means-systemmessage-not-stderr">"Loud" means <code>systemMessage</code>, not stderr</a></h3>
+<p>A hook's stderr is shown <strong>only when it exits <code>2</code></strong>; on exit <code>0</code> it goes to the
+debug log, where nobody looks. So a fail-open that only wrote to stderr would be
+silent in practice — exactly the failure this clause exists to prevent.</p>
+<p>Hank therefore writes the stderr line <em>and</em> emits a user-visible
+<code>systemMessage</code>:</p>
+<pre><code class="language-json">{ "systemMessage": "hank: policy guard failed open (daemon unreachable) — edits are UNGUARDED this session." }
+</code></pre>
+<p>No <code>hookSpecificOutput</code> accompanies it, so the edit is untouched. The message is
+emitted <strong>once per <code>session_id</code></strong> (tracked by a marker file under the system temp
+directory), because a per-edit warning on a down daemon trains agents and humans
+alike to ignore it.</p>
+<h2 id="registration"><a class="header" href="#registration">Registration</a></h2>
+<pre><code class="language-json">{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "hank hook pre-edit", "timeout": 5 }
+        ]
+      }
+    ]
+  }
+}
+</code></pre>
+<p>The tenant whose scope applies is resolved from <code>--tenant</code>, falling back to the
+<code>BOBBIN_ROLE</code> environment variable. Shantytown sets <code>BOBBIN_ROLE</code> per agent, so
+one hook registration serves every role.</p>
+<h2 id="policy-configuration"><a class="header" href="#policy-configuration">Policy configuration</a></h2>
+<p>Policy lives in the shared <code>.bobbin/config.toml</code> under <code>[hank.policy]</code>, with the
+usual resolution order (project &gt; user &gt; defaults).</p>
+<pre><code class="language-toml">[hank.policy]
+# off     — the guard is inert (default)
+# advise  — compute and report violations, but never deny
+# enforce — deny violations
+mode = "off"
+deadline_ms = 100
+notify_on_fail_open = true
+
+# Per-tenant capability scopes, keyed by tenant/role id.
+[hank.policy.scopes.polecat-3]
+allow_paths = ["src/**", "tests/**"]
+deny_paths = ["src/config.rs"]
+max_impacted_symbols = 25
+max_impacted_files = 10
+</code></pre>
+<p>A tenant with no scope entry is unconstrained. <code>deny_paths</code> beats <code>allow_paths</code>.
+Path patterns are globs matched against the repo-relative path.</p>
+<p>With <code>mode = "advise"</code> the guard reports what it <em>would</em> have denied via
+<code>systemMessage</code> and never blocks — run a new scope in <code>advise</code> for a while
+before promoting it to <code>enforce</code>.</p>
+<h2 id="what-the-guard-checks"><a class="header" href="#what-the-guard-checks">What the guard checks</a></h2>
+<ol>
+<li><strong>Path scope</strong> (FR-25) — is the edited file inside this tenant's writable
+capability scope?</li>
+<li><strong>Blast radius</strong> (FR-12/FR-25) — do the symbols the edit touches transitively
+affect more symbols or files than the scope permits?</li>
+</ol>
+<p>Both are computed at the <strong>tree-sitter tier</strong> against the <em>requesting tenant's</em>
+graph, and every verdict carries that tier tag (FR-3). A tree-sitter blast radius
+is an approximation; the ceilings should be set with that in mind.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="specification"><a class="header" href="#specification">Specification</a></h1>
 <p>The full PRD-style build specification lives at the repository root:</p>
 <ul>
