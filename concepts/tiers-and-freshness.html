@@ -188,9 +188,12 @@ mistakes an approximation for ground truth.</p>
 <h2 id="tier--how-a-fact-was-derived"><a class="header" href="#tier--how-a-fact-was-derived">Tier — how a fact was derived</a></h2>
 <ul>
 <li><code>treesitter</code> — fast, build-free, approximate. Always-on breadth; works on a
-syntactically-broken buffer.</li>
-<li><code>lsp</code> — precise defs/refs/types where a build resolves.</li>
-<li><code>cpg</code> — control/data dependence from the code property graph (Phase 2).</li>
+syntactically-broken buffer. <strong>This is the only tier served today</strong> — every fact
+Hank currently produces is <code>treesitter</code>, and <code>hank status</code> advertises only it.</li>
+<li><code>lsp</code> — precise defs/refs/types where a build resolves. <em>Planned (FR-2); not yet
+implemented or served.</em></li>
+<li><code>cpg</code> — control/data dependence from the code property graph. <em>Planned (Phase 2,
+FR-7); not yet implemented or served.</em></li>
 </ul>
 <h2 id="freshness--how-current-a-fact-is"><a class="header" href="#freshness--how-current-a-fact-is">Freshness — how current a fact is</a></h2>
 <ul>
@@ -198,9 +201,11 @@ syntactically-broken buffer.</li>
 <li><code>stale</code> — known to be behind a pending edit.</li>
 <li><code>recomputing</code> — a recompute is in flight.</li>
 </ul>
-<p>Tree-sitter structure updates on save or debounced keystroke; LSP/CPG facts
-update on save or on demand. Agents that need certainty ask for <code>lsp</code>/<code>cpg</code>
-tiers; agents that need breadth take <code>treesitter</code> and know it.</p>
+<p>Tree-sitter structure updates on save or debounced keystroke. Once the LSP and
+CPG tiers land, agents that need certainty will ask for <code>lsp</code>/<code>cpg</code> and agents
+that need breadth will take <code>treesitter</code> and know it — but today only
+<code>treesitter</code> is served, so a fact's tier tells you which of these you actually
+got, never a precision the build cannot provide.</p>
 
                     </main>
 
