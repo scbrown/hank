@@ -63,7 +63,7 @@ pub fn guard(input_json: &str, default_root: &Path, tenant: Option<&str>) -> Out
 
     let config = match HankConfig::load(&root) {
         Ok(config) => config,
-        Err(e) => return fail_open(&input, &format!("unreadable config ({e})")),
+        Err(e) => return fail_open(&input, "config", &format!("unreadable config ({e})")),
     };
 
     // No scope for this tenant — mode is off, or the tenant is unconstrained.
@@ -81,6 +81,7 @@ pub fn guard(input_json: &str, default_root: &Path, tenant: Option<&str>) -> Out
             .collect();
         return fail_open(
             &input,
+            "globs",
             &format!(
                 "scope for tenant `{tenant}` has malformed path globs: {}",
                 detail.join(", ")
@@ -125,6 +126,8 @@ pub fn guard(input_json: &str, default_root: &Path, tenant: Option<&str>) -> Out
         Measured::TimedOut => {
             return fail_open(
                 &input,
+                // Per-repo: a session touching two oversized trees must hear about both.
+                &format!("deadline-{}", root.display()),
                 &format!(
                     "blast-radius deadline exceeded ({} ms) — size rules did NOT run for `{rel}`; \
                      raise hank.policy.deadline_ms or the guard is off on this repo",
@@ -153,11 +156,13 @@ fn decide(mode: Mode, message: String) -> Outcome {
 /// Degrade to "allow", loudly. Writes the stderr line the contract requires and,
 /// once per session, a user-visible notice — because a hook's stderr is
 /// surfaced only on exit `2`, so stderr alone would be silent in practice.
-fn fail_open(input: &HookInput, reason: &str) -> Outcome {
-    eprintln!("hank: policy guard failed open: {reason}");
-    if first_notice_for_session(input.session_id.as_deref()) {
+fn fail_open(input: &HookInput, kind: &str, reason: &str) -> Outcome {
+    eprintln!("hank: policy guard UNMEASURED: {reason}");
+    // `kind` keeps distinct gaps from muting each other — see first_notice_for_session.
+    if first_notice_for_session(input.session_id.as_deref(), kind) {
         return Outcome::Notify(format!(
-            "hank: policy guard failed open ({reason}) — edits are UNGUARDED this session."
+            "hank: policy guard UNMEASURED ({reason}) — this edit was NOT checked, and \
+             edits like it are UNGUARDED this session."
         ));
     }
     Outcome::Allow

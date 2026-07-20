@@ -147,7 +147,7 @@ pub fn system_message(message: &str) -> String {
 /// to ignore it. When no session id is available, or the marker cannot be
 /// written, the notice is allowed through: over-warning beats silence.
 #[must_use]
-pub fn first_notice_for_session(session: Option<&str>) -> bool {
+pub fn first_notice_for_session(session: Option<&str>, kind: &str) -> bool {
     let Some(session) = session else {
         return true;
     };
@@ -160,7 +160,17 @@ pub fn first_notice_for_session(session: Option<&str>) -> bool {
     if safe.is_empty() {
         return true;
     }
-    let marker = std::env::temp_dir().join(format!("hank-guard-failopen-{safe}"));
+    // KEYED ON THE KIND OF GAP, not just the session (aegis-nz2x). The marker used to
+    // be per-session alone, so the FIRST fail-open of any kind silenced every later,
+    // DIFFERENT one: a session that tripped an unreadable config would then hit a blown
+    // deadline on a large repo and say nothing at all. The mechanism whose whole job is
+    // making gaps visible was itself suppressing gaps it had never reported.
+    let kind_safe: String = kind
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(64)
+        .collect();
+    let marker = std::env::temp_dir().join(format!("hank-guard-failopen-{safe}-{kind_safe}"));
     match std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -245,12 +255,27 @@ mod tests {
     #[test]
     fn fail_open_notice_fires_once_per_session() {
         let session = format!("test-{}", std::process::id());
-        assert!(first_notice_for_session(Some(&session)));
-        assert!(!first_notice_for_session(Some(&session)));
+        assert!(first_notice_for_session(Some(&session), "config"));
+        assert!(!first_notice_for_session(Some(&session), "config"));
+        // A DIFFERENT gap in the same session must still be reported (aegis-nz2x).
+        // Keyed on the session alone, an unreadable config would have muted a blown
+        // deadline on a large repo — the loudness mechanism silencing a gap it had
+        // never once reported.
+        assert!(
+            first_notice_for_session(Some(&session), "deadline-/repo/big"),
+            "a different kind of gap must get its own notice"
+        );
+        assert!(!first_notice_for_session(Some(&session), "deadline-/repo/big"));
+        // And a different repo is a different gap: a session touching two oversized
+        // trees must hear about both.
+        assert!(first_notice_for_session(
+            Some(&session),
+            "deadline-/repo/other"
+        ));
         let _ = std::fs::remove_file(
             std::env::temp_dir().join(format!("hank-guard-failopen-{session}")),
         );
         // Without a session id we cannot rate-limit, so we always warn.
-        assert!(first_notice_for_session(None));
+        assert!(first_notice_for_session(None, "config"));
     }
 }
