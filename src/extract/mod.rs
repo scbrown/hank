@@ -129,6 +129,28 @@ pub fn language_for_extension(ext: &str) -> Option<&'static str> {
     Some(language)
 }
 
+/// Walk `path` for every source file this build can PARSE, paired with its
+/// language, honoring `.gitignore`.
+///
+/// The guard's graph is built from this, and it is deliberately not
+/// [`rust_files`]: a blast-radius rule measured over a Rust-only graph reports a
+/// misleadingly small radius for every other language — and "small" reads as
+/// "safe". The pairing is returned rather than re-derived by the caller so the
+/// language a file was PARSED as can never drift from the one it was SELECTED by.
+#[must_use]
+pub fn source_files(path: &Path) -> Vec<(PathBuf, &'static str)> {
+    ignore::WalkBuilder::new(path)
+        .build()
+        .filter_map(std::result::Result::ok)
+        .map(ignore::DirEntry::into_path)
+        .filter_map(|p| {
+            let ext = p.extension().and_then(std::ffi::OsStr::to_str)?;
+            let language = language_for_extension(ext)?;
+            Some((p, language))
+        })
+        .collect()
+}
+
 /// Walk `path` for Rust source files, honoring `.gitignore`.
 #[must_use]
 pub fn rust_files(path: &Path) -> Vec<PathBuf> {

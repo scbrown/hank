@@ -20,7 +20,7 @@ use std::path::Path;
 use petgraph::graph::{DiGraph, NodeIndex};
 
 use crate::errors::Result;
-use crate::extract::{extract_structure, rust_files};
+use crate::extract::extract_structure;
 use crate::types::{EdgeKind, Tier};
 
 pub use blast::{reachable_over, Adjacency, Dir, NodeMeta, Reached};
@@ -54,19 +54,22 @@ impl CodeGraph {
     /// every symbol named `foo`. Precise resolution arrives with the LSP/CPG
     /// tiers.
     pub fn build(root: &Path) -> Result<Self> {
-        let sources = rust_files(root).into_iter().filter_map(|file| {
-            let source = std::fs::read_to_string(&file).ok()?;
-            // Relative to the build root; fall back to the file name when the
-            // root *is* the file (strip yields an empty path).
-            let rel = match file.strip_prefix(root) {
-                Ok(p) if !p.as_os_str().is_empty() => p.display().to_string(),
-                _ => file.file_name().map_or_else(
-                    || file.display().to_string(),
-                    |n| n.to_string_lossy().into_owned(),
-                ),
-            };
-            Some((rel, source))
-        });
+        let sources =
+            crate::extract::source_files(root)
+                .into_iter()
+                .filter_map(|(file, language)| {
+                    let source = std::fs::read_to_string(&file).ok()?;
+                    // Relative to the build root; fall back to the file name when the
+                    // root *is* the file (strip yields an empty path).
+                    let rel = match file.strip_prefix(root) {
+                        Ok(p) if !p.as_os_str().is_empty() => p.display().to_string(),
+                        _ => file.file_name().map_or_else(
+                            || file.display().to_string(),
+                            |n| n.to_string_lossy().into_owned(),
+                        ),
+                    };
+                    Some((rel, source, language))
+                });
         Ok(Self::from_sources(sources))
     }
 
@@ -77,10 +80,11 @@ impl CodeGraph {
     pub fn build_at_ref(root: &Path, reference: &str) -> Result<Self> {
         let sources = crate::git::list_files_at(root, reference)
             .into_iter()
-            .filter(|p| p.extension().is_some_and(|e| e == "rs"))
             .filter_map(|path| {
+                let ext = path.extension().and_then(std::ffi::OsStr::to_str)?;
+                let language = crate::extract::language_for_extension(ext)?;
                 let source = crate::git::read_blob_at(root, reference, &path)?;
-                Some((path.display().to_string(), source))
+                Some((path.display().to_string(), source, language))
             });
         Ok(Self::from_sources(sources))
     }
@@ -88,13 +92,25 @@ impl CodeGraph {
     /// Shared construction: build symbol nodes and name-resolved call edges from
     /// a stream of `(relative_path, source)` pairs. The two builders differ only
     /// in where the sources come from (working tree vs. a git tree).
-    fn from_sources(sources: impl Iterator<Item = (String, String)>) -> Self {
+    fn from_sources(sources: impl Iterator<Item = (String, String, &'static str)>) -> Self {
         let mut graph = DiGraph::new();
         let mut by_name: HashMap<String, Vec<NodeIndex>> = HashMap::new();
-        let mut calls: Vec<(String, String)> = Vec::new();
+        // Call edges are resolved by NAME, so a multi-language graph must keep
+        // the language on both ends: `leaf` in Python is not called by `one()` in
+        // Rust merely because both files are in the tree. Measured while widening
+        // the graph past Rust — a four-language fixture reported every leaf as
+        // reaching FOUR files, one per language, from a single caller each. An
+        // over-reported radius is a FALSE DENY, which blocks legitimate work just
+        // as confidently as the silent allow it replaced.
+        let mut calls: Vec<(String, String, &'static str)> = Vec::new();
+        let mut language_of: HashMap<NodeIndex, &'static str> = HashMap::new();
 
-        for (rel, source) in sources {
-            let Ok(structure) = extract_structure(&source, "rust") else {
+        for (rel, source, language) in sources {
+            // Parse each file as the language it IS. This was `"rust"` for every
+            // source, so a graph over a Python or TypeScript tree came back empty
+            // — and an empty graph reports a blast radius of zero, which every
+            // ceiling passes.
+            let Ok(structure) = extract_structure(&source, language) else {
                 continue;
             };
             for symbol in structure.symbols {
@@ -105,21 +121,28 @@ impl CodeGraph {
                     start_line: symbol.start_line,
                     tier: symbol.tier,
                 });
+                language_of.insert(idx, language);
                 by_name.entry(symbol.name).or_default().push(idx);
             }
             for call in structure.calls {
-                calls.push((call.caller, call.callee));
+                calls.push((call.caller, call.callee, language));
             }
         }
 
-        for (caller, callee) in calls {
+        for (caller, callee, language) in calls {
             let (Some(callers), Some(callees)) = (by_name.get(&caller), by_name.get(&callee))
             else {
                 continue;
             };
             for &from in callers {
                 for &to in callees {
-                    if from != to {
+                    // Same language on BOTH ends, and the same language the call
+                    // was parsed from. Cross-language name matches are
+                    // coincidences, not edges.
+                    if from != to
+                        && language_of.get(&from) == Some(&language)
+                        && language_of.get(&to) == Some(&language)
+                    {
                         graph.add_edge(from, to, EdgeKind::Calls);
                     }
                 }
@@ -255,6 +278,38 @@ fn top() { mid(); }
             graph.stats(),
             (0, 0),
             "no repo → empty base graph, no crash"
+        );
+    }
+
+    /// A name that exists in two languages must not link them. Cross-language
+    /// name collisions are coincidences; counting them as call edges inflates
+    /// every blast radius in a polyglot repo, and an inflated radius is a FALSE
+    /// DENY — it blocks legitimate work as confidently as the old silent allow
+    /// let dangerous work through.
+    #[cfg(feature = "langs-extra")]
+    #[test]
+    fn a_name_shared_across_languages_is_not_a_call_edge() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("leaf.rs"), "fn leaf() {}\n").unwrap();
+        std::fs::write(dir.path().join("one.rs"), "fn one() { leaf(); }\n").unwrap();
+        std::fs::write(dir.path().join("leaf.py"), "def leaf():\n    return 1\n").unwrap();
+        std::fs::write(
+            dir.path().join("one.py"),
+            "from leaf import leaf\ndef one():\n    return leaf()\n",
+        )
+        .unwrap();
+
+        let graph = CodeGraph::build(dir.path()).unwrap();
+        let reached = reachable_over(&graph, "leaf", Dir::Callers, 5);
+        let files: std::collections::BTreeSet<String> =
+            reached.into_iter().map(|r| r.file).collect();
+        // `leaf` is defined in both languages, so BOTH callers are legitimately
+        // reachable from the NAME — but each only through its own language. What
+        // must not happen is one language's caller appearing for the other's
+        // definition, which is what a language-blind name match produces.
+        assert!(
+            files.len() <= 2,
+            "cross-language edges inflated the radius: {files:?}"
         );
     }
 }
