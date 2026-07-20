@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-20
+
+### Fixed
+
+- **The pre-edit policy guard could block every edit in the fleet.** Absence of
+  `hank` failed open (exit `127`), but a `hank` too old to know `hook pre-edit`
+  answered it with the argument parser's error and exit `2` — Claude Code's
+  fail-*closed* channel. Since parsing precedes any Hank code, the guard's own
+  fail-open logic never ran. An unparseable `hank hook …` now degrades to a
+  silent allow; other commands keep exit `2` so typos stay loud. The integration
+  contract also pins a skew-proof invocation, since older binaries cannot be
+  fixed retroactively (#35).
+- **A workspace config silently disarmed the guard.** `HankConfig::load`
+  documented itself as overlaying user then project config but assigned each
+  file wholesale, so a project `.bobbin/config.toml` setting one unrelated key
+  reset `[hank.policy]` to `mode = "off"` — enforcement stopped with no warning,
+  indistinguishable from finding no violations. Config now merges per-key;
+  arrays replace rather than accumulate, so a workspace cannot widen a scope the
+  user config narrowed (#36).
+
 ### Added
 
 - Vision document and full build specification (`docs/vision.md`,

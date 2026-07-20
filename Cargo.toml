@@ -1,6 +1,6 @@
 [package]
 name = "hank"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "In-memory, multi-tenant code-analysis engine — the structural signal for the Bobbin × Quipu stack"
 authors = ["Steve Brown"]
