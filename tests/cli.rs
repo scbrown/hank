@@ -336,3 +336,53 @@ fn verify_exits_nonzero_and_names_each_violation() {
         .stdout(predicate::str::contains("wrong-arity"))
         .stdout(predicate::str::contains("unresolved-import"));
 }
+
+/// The guard's blocking channel is a JSON object on stdout, never an exit code.
+/// Exit `2` is Claude Code's fail-CLOSED channel, so *any* hook invocation that
+/// exits `2` blocks the agent's edit.
+///
+/// The path that matters is version skew, not a typo: a `hank` older than the
+/// subcommand answers `hook pre-edit` with clap's "invalid value" error and
+/// exit `2`. Deploying the hook against a stale binary would therefore block
+/// every Edit/Write in the fleet — the exact outcome the fail-open clause
+/// exists to prevent. Absence already fails open (exit `127`); staleness is the
+/// case that did not.
+///
+/// An unknown hook event stands in for "this hank is too old to know the event
+/// you asked for", which is indistinguishable from skew at the CLI boundary.
+#[test]
+fn an_unknown_hook_event_fails_open_instead_of_exiting_2() {
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["hook", "some-event-this-hank-does-not-have"])
+        .write_stdin(r#"{"tool_name":"Edit","tool_input":{"file_path":"/tmp/x.rs"}}"#)
+        .assert()
+        .code(0)
+        // Silence on stdout: a guard that cannot parse its arguments has not
+        // decided anything, and must not appear to have allowed or denied.
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("failed open"));
+}
+
+/// The same protection must not swallow ordinary CLI misuse: a non-hook command
+/// still exits `2`, so typos stay loud everywhere it is safe for them to be.
+#[test]
+fn a_non_hook_command_still_exits_2_on_bad_arguments() {
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["definitely-not-a-command"])
+        .assert()
+        .code(2);
+}
+
+/// `hank hook --help` is an "error" in clap's model; it must still print and
+/// exit `0` rather than being mistaken for a fail-open.
+#[test]
+fn hook_help_still_prints_and_exits_0() {
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["hook", "--help"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("post-edit"));
+}
