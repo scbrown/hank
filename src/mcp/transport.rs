@@ -8,11 +8,15 @@ use anyhow::Result;
 use super::server::HankMcpServer;
 
 /// Serve over stdio (the default agent transport).
-pub async fn run_stdio(root: PathBuf, tenant: Option<String>) -> Result<()> {
+pub async fn run_stdio(
+    root: PathBuf,
+    tenant: Option<String>,
+    config: Option<PathBuf>,
+) -> Result<()> {
     use rmcp::transport::stdio;
     use rmcp::ServiceExt;
 
-    let server = HankMcpServer::new(root, tenant);
+    let server = HankMcpServer::new(root, tenant, config);
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
@@ -22,6 +26,7 @@ pub async fn run_stdio(root: PathBuf, tenant: Option<String>) -> Result<()> {
 pub async fn run_http(
     root: PathBuf,
     tenant: Option<String>,
+    config: Option<PathBuf>,
     bind: String,
     port: u16,
 ) -> Result<()> {
@@ -36,7 +41,13 @@ pub async fn run_http(
     let ct = CancellationToken::new();
     let service: StreamableHttpService<HankMcpServer, LocalSessionManager> =
         StreamableHttpService::new(
-            move || Ok::<_, std::io::Error>(HankMcpServer::new(root.clone(), tenant.clone())),
+            move || {
+                Ok::<_, std::io::Error>(HankMcpServer::new(
+                    root.clone(),
+                    tenant.clone(),
+                    config.clone(),
+                ))
+            },
             Arc::new(LocalSessionManager::default()),
             StreamableHttpServerConfig {
                 stateful_mode: true,

@@ -166,6 +166,46 @@ impl HankConfig {
         Self::load_layered(user_config_path().as_deref(), root)
     }
 
+    /// Resolve configuration honouring an explicit `--config` override.
+    ///
+    /// `Some(path)` **replaces** discovery: FR-29 ranks a flag above project and
+    /// user config, so the override loads exactly that file over defaults and
+    /// the ambient `.bobbin/config.toml` is never consulted. `None` runs the
+    /// normal [`load`](Self::load) discovery rooted at `root`.
+    ///
+    /// A `--config` path that cannot be read is an ERROR, never a silent
+    /// fall-back to discovery. That fall-back is the whole defect this override
+    /// closes (aegis-ll3p): an operator who points the guard at a scope file and
+    /// mistypes the path must get a loud failure, not the ambient scope wearing
+    /// the success of the command they meant to scope.
+    pub fn resolve(override_path: Option<&Path>, root: &Path) -> Result<Self> {
+        match override_path {
+            Some(path) => Self::load_from(path),
+            None => Self::load(root),
+        }
+    }
+
+    /// Load configuration from exactly one file, over defaults — no discovery.
+    ///
+    /// The file must exist: [`read_hank_table`] returns `None` both for an
+    /// absent file and for a present file with no `[hank]` table, and only the
+    /// first is an error, so existence is checked explicitly. A present file
+    /// with no `[hank]` table is a valid (if unusual) request for defaults.
+    pub fn load_from(path: &Path) -> Result<Self> {
+        if !path.exists() {
+            return Err(Error::Config(format!(
+                "--config path does not exist: {}",
+                path.display()
+            )));
+        }
+        match read_hank_table(path)? {
+            Some(value) => value
+                .try_into()
+                .map_err(|e| Error::Config(format!("{}: [hank]: {e}", path.display()))),
+            None => Ok(Self::default()),
+        }
+    }
+
     /// The layering itself, with the user-config path injected.
     ///
     /// Taking it as an argument keeps this testable without reassigning
@@ -381,5 +421,50 @@ mod tests {
         let config = HankConfig::load_layered(Some(&user_config), project.path()).unwrap();
         let scope = config.policy.scope_for(Some("weaver")).unwrap();
         assert_eq!(scope.allow_paths, vec!["docs/**".to_string()]);
+    }
+
+    /// `resolve(Some(path), ..)` reads exactly that file over defaults and never
+    /// consults the ambient project config — the core of the `--config` fix.
+    #[test]
+    fn resolve_with_override_reads_the_named_file_not_the_cwd() {
+        let project = tempfile::tempdir().unwrap();
+        let bobbin = project.path().join(".bobbin");
+        std::fs::create_dir_all(&bobbin).unwrap();
+        std::fs::write(
+            bobbin.join("config.toml"),
+            "[hank]\nbase_ref = \"from-cwd\"\n",
+        )
+        .unwrap();
+
+        let other = project.path().join("other.toml");
+        std::fs::write(&other, "[hank]\nbase_ref = \"from-flag\"\n").unwrap();
+
+        let overridden = HankConfig::resolve(Some(&other), project.path()).unwrap();
+        assert_eq!(overridden.base_ref, "from-flag");
+
+        // And without the override, discovery still finds the cwd config.
+        let discovered = HankConfig::resolve(None, project.path()).unwrap();
+        assert_eq!(discovered.base_ref, "from-cwd");
+    }
+
+    /// A `--config` path that does not exist is a loud error, not a silent
+    /// fall-back to discovery.
+    #[test]
+    fn load_from_a_missing_path_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope.toml");
+        let err = HankConfig::load_from(&missing).unwrap_err();
+        assert!(err.to_string().contains("does not exist"));
+    }
+
+    /// A file that exists but has no `[hank]` table is a valid request for
+    /// defaults, not an error.
+    #[test]
+    fn load_from_a_file_without_a_hank_table_yields_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.toml");
+        std::fs::write(&path, "[something_else]\nkey = 1\n").unwrap();
+        let config = HankConfig::load_from(&path).unwrap();
+        assert_eq!(config.base_ref, "main");
     }
 }

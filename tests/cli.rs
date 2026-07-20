@@ -386,3 +386,84 @@ fn hook_help_still_prints_and_exits_0() {
         .code(0)
         .stdout(predicate::str::contains("post-edit"));
 }
+
+/// aegis-ll3p acceptance #1: `--config` makes `status` read the named file, not
+/// the ambient config in the cwd.
+#[test]
+fn config_flag_makes_status_read_the_named_file() {
+    let dir = tempfile::tempdir().unwrap();
+    // Ambient config in the cwd says one thing...
+    let bobbin = dir.path().join(".bobbin");
+    std::fs::create_dir_all(&bobbin).unwrap();
+    std::fs::write(
+        bobbin.join("config.toml"),
+        "[hank]\nbase_ref = \"from-cwd\"\n",
+    )
+    .unwrap();
+    // ...the override file says another.
+    let other = dir.path().join("other.toml");
+    std::fs::write(&other, "[hank]\nbase_ref = \"from-flag\"\n").unwrap();
+
+    Command::cargo_bin("hank")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["status", "--json", "--config"])
+        .arg(&other)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("from-flag"))
+        .stdout(predicate::str::contains("from-cwd").not());
+}
+
+/// aegis-ll3p acceptance #2, the load-bearing one: a `deny_paths`/scope rule
+/// supplied ONLY via `--config` causes the guard to DENY an edit the ambient
+/// config would allow. Negative control: without `--config`, the same edit is
+/// allowed. Distinguishes "the override was read" from "the guard failed open".
+#[test]
+fn config_flag_points_the_guard_at_a_scope_file() {
+    // No `.bobbin/config.toml` here, so the ambient config allows everything.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("leaf.rs"), "fn leaf() {}\n").unwrap();
+    let scope = dir.path().join("scope.toml");
+    std::fs::write(
+        &scope,
+        "[hank.policy]\nmode = \"enforce\"\n\
+         [hank.policy.scopes.polecat]\nallow_paths = [\"src/**\"]\n",
+    )
+    .unwrap();
+    let payload = pre_edit_payload(dir.path(), "leaf.rs", "fn leaf() {}");
+
+    // Negative control: no --config → ambient (absent) config → allow (silent).
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["hook", "pre-edit", "--tenant", "polecat"])
+        .write_stdin(payload.clone())
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    // With --config, `leaf.rs` is outside `src/**` and is denied.
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["hook", "pre-edit", "--tenant", "polecat", "--config"])
+        .arg(&scope)
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"permissionDecision\":\"deny\""))
+        .stdout(predicate::str::contains(
+            "outside the writable capability scope",
+        ));
+}
+
+/// A `--config` path that does not exist is a loud failure on an ordinary
+/// command, not a silent fall-back to discovery.
+#[test]
+fn a_missing_config_path_is_a_loud_error_on_status() {
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["status", "--config", "/no/such/hank-config.toml"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("does not exist"));
+}

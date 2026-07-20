@@ -35,16 +35,22 @@ use crate::reconcile::reconcile;
 pub struct HankMcpServer {
     root: PathBuf,
     tenant: Option<String>,
+    /// The `--config` override the server was launched with, if any. Honoured
+    /// on every config read so `hank serve --config` is not silently ignored
+    /// (aegis-ll3p).
+    config: Option<PathBuf>,
     tool_router: ToolRouter<Self>,
 }
 
 impl HankMcpServer {
-    /// Construct a server rooted at `root` for an optional `tenant`.
+    /// Construct a server rooted at `root` for an optional `tenant`, honouring
+    /// an optional `--config` override.
     #[must_use]
-    pub fn new(root: PathBuf, tenant: Option<String>) -> Self {
+    pub fn new(root: PathBuf, tenant: Option<String>, config: Option<PathBuf>) -> Self {
         Self {
             root,
             tenant,
+            config,
             tool_router: Self::tool_router(),
         }
     }
@@ -56,7 +62,7 @@ impl HankMcpServer {
         description = "Show Hank's base ref, tenant, available extraction tiers, and Quipu promotion settings."
     )]
     async fn hank_status(&self) -> Result<CallToolResult, McpError> {
-        let config = HankConfig::load(&self.root).map_err(internal)?;
+        let config = HankConfig::resolve(self.config.as_deref(), &self.root).map_err(internal)?;
         let response = StatusResponse {
             base_ref: config.base_ref,
             tenant: self
