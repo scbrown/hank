@@ -476,6 +476,8 @@ impl Cli {
         // repo / unresolved ref — degrade, never fail).
         let base_commit = crate::git::resolve_commit(&root, &config.base_ref);
 
+        let policy = config.policy.status_for(self.tenant.as_deref());
+
         if self.json {
             let out = serde_json::json!({
                 "base_ref": config.base_ref,
@@ -483,6 +485,12 @@ impl Cli {
                 "tenant": tenant,
                 "tiers": tier_availability(),
                 "quipu": { "enabled": config.quipu.enabled, "branch_model": config.quipu.branch_model },
+                "policy": policy,
+                // The signed rule set (aegis-hac0) does not exist yet; report its
+                // ABSENCE explicitly rather than omitting it, so the day it lands
+                // the surface is already here and its absence was never silent.
+                "signed_rule_set": { "loaded": false, "state": "never-loaded",
+                    "note": "local config only; resident signed cache not yet available" },
             });
             println!("{}", serde_json::to_string_pretty(&out)?);
         } else {
@@ -499,6 +507,7 @@ impl Cli {
                 "  quipu       : enabled={} branch_model={}",
                 config.quipu.enabled, config.quipu.branch_model
             );
+            print_policy_status(&policy);
         }
         Ok(())
     }
@@ -573,6 +582,43 @@ impl Cli {
             );
         }
     }
+}
+
+/// Render the policy section of `hank status`.
+///
+/// Shows the enforcement mode, whether a scope applies to this tenant and its
+/// ceilings, and — loudly — two states an operator must never learn from
+/// silence: an `enforce` mode with no scope for the tenant (armed-looking, inert),
+/// and the absence of a signed rule set (aegis-hac0).
+fn print_policy_status(policy: &crate::policy::PolicyStatus) {
+    let scope = match &policy.scope {
+        Some(s) => {
+            let ceiling = |c: Option<usize>| c.map_or_else(|| "—".to_string(), |n| n.to_string());
+            format!(
+                "configured (allow={} deny={} sym≤{} files≤{})",
+                s.allow_paths,
+                s.deny_paths,
+                ceiling(s.max_impacted_symbols),
+                ceiling(s.max_impacted_files),
+            )
+        }
+        None => "none for this tenant".to_string(),
+    };
+    println!("  policy      : mode={}  scope={scope}", policy.mode);
+
+    if policy.enforcing_without_scope {
+        println!(
+            "  {} enforce mode but NO scope for this tenant — nothing is enforced",
+            "⚠".yellow().bold()
+        );
+    }
+
+    // The signed rule set does not exist yet (aegis-hac0). Its absence is a
+    // reported state, not silence: a never-loaded rule set is a failure surface.
+    println!(
+        "  rule set    : {} (local config only)",
+        "none — never loaded".yellow()
+    );
 }
 
 /// The extraction tiers this build can serve.
