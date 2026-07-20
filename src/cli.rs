@@ -174,6 +174,9 @@ enum Commands {
 enum HookEvent {
     /// Claude Code `PostToolUse` on Edit/Write: advise on cross-file blast radius.
     PostEdit,
+    /// Claude Code `PreToolUse` on Edit/Write: deny an edit that exceeds the
+    /// tenant's capability scope. Opt-in, and always fails open.
+    PreEdit,
 }
 
 /// Output formats for `hank export`.
@@ -193,6 +196,7 @@ impl Cli {
             Commands::Status => self.status(),
             Commands::Hook { event } => match event {
                 HookEvent::PostEdit => crate::hook::run_post_edit(),
+                HookEvent::PreEdit => crate::hook::run_pre_edit(self.tenant.as_deref()),
             },
             Commands::Completions { shell } => {
                 let mut cmd = Cli::command();

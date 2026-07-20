@@ -1039,9 +1039,9 @@ criterion; every phase must keep the `quipu` feature compiling both on and off
 
 ### Phase 5 — Consumption & guardrails
 
-- [ ] Per-tenant blast radius wired into the broker/Aegis capability-scoping path (FR-25).
+- [x] Per-tenant blast radius wired into the broker/Aegis capability-scoping path (FR-25): `[hank.policy.scopes.<tenant>]` gives each tenant writable-path globs and blast-radius ceilings, evaluated against that tenant's graph.
 - [ ] `hank_verify` monitor-guided edit verification as a direct surface (FR-23, FR-24).
-- [ ] `hank hook pre-edit` guard (FR-30): verify the proposed buffer; blocking `deny` opt-in for capability-scoped polecats.
+- [x] `hank hook pre-edit` guard (FR-30): blocking `deny` opt-in for capability-scoped polecats, off by default, always fail-open. Contract pinned in `docs/book/src/reference/policy-guard.md`. (Proposed-buffer *verification* joins it when FR-23 lands.)
 - [ ] Bobbin consumes verdicts to flag won't-compile retrieved code.
 - **Exit:** structure defines the polecat sandbox, per tenant; agents get a boolean guard on their own edits.
 
@@ -1245,15 +1245,17 @@ blast radius, intra-procedural dataflow, co-change reconciliation) are
 | `dataflow.rs` | intra-procedural data dependence (Rust-native) | done |
 | `reconcile.rs` | structural-vs-co-change partition (FR-11) | done |
 | `export.rs` | referential structure → Turtle in `bobbin:` ontology (FR-34) | code side done |
-| `hook.rs` | Claude Code `PostToolUse` advisory adapter (FR-30) | post-edit done |
+| `hook/` | Claude Code adapters: `post_edit` advisory + `pre_edit` blocking guard (FR-30) | done |
+| `policy.rs` | capability scopes + blast-radius ceilings (§5.8/FR-25) | done |
 | `mcp/` | `rmcp` server (`server`/`tools`/`transport`) | done (`mcp` feature) |
 | `config.rs` | `[hank]` config table | done |
 | `cli.rs` / `cli_cmds.rs` / `render.rs` | CLI surface | done |
 | `types.rs` / `errors.rs` | fact model (Tier/Freshness/…) + errors | done |
 
 **CLI commands:** `analyze`, `refs`, `callers`, `impact` (`--cochange`),
-`dataflow`, `export`, `hook post-edit`, `status`, `serve` (`mcp` feature),
-`completions` — all live. `verify`, `promote` — declared, print a phase notice.
+`dataflow`, `export`, `hook post-edit`, `hook pre-edit`, `status`, `serve`
+(`mcp` feature), `completions` — all live. `verify`, `promote` — declared, print
+a phase notice.
 
 **MCP tools (8, `mcp` feature):** `hank_status`, `hank_symbols`,
 `hank_references`, `hank_analyze`, `hank_callers`, `hank_callees`, `hank_impact`

@@ -25,6 +25,7 @@ pub mod graph;
 pub mod hook;
 #[cfg(feature = "mcp")]
 pub mod mcp;
+pub mod policy;
 pub mod reconcile;
 mod render;
 pub mod types;

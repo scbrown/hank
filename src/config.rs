@@ -31,6 +31,8 @@ pub struct HankConfig {
     pub serve: ServeConfig,
     /// Quipu promotion settings (Phase 4).
     pub quipu: QuipuConfig,
+    /// Capability-scoped edit policy for the pre-edit guard (§5.8/FR-25).
+    pub policy: crate::policy::PolicyConfig,
 }
 
 impl Default for HankConfig {
@@ -47,6 +49,7 @@ impl Default for HankConfig {
             tenancy: TenancyConfig::default(),
             serve: ServeConfig::default(),
             quipu: QuipuConfig::default(),
+            policy: crate::policy::PolicyConfig::default(),
         }
     }
 }

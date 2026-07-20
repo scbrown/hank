@@ -1,44 +1,27 @@
-//! Harness hook adapters — the edit-reactive interface.
+//! The `PostToolUse` advisory — Hank's answer to "what did that edit reach?".
 //!
-//! An agent harness (Claude Code) fires a hook on every edit; the edit tool call
-//! *is* the `didChange` event. `hank hook post-edit` reads the harness's
-//! `PostToolUse` JSON on stdin and returns an advisory: which symbols in the
-//! edited file have callers elsewhere, so the agent learns the blast radius of
-//! its own change synchronously, without calling a tool.
+//! `hank hook post-edit` reads the harness's `PostToolUse` JSON on stdin and
+//! returns an advisory: which symbols in the edited file have callers elsewhere,
+//! so the agent learns the blast radius of its own change synchronously, without
+//! calling a tool. **Advisory only** — the blocking companion is
+//! [`super::pre_edit`].
 //!
 //! This prototype builds the call graph transiently per invocation. Once the
 //! Phase-3 resident per-tenant overlay lands, the hook becomes a thin client of
 //! the `hank serve` daemon and meets the sub-100ms budget a synchronous guard
-//! needs. A `pre-edit` guard (verify the proposed buffer, optionally block) is
-//! the natural companion (spec §5.7).
+//! needs (FR-31).
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
-
+use super::HookInput;
 use crate::extract::extract_symbols;
 use crate::graph::{CodeGraph, Dir};
 
 /// How many impacted symbols to list before summarizing the rest.
 const MAX_LISTED: usize = 8;
-
-/// The subset of a harness hook payload Hank needs.
-#[derive(Debug, Default, Deserialize)]
-struct HookInput {
-    #[serde(default)]
-    cwd: Option<String>,
-    #[serde(default)]
-    tool_input: ToolInput,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct ToolInput {
-    #[serde(default)]
-    file_path: Option<String>,
-}
 
 /// Run the `post-edit` hook: read the harness payload from stdin and, if the
 /// edit has cross-file impact, print the `PostToolUse` advisory envelope.
@@ -64,16 +47,14 @@ pub fn run_post_edit() -> anyhow::Result<()> {
 /// useful to say (unparseable, non-Rust, or no cross-file impact).
 #[must_use]
 pub fn advisory_for(input_json: &str, default_root: &Path) -> Option<String> {
-    let input: HookInput = serde_json::from_str(input_json).ok()?;
-    let file_path = input.tool_input.file_path?;
+    let input = HookInput::parse(input_json)?;
+    let file_path = input.tool_input.file_path.clone()?;
     let file = PathBuf::from(&file_path);
     if file.extension().and_then(OsStr::to_str) != Some("rs") {
         return None;
     }
 
-    let root = input
-        .cwd
-        .map_or_else(|| default_root.to_path_buf(), PathBuf::from);
+    let root = input.root(default_root);
     let rel = file
         .strip_prefix(&root)
         .unwrap_or(&file)

@@ -21,6 +21,7 @@
 - [CLI Commands](reference/cli.md)
 - [Configuration Reference](reference/config.md)
 - [MCP Tools](reference/mcp-tools.md)
+- [Pre-Edit Policy Guard](reference/policy-guard.md)
 
 # Design
 

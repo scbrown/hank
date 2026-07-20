@@ -41,4 +41,24 @@ promote_on = "merge"
 # "named_graph" (preferred, needs Quipu quads) | "qualifier" (fallback).
 branch_model = "named_graph"
 shapes_path = "shapes/"
+
+[hank.policy]
+# "off" (inert) | "advise" (report only) | "enforce" (deny).
+mode = "off"
+# Wall-clock budget for the whole pre-edit guard (ms). Expiry => allow.
+deadline_ms = 100
+# Warn the user, once per session, when the guard fails open.
+notify_on_fail_open = true
+# How far to follow the call graph when sizing an edit.
+max_hops = 5
+
+# Per-tenant capability scopes, keyed by tenant/role id. A tenant with no entry
+# is unconstrained. See "Pre-Edit Policy Guard" for the full contract.
+[hank.policy.scopes.polecat-3]
+allow_paths = ["src/**", "tests/**"]   # empty = any path
+deny_paths = ["src/config.rs"]         # beats allow_paths
+max_impacted_symbols = 25
+max_impacted_files = 10
 ```
+
+An unrecognized `mode` is a config **error**, not a silently inert guard.
