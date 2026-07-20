@@ -39,6 +39,24 @@ pub enum Mode {
     Enforce,
 }
 
+impl Mode {
+    /// The lowercase name, matching the `[hank.policy] mode` config value.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Mode::Off => "off",
+            Mode::Advise => "advise",
+            Mode::Enforce => "enforce",
+        }
+    }
+}
+
+impl std::fmt::Display for Mode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// The `[hank.policy]` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -79,6 +97,65 @@ impl PolicyConfig {
             return None;
         }
         self.scopes.get(tenant?)
+    }
+
+    /// A snapshot of the policy layer for `hank status`, resolved for `tenant`.
+    ///
+    /// Observability is the whole point (aegis-hac0): an operator must be able
+    /// to see whether the guard is armed for a tenant and against what. The
+    /// scope is read straight from the table here — NOT via [`scope_for`], which
+    /// hides it under [`Mode::Off`] — so status can distinguish "mode off but a
+    /// scope exists" from "no scope configured at all".
+    #[must_use]
+    pub fn status_for(&self, tenant: Option<&str>) -> PolicyStatus {
+        let scope = tenant.and_then(|t| self.scopes.get(t));
+        PolicyStatus {
+            mode: self.mode,
+            scope_configured: scope.is_some(),
+            // Enforce with no scope for this tenant is armed in appearance and
+            // inert in effect — the disarm-that-reads-as-healthy shape of #36
+            // and aegis-ll3p. It is a caveat, never a clean state.
+            enforcing_without_scope: self.mode == Mode::Enforce && scope.is_none(),
+            scope: scope.map(ScopeSummary::of),
+        }
+    }
+}
+
+/// A `hank status` view of the policy layer, resolved for one tenant.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PolicyStatus {
+    /// Enforcement mode in force.
+    pub mode: Mode,
+    /// Whether a capability scope is configured for the queried tenant.
+    pub scope_configured: bool,
+    /// Path-rule and ceiling summary, when a scope is configured.
+    pub scope: Option<ScopeSummary>,
+    /// Configured to enforce, but with no scope for this tenant.
+    pub enforcing_without_scope: bool,
+}
+
+/// The shape and ceilings of a scope, without its contents — enough for an
+/// operator to confirm the guard is looking at what they expect.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ScopeSummary {
+    /// Number of `allow_paths` globs (0 = any path permitted).
+    pub allow_paths: usize,
+    /// Number of `deny_paths` globs.
+    pub deny_paths: usize,
+    /// The symbol blast-radius ceiling, if set.
+    pub max_impacted_symbols: Option<usize>,
+    /// The file blast-radius ceiling, if set.
+    pub max_impacted_files: Option<usize>,
+}
+
+impl ScopeSummary {
+    fn of(scope: &Scope) -> Self {
+        Self {
+            allow_paths: scope.allow_paths.len(),
+            deny_paths: scope.deny_paths.len(),
+            max_impacted_symbols: scope.max_impacted_symbols,
+            max_impacted_files: scope.max_impacted_files,
+        }
     }
 }
 
@@ -343,5 +420,58 @@ mod tests {
         assert_eq!(ok.mode, Mode::Enforce);
         // A typo must be a loud error, not a silently inert guard.
         assert!(toml::from_str::<Wrapper>("mode = \"enfroce\"").is_err());
+    }
+
+    fn config_with_scope(mode: Mode) -> PolicyConfig {
+        let mut config = PolicyConfig {
+            mode,
+            ..PolicyConfig::default()
+        };
+        config.scopes.insert("weaver".to_string(), scope());
+        config
+    }
+
+    #[test]
+    fn status_reports_a_configured_scope_with_its_ceilings() {
+        let status = config_with_scope(Mode::Enforce).status_for(Some("weaver"));
+        assert_eq!(status.mode, Mode::Enforce);
+        assert!(status.scope_configured);
+        assert!(!status.enforcing_without_scope);
+        let summary = status.scope.unwrap();
+        // scope() allows src/** and tests/**, denies src/config.rs, files ≤ 2.
+        assert_eq!(summary.allow_paths, 2);
+        assert_eq!(summary.deny_paths, 1);
+        assert_eq!(summary.max_impacted_files, Some(2));
+    }
+
+    #[test]
+    fn status_flags_enforce_with_no_scope_for_the_tenant() {
+        // A scope exists, but not for this tenant: armed-looking, inert.
+        let status = config_with_scope(Mode::Enforce).status_for(Some("someone-else"));
+        assert!(!status.scope_configured);
+        assert!(
+            status.enforcing_without_scope,
+            "enforce + no tenant scope must be flagged, not read as healthy"
+        );
+        assert!(status.scope.is_none());
+    }
+
+    #[test]
+    fn status_shows_a_scope_even_when_mode_is_off() {
+        // `scope_for` hides the scope under Mode::Off; status must not, or an
+        // operator cannot tell "off with a scope staged" from "nothing set".
+        let status = config_with_scope(Mode::Off).status_for(Some("weaver"));
+        assert_eq!(status.mode, Mode::Off);
+        assert!(status.scope_configured);
+        // Off is not "enforcing without scope" — it is not enforcing at all.
+        assert!(!status.enforcing_without_scope);
+    }
+
+    #[test]
+    fn status_without_a_tenant_configures_no_scope() {
+        let status = config_with_scope(Mode::Enforce).status_for(None);
+        assert!(!status.scope_configured);
+        // No tenant means nothing to enforce against — flagged under enforce.
+        assert!(status.enforcing_without_scope);
     }
 }

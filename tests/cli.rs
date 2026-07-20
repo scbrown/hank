@@ -500,3 +500,56 @@ fn a_missing_config_path_is_a_loud_error_on_status() {
         .failure()
         .stderr(predicate::str::contains("does not exist"));
 }
+
+/// aegis-hac0 observability: `hank status` must surface the policy layer — the
+/// guard's own state was invisible in the command meant to show configuration.
+#[test]
+fn status_surfaces_policy_and_the_absent_signed_rule_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let scope = dir.path().join("scope.toml");
+    std::fs::write(
+        &scope,
+        "[hank.policy]\nmode = \"enforce\"\n\
+         [hank.policy.scopes.weaver]\nallow_paths = [\"src/**\"]\nmax_impacted_files = 3\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["status", "--json", "--tenant", "weaver", "--config"])
+        .arg(&scope)
+        .assert()
+        .success()
+        // The policy layer is now observable...
+        .stdout(predicate::str::contains("\"policy\""))
+        .stdout(predicate::str::contains("\"mode\": \"enforce\""))
+        .stdout(predicate::str::contains("\"scope_configured\": true"))
+        // ...and the not-yet-existing signed rule set is reported ABSENT, loudly,
+        // rather than omitted (aegis-hac0's second clause).
+        .stdout(predicate::str::contains("\"signed_rule_set\""))
+        .stdout(predicate::str::contains("\"never-loaded\""));
+}
+
+/// The armed-but-inert state — enforce mode with no scope for the tenant — must
+/// be a visible caveat, not read as a healthy enforcing guard.
+#[test]
+fn status_warns_on_enforce_without_a_scope_for_the_tenant() {
+    let dir = tempfile::tempdir().unwrap();
+    let scope = dir.path().join("scope.toml");
+    std::fs::write(
+        &scope,
+        "[hank.policy]\nmode = \"enforce\"\n\
+         [hank.policy.scopes.someone_else]\nallow_paths = [\"src/**\"]\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["status", "--json", "--tenant", "weaver", "--config"])
+        .arg(&scope)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"enforcing_without_scope\": true",
+        ));
+}

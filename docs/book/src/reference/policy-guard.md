@@ -222,3 +222,28 @@ under advise" is not evidence that they saw the advisory; they did not. Only
 Both are computed at the **tree-sitter tier** against the *requesting tenant's*
 graph, and every verdict carries that tier tag (FR-3). A tree-sitter blast radius
 is an approximation; the ceilings should be set with that in mind.
+
+## Observing the guard — `hank status`
+
+A guard you cannot observe is a guard you cannot trust: enforcement that has
+quietly stopped looks exactly like enforcement that found nothing wrong. So the
+policy layer is visible in `hank status`, resolved for the queried `--tenant`:
+
+```text
+  policy      : mode=enforce  scope=configured (allow=1 deny=0 sym≤— files≤3)
+  rule set    : none — never loaded (local config only)
+```
+
+Two states are reported **loudly** rather than left to silence:
+
+- **`enforce` with no scope for the tenant** — armed in appearance, inert in
+  effect — prints a `⚠` caveat (`enforcing_without_scope: true` in `--json`).
+  This is the disarm-that-reads-as-healthy shape behind more than one past bug.
+- **No signed rule set loaded.** The resident, signed rule cache does not exist
+  yet; `status` reports its absence (`signed_rule_set.state: "never-loaded"`)
+  rather than omitting it, so the surface is present and its absence is never
+  silent. When the cache lands it populates the live rule-set version and age
+  into this same field.
+
+`--json` emits the full `policy` object (mode, `scope_configured`, ceilings) and
+the `signed_rule_set` state for `st doctor` and other tooling to gate on.
