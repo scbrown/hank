@@ -183,8 +183,9 @@
 <p><strong>Hank</strong> is an in-memory, multi-tenant code-analysis engine — the structural
 signal for the Bobbin × Quipu stack. It extracts precise structure from a
 codebase (AST, symbols, call graph, and — in later phases — control/data
-dependence and LSP facts), keeps it hot per tenant, and serves it over MCP and a
-local HTTP API.</p>
+dependence and LSP facts), keeps it hot per tenant, and serves it over MCP
+(stdio and streamable-HTTP). A parallel REST HTTP API for non-MCP consumers is
+planned for Phase 3 (FR-27).</p>
 <blockquote>
 <p><em>Bobbin holds the thread. Quipu ties the knots. Hank keeps the working coil —
 live, per-tenant, ready.</em></p>
@@ -375,7 +376,8 @@ heavy language toolchains (tree-sitter grammars, LSP servers, any CPG/dataflow
 machinery), holds a hot structural graph, and feeds three consumers: Bobbin
 (fusion), Quipu (promotion on commit), and the Gas Town broker/Aegis (per-tenant
 blast radius as a trust boundary).</p>
-<pre><code class="language-text">   MCP (rmcp)  ·  HTTP (axum)  ·  CLI (clap)
+<pre><code class="language-text">   MCP (rmcp: stdio + HTTP/axum)  ·  CLI (clap)
+   (a parallel REST HTTP API is Phase 3 — FR-27)
                     │
               Query / Serve layer
    refs · defs · callgraph · dataflow · blast-radius · verify
@@ -638,9 +640,13 @@ max_impacted_files = 10
 </code></pre>
 <p>An unrecognized <code>mode</code> is a config <strong>error</strong>, not a silently inert guard.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="mcp-tools"><a class="header" href="#mcp-tools">MCP Tools</a></h1>
-<p>Hank exposes its capabilities as MCP tools (over stdio and streamable-HTTP) and
-a parallel HTTP API. Tools use the <code>hank_*</code> naming convention, alongside
-Bobbin's <code>bobbin_*</code> and Quipu's <code>quipu_*</code> on the same agent.</p>
+<p>Hank exposes its capabilities as MCP tools, over stdio and streamable-HTTP.
+Tools use the <code>hank_*</code> naming convention, alongside Bobbin's <code>bobbin_*</code> and
+Quipu's <code>quipu_*</code> on the same agent.</p>
+<p>A parallel REST HTTP API (a per-tool endpoint beside the MCP mount, for the
+broker and other non-MCP consumers) is planned for Phase 3, landing with the
+resident daemon it fronts (FR-27). Until then those consumers reach the same
+tools over the streamable-HTTP MCP transport (<code>hank serve --http</code>).</p>
 <p>Build with the <code>mcp</code> feature and run <code>hank serve</code> (stdio) or <code>hank serve --http</code>
 (streamable-HTTP on <code>[hank.serve] mcp_http_port</code>, default 3040).</p>
 <pre><code class="language-bash">cargo build --features mcp

@@ -187,7 +187,8 @@ heavy language toolchains (tree-sitter grammars, LSP servers, any CPG/dataflow
 machinery), holds a hot structural graph, and feeds three consumers: Bobbin
 (fusion), Quipu (promotion on commit), and the Gas Town broker/Aegis (per-tenant
 blast radius as a trust boundary).</p>
-<pre><code class="language-text">   MCP (rmcp)  ·  HTTP (axum)  ·  CLI (clap)
+<pre><code class="language-text">   MCP (rmcp: stdio + HTTP/axum)  ·  CLI (clap)
+   (a parallel REST HTTP API is Phase 3 — FR-27)
                     │
               Query / Serve layer
    refs · defs · callgraph · dataflow · blast-radius · verify
