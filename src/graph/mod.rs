@@ -4,8 +4,8 @@
 //! reachability in either direction. This is the FR-12 primitive: the same
 //! traversal answers "what does this change affect?" (callers, transitively)
 //! and "what does this call?" (callees). Phase 3 makes this a hot, per-tenant
-//! resident graph (see [`base`]/[`overlay`]/[`tenant`]); today it is built on
-//! demand.
+//! resident graph (Phase-3 `base`/`overlay`/`tenant`, not yet built); today it is
+//! built on demand.
 //!
 //! The single breadth-first traversal lives in [`blast`] behind the [`Adjacency`]
 //! trait, so the base graph, the composed per-tenant view, and the frontier

@@ -44,10 +44,11 @@ hank status
 ```
 
 > **Status:** Phases 1 and 2 complete. `analyze`, `refs`, `status`, the
-> call-graph commands `callers`/`impact` (with `--cochange` reconciliation), and
-> intra-procedural `dataflow` do real work, and an MCP server (`hank serve`,
-> `--features mcp`) exposes eight `hank_*` tools. `verify` and `promote` land per
-> the [phasing](docs/hank-spec.md#12-milestones--phasing); Phase 3 (multi-tenancy)
+> call-graph commands `callers`/`impact` (with `--cochange` reconciliation),
+> intra-procedural `dataflow`, and `verify` (the FR-23/FR-24 edit-buffer verdict)
+> do real work, and an MCP server (`hank serve`, `--features mcp`) exposes ten
+> `hank_*` tools. `promote` lands per the
+> [phasing](docs/hank-spec.md#12-milestones--phasing); Phase 3 (multi-tenancy)
 > is next.
 
 ## 🤔 Why Hank? — and how it's different

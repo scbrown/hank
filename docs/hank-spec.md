@@ -1053,7 +1053,9 @@ criterion; every phase must keep the `quipu` feature compiling both on and off
 
 - [ ] Extend the code ontology with edge shapes (§9.2) and `Section → references → CodeSymbol` (§5.10); start permissive.
 - [x] Turtle emission of the referential structure (`hank export --format turtle`, FR-34, code side) — extend to docs (FR-33) and wire `--to quipu`.
-- [ ] Doc→code reference extraction (FR-33) folded into the export and the live hook.
+- [x] Doc→code reference extraction (FR-33) folded into the **export**: `src/docref.rs`
+      scans markdown for code-symbol mentions and `src/export.rs` emits
+      `Section → references → CodeSymbol`. Not yet wired into the live edit hook.
 - [ ] SHACL-validate (`rudof`) before every write (FR-20).
 - [ ] Promote on commit/merge via `quipu_knot` / `Store::transact`, bitemporal (FR-19, FR-21, FR-22).
 - [ ] Branch modeling per §9.4: promote each branch into a named graph if Quipu
@@ -1198,8 +1200,8 @@ GLOBAL FLAGS:
 EXAMPLES:
     hank serve
     hank analyze
-    hank refs src/auth.rs::authenticate
-    hank impact src/auth.rs::authenticate --hops 5 --forward
+    hank refs authenticate src
+    hank impact authenticate src --hops 5
     hank verify --file src/auth.rs --buffer /tmp/edited.rs
     hank promote --commit HEAD
 ```
@@ -1253,19 +1255,25 @@ edge instead carries a `bobbin:onBranch "main"` term.)
 
 ## Appendix D: Implementation Status
 
-A snapshot of what is actually built, as of commit `d5668ec`. The body of this
-spec (§§1–11) is the *design*; this appendix is the *state*.
+A snapshot of what is actually built, reconciled against the source tree
+2026-07-20 (aegis-0hq0). The body of this spec (§§1–11) is the *design*; this
+appendix is the *state* — so its numbers are checked against `wc`/`find`, not
+carried forward. The MCP tool count is pinned by a test (`tests/docs_drift.rs`).
 
 **Phases:** Phase 1 (single-tenant structure + MCP) and Phase 2 (call graph,
 blast radius, intra-procedural dataflow, co-change reconciliation) are
 **complete**. Phase 3 (multi-tenancy) is next and unstarted.
 
-**Source layout (`src/`, ~3,000 LOC, every file < 400 lines):**
+**Source layout (`src/`, ~10,300 LOC across 39 `.rs` files):** the 400-line soft
+cap (`AGENTS.md`) is a warn-not-fail target and 9 files currently exceed it
+(`cli.rs`, `config.rs`, `hook/pre_edit.rs`, `export.rs`, `docref.rs`,
+`policy.rs`, `change.rs`, `mcp/server.rs`, `graph/mod.rs`). `extract` and `graph`
+have grown from single files into modules.
 
 | Module | Role | Status |
 |---|---|---|
-| `extract.rs` | tree-sitter symbol + call-site extraction (Rust) | done |
-| `graph.rs` | `CodeGraph` (petgraph) + `reachable()` primitive (FR-12) | done |
+| `extract/` | tree-sitter symbol + call-site extraction (Rust) | done |
+| `graph/` | `CodeGraph` (petgraph) + `reachable()` primitive (FR-12) | done |
 | `dataflow.rs` | intra-procedural data dependence (Rust-native) | done |
 | `reconcile.rs` | structural-vs-co-change partition (FR-11) | done |
 | `export.rs` | referential structure → Turtle in `bobbin:` ontology (FR-34) | code side done |
@@ -1282,10 +1290,10 @@ blast radius, intra-procedural dataflow, co-change reconciliation) are
 `serve` (`mcp` feature), `completions` — all live. `promote` — declared, prints
 a phase notice.
 
-**MCP tools (9, `mcp` feature):** `hank_status`, `hank_symbols`,
+**MCP tools (10, `mcp` feature):** `hank_status`, `hank_symbols`,
 `hank_references`, `hank_analyze`, `hank_callers`, `hank_callees`, `hank_impact`
-(with `cochange`), `hank_dataflow`, `hank_verify`. Over stdio +
-streamable-HTTP.
+(with `cochange`), `hank_communities`, `hank_dataflow`, `hank_verify`. Over
+stdio + streamable-HTTP.
 
 **Cargo features:** `default = []`; `mcp`, `langs-extra`, `quipu` (all off by
 default; `mcp` in the CI matrix). `langs-extra` deps are declared but extractors
