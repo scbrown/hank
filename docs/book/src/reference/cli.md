@@ -13,8 +13,8 @@ COMMANDS:
     impact      Blast radius; --cochange reconciles against history (FR-11)
     dataflow    Intra-procedural data dependence within a function
     export      Emit the referential structure as Turtle (bobbin: ontology)
-    hook        Harness hook adapter (reads hook payload on stdin)
-    verify      Verdict on a proposed edit buffer                 [Phase 5]
+    hook        Harness hook adapter (post-edit advisory / pre-edit guard)
+    verify      Verdict on a proposed edit buffer (FR-23/FR-24)
     promote     Promote a commit's structural facts into Quipu    [Phase 4]
     status      Show base commit, tiers, and configuration
     completions Generate shell completions
@@ -40,6 +40,39 @@ hank communities src --json         # symbol clusters, largest-first
 hank verify --file src/auth.rs --buffer /tmp/edited.rs
 hank promote --commit HEAD
 ```
+
+## `hank verify`
+
+Checks a *proposed* buffer against the graph Hank already holds and returns a
+boolean verdict plus violations (FR-23/FR-24). Exits **non-zero** when the buffer
+has violations, so scripts and CI can gate on it.
+
+```console
+$ hank verify --file src/a.rs --buffer /tmp/proposed.rs
+violations src/a.rs [TreeSitter]
+  ghost:2 `ghost` is called here but is defined nowhere in this buffer or the
+          project graph, and is not brought into scope by a `use`.
+  takes_two:2 `takes_two` is called with 1 argument(s) but is defined at line 1
+          taking 2.
+```
+
+Only violations the edit *introduces* are reported: the file's current contents
+are the baseline, so pre-existing breakage is not blamed on this edit.
+
+**Read the `unchecked` list before trusting a clean verdict.** At the tree-sitter
+tier there is no type information and no name resolution, so:
+
+| Violation (FR-23) | At this tier |
+|---|---|
+| `identifier-does-not-exist` | free calls only, and only ones the edit introduces |
+| `wrong-arity` | free calls resolving to exactly one known definition |
+| `unresolved-import` | bodiless `mod foo;` with no sibling file |
+| `type-violation` | **not checked** — needs the LSP tier |
+
+The bias is against false positives throughout: method calls, path-qualified
+calls, imports, locals, closures, and function-typed parameters are all left
+alone rather than guessed at. `ok: true` means "nothing this tier can see is
+wrong", not "this compiles".
 
 `hank status` resolves the configured `base_ref` (default `main`) to a concrete
 commit via the system `git`; outside a git repository the base commit shows as

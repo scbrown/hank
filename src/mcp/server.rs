@@ -22,7 +22,7 @@ use super::tools::{
     CommunityMemberItem, DataflowRequest, DataflowResponse, DepEdgeItem, FlowStepItem,
     ImpactRequest, ImpactResponse, NeighborsRequest, NeighborsResponse, ReachItem,
     ReconciliationItem, RefItem, ReferencesRequest, ReferencesResponse, StatusResponse, SymbolItem,
-    SymbolsRequest, SymbolsResponse,
+    SymbolsRequest, SymbolsResponse, VerifyRequest, VerifyResponse, ViolationItem,
 };
 use crate::config::HankConfig;
 use crate::dataflow::{Dataflow, FlowDir};
@@ -258,6 +258,43 @@ impl HankMcpServer {
         let response = CommunitiesResponse {
             count: comms.len(),
             communities,
+            tier: "treesitter".to_string(),
+        };
+        json_result(&response)
+    }
+
+    #[tool(
+        description = "Verify a PROPOSED edit buffer before you write it: returns a boolean verdict plus violations (identifier-does-not-exist, wrong-arity, unresolved-import). Best for: 'will this edit break something?'. Note the `unchecked` list — a true verdict is not a compile."
+    )]
+    async fn hank_verify(
+        &self,
+        Parameters(req): Parameters<VerifyRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let file = self.root.join(&req.file);
+        // The file's current contents are the baseline, so violations that
+        // already exist are not blamed on the proposed edit.
+        let baseline = std::fs::read_to_string(&file).ok();
+        let verdict =
+            crate::verify::verify_buffer(&self.root, &file, &req.buffer, baseline.as_deref())
+                .map_err(internal)?;
+
+        let response = VerifyResponse {
+            file: req.file,
+            ok: verdict.ok,
+            violations: verdict
+                .violations
+                .iter()
+                .map(|v| ViolationItem {
+                    kind: serde_json::to_value(v.kind)
+                        .ok()
+                        .and_then(|k| k.as_str().map(str::to_string))
+                        .unwrap_or_default(),
+                    symbol: v.symbol.clone(),
+                    line: v.line,
+                    message: v.message.clone(),
+                })
+                .collect(),
+            unchecked: verdict.unchecked,
             tier: "treesitter".to_string(),
         };
         json_result(&response)

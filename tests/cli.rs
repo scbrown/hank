@@ -289,3 +289,50 @@ fn pre_edit_never_denies_in_advise_mode() {
         // Staging a scope must never block, however badly it is misconfigured.
         .stdout(predicate::str::contains("permissionDecision").not());
 }
+
+// ── hank verify: monitor-guided edit verification (FR-23/FR-24) ──────────
+
+#[test]
+fn verify_passes_a_clean_buffer_and_reports_its_tier() {
+    let dir = project_with("helpers.rs", "fn helper() {}\n");
+    let buffer = dir.path().join("proposed.rs");
+    std::fs::write(&buffer, "fn f() { helper(); }\n").unwrap();
+
+    Command::cargo_bin("hank")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["verify", "--file", "a.rs", "--buffer"])
+        .arg(&buffer)
+        .arg("--json")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"ok\": true"))
+        // A clean verdict must never be read as "this compiles".
+        .stdout(predicate::str::contains(
+            "type-violation (needs the LSP tier)",
+        ));
+}
+
+#[test]
+fn verify_exits_nonzero_and_names_each_violation() {
+    let dir = project_with("helpers.rs", "fn helper() {}\n");
+    let buffer = dir.path().join("proposed.rs");
+    std::fs::write(
+        &buffer,
+        "fn takes_two(a: u8, b: u8) {}\nfn f() { takes_two(1); ghost(); }\nmod missing;\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("hank")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["verify", "--file", "a.rs", "--buffer"])
+        .arg(&buffer)
+        .arg("--json")
+        .assert()
+        // Non-zero so CI and scripts can gate on a verdict.
+        .failure()
+        .stdout(predicate::str::contains("identifier-does-not-exist"))
+        .stdout(predicate::str::contains("wrong-arity"))
+        .stdout(predicate::str::contains("unresolved-import"));
+}

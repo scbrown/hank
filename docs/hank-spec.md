@@ -1040,7 +1040,7 @@ criterion; every phase must keep the `quipu` feature compiling both on and off
 ### Phase 5 — Consumption & guardrails
 
 - [x] Per-tenant blast radius wired into the broker/Aegis capability-scoping path (FR-25): `[hank.policy.scopes.<tenant>]` gives each tenant writable-path globs and blast-radius ceilings, evaluated against that tenant's graph.
-- [ ] `hank_verify` monitor-guided edit verification as a direct surface (FR-23, FR-24).
+- [x] `hank_verify` monitor-guided edit verification as a direct surface (FR-23, FR-24): `hank verify` + the `hank_verify` MCP tool. Tree-sitter tier decides `identifier-does-not-exist`, `wrong-arity`, and `unresolved-import`; `type-violation` is reported as unchecked until the LSP tier lands.
 - [x] `hank hook pre-edit` guard (FR-30): blocking `deny` opt-in for capability-scoped polecats, off by default, always fail-open. Contract pinned in `docs/book/src/reference/policy-guard.md`. (Proposed-buffer *verification* joins it when FR-23 lands.)
 - [ ] Bobbin consumes verdicts to flag won't-compile retrieved code.
 - **Exit:** structure defines the polecat sandbox, per tenant; agents get a boolean guard on their own edits.
@@ -1247,19 +1247,21 @@ blast radius, intra-procedural dataflow, co-change reconciliation) are
 | `export.rs` | referential structure → Turtle in `bobbin:` ontology (FR-34) | code side done |
 | `hook/` | Claude Code adapters: `post_edit` advisory + `pre_edit` blocking guard (FR-30) | done |
 | `policy.rs` | capability scopes + blast-radius ceilings (§5.8/FR-25) | done |
+| `verify/` | proposed-buffer verdicts (FR-23/FR-24) | tree-sitter tier done |
 | `mcp/` | `rmcp` server (`server`/`tools`/`transport`) | done (`mcp` feature) |
 | `config.rs` | `[hank]` config table | done |
 | `cli.rs` / `cli_cmds.rs` / `render.rs` | CLI surface | done |
 | `types.rs` / `errors.rs` | fact model (Tier/Freshness/…) + errors | done |
 
 **CLI commands:** `analyze`, `refs`, `callers`, `impact` (`--cochange`),
-`dataflow`, `export`, `hook post-edit`, `hook pre-edit`, `status`, `serve`
-(`mcp` feature), `completions` — all live. `verify`, `promote` — declared, print
+`dataflow`, `export`, `verify`, `hook post-edit`, `hook pre-edit`, `status`,
+`serve` (`mcp` feature), `completions` — all live. `promote` — declared, prints
 a phase notice.
 
-**MCP tools (8, `mcp` feature):** `hank_status`, `hank_symbols`,
+**MCP tools (9, `mcp` feature):** `hank_status`, `hank_symbols`,
 `hank_references`, `hank_analyze`, `hank_callers`, `hank_callees`, `hank_impact`
-(with `cochange`), `hank_dataflow`. Over stdio + streamable-HTTP.
+(with `cochange`), `hank_dataflow`, `hank_verify`. Over stdio +
+streamable-HTTP.
 
 **Cargo features:** `default = []`; `mcp`, `langs-extra`, `cpg`, `lsp`, `quipu`
 (all off by default; `mcp` in the CI matrix). `langs-extra` deps are declared but
