@@ -28,6 +28,10 @@ pub(crate) fn callers(json: bool, quiet: bool, symbol: &str, path: &Path) -> any
             "symbol": symbol,
             "callers": reached_json(&callers),
             "callees": reached_json(&callees),
+            // Provenance tier of the answer (FR-3). The call graph is tree-sitter,
+            // so this is served, not left unlabelled — an empty result declares it
+            // too. Matches the MCP NeighborsResponse.tier.
+            "tier": "treesitter",
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
@@ -117,6 +121,9 @@ pub(crate) fn impact(
             "count": reached.len(),
             "reachable": reached_json(&reached),
             "structural_files": structural_files.iter().collect::<Vec<_>>(),
+            // Blast radius is the trust-boundary surface (FR-25); serving it
+            // unlabelled is exactly what FR-3 forbids. tree-sitter tier, tagged.
+            "tier": "treesitter",
         });
         if let Some(cochange_set) = &cochange_set {
             let recon = reconcile(&structural_files, cochange_set);
@@ -226,6 +233,7 @@ pub(crate) fn dataflow(
                     "direction": dir.as_str(),
                     "count": steps.len(),
                     "flow": steps.iter().map(|s| serde_json::json!({ "name": s.name, "distance": s.distance })).collect::<Vec<_>>(),
+                    "tier": "treesitter",   // FR-3: dataflow is tree-sitter-derived.
                 });
                 println!("{}", serde_json::to_string_pretty(&out)?);
             } else if steps.is_empty() {
@@ -246,6 +254,7 @@ pub(crate) fn dataflow(
                     "function": function,
                     "count": edges.len(),
                     "edges": edges.iter().map(|e| serde_json::json!({ "dependent": e.dependent, "depends_on": e.depends_on, "line": e.line })).collect::<Vec<_>>(),
+                    "tier": "treesitter",   // FR-3: dataflow is tree-sitter-derived.
                 });
                 println!("{}", serde_json::to_string_pretty(&out)?);
             } else if edges.is_empty() {
@@ -288,7 +297,13 @@ pub(crate) fn export(path: &Path, repo: Option<&str>) -> anyhow::Result<()> {
 /// Shared "not found" reporting for a missing symbol/function.
 fn not_found(json: bool, quiet: bool, name: &str, what: &str) -> anyhow::Result<()> {
     if json {
-        println!("{}", serde_json::json!({ "name": name, "found": false }));
+        // The not-found result is still a served fact and still carries its tier
+        // (FR-3) — this is the empty-case hole the top-level tag closes. All three
+        // callers (callers/impact/dataflow) query the tree-sitter graph.
+        println!(
+            "{}",
+            serde_json::json!({ "name": name, "found": false, "tier": "treesitter" })
+        );
     } else if !quiet {
         println!("{name} not found in the {what}");
     }

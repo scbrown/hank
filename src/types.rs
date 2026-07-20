@@ -1,9 +1,23 @@
 //! The typed fact model Hank serves.
 //!
-//! Every served fact carries a [`Tier`] (how it was derived) and a
-//! [`Freshness`] tag (how current it is) — the "confidence tag" the spec
-//! requires (FR-3) so a consumer never mistakes a tree-sitter approximation for
-//! an LSP-precise fact.
+//! Every served fact carries a [`Tier`] (how it was derived) — the confidence
+//! tag FR-3 requires so a consumer never mistakes a tree-sitter approximation
+//! for an LSP-precise fact.
+//!
+//! [`Freshness`] (how current a fact is) is FR-3's OTHER half, and it is **not
+//! yet served**. Freshness state (fresh/stale/recomputing) is a property of the
+//! Phase-3 resident graph + file-watcher (FR-16/17); the current serve path
+//! rebuilds the graph on demand per request from the working copy, where there
+//! is no cached fact that could be stale. So [`Freshness`] and [`Fact`] (the
+//! subject–edge–object carrier that pairs a value with both tags) are defined
+//! here as the Phase-3 carrier but have no caller on the served path yet.
+//!
+//! This docstring previously asserted that every served fact carried a freshness
+//! tag. It did not — freshness was served nowhere (aegis-8yrn). Correcting the
+//! claim, rather than stamping a hardcoded `fresh` that would imply a tracking
+//! system that does not exist, is the FR-3 honesty rule applied to the spec
+//! itself: a fact that cannot state its own freshness says so, it does not
+//! default to looking current.
 
 use serde::{Deserialize, Serialize};
 
@@ -134,6 +148,10 @@ pub struct Symbol {
 }
 
 /// A single structural fact: `subject —edge→ object`, tagged with provenance.
+///
+/// The Phase-3 freshness carrier (see the module docs): it pairs a value with
+/// both a [`Tier`] and a [`Freshness`], but nothing on the served path constructs
+/// one yet — freshness lands with the resident graph + watcher (FR-16/17).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fact {
     /// The subject identifier.

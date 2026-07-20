@@ -29,6 +29,17 @@ use crate::dataflow::{Dataflow, FlowDir};
 use crate::extract::{extract_symbols, rust_files};
 use crate::graph::{CodeGraph, Dir, Reached};
 use crate::reconcile::reconcile;
+use crate::types::Tier;
+
+/// The provenance tier of everything the call graph and dataflow serve. The
+/// graph is built entirely from tree-sitter extraction (`CodeGraph::build`), so
+/// every reachability/dataflow fact is `treesitter` today — one source of truth
+/// for that string rather than a literal repeated per handler, and the place to
+/// propagate a real per-node tier from when the LSP/CPG tiers start resolving
+/// edges (FR-3).
+fn graph_tier() -> String {
+    Tier::TreeSitter.as_str().to_string()
+}
 
 /// Hank's MCP server. Resolves requests against the analysis root for a tenant.
 #[derive(Clone)]
@@ -226,6 +237,7 @@ impl HankMcpServer {
             reachable: reachable.iter().map(reach_item).collect(),
             structural_files: structural_files.into_iter().collect(),
             reconciliation,
+            tier: graph_tier(),
         };
         json_result(&response)
     }
@@ -358,6 +370,7 @@ impl HankMcpServer {
             var: req.var.clone(),
             flow: steps,
             edges,
+            tier: graph_tier(),
         };
         json_result(&response)
     }
@@ -378,6 +391,7 @@ impl HankMcpServer {
             found,
             count: neighbors.len(),
             neighbors: neighbors.iter().map(reach_item).collect(),
+            tier: graph_tier(),
         };
         json_result(&response)
     }
@@ -426,6 +440,7 @@ fn reach_item(reached: &Reached) -> ReachItem {
         start_line: reached.start_line,
         distance: reached.distance,
         via: reached.via.to_string(),
+        tier: graph_tier(),
     }
 }
 
@@ -440,3 +455,10 @@ fn tier_availability() -> Vec<String> {
     }
     tiers
 }
+
+// The FR-3 enforcement walk (aegis-8yrn) lives in a size-exempt sibling file so
+// it can call the private tool handlers as a child module without pushing
+// server.rs past the 500-line limit.
+#[cfg(all(test, feature = "mcp"))]
+#[path = "server_test.rs"]
+mod server_test;
