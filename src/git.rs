@@ -18,6 +18,16 @@ use std::process::Command;
 
 /// Run `git` in `root` with `args`, returning stdout on a clean exit (status 0)
 /// and `None` on any failure (git missing, not a repo, bad ref, …).
+///
+/// NOTE for callers: `None` collapses "it failed" with nothing else, but an
+/// EMPTY `Some("")` is a real answer — git succeeded and printed nothing. Do not
+/// turn the two into the same empty list without saying which happened; see
+/// [`crate::change`], which exists partly because that collapse hid a change-set
+/// that was never computed behind one that was legitimately empty.
+pub(crate) fn run(root: &Path, args: &[&str]) -> Option<String> {
+    git(root, args)
+}
+
 fn git(root: &Path, args: &[&str]) -> Option<String> {
     let output = Command::new("git")
         .arg("-C")

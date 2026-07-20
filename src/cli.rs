@@ -68,6 +68,20 @@ enum Commands {
         #[arg(long)]
         at: Option<String>,
     },
+    /// What does a CHANGE do — which entities does it add, remove or modify?
+    ///
+    /// The FR-13 baseline pointed at a change-time question instead of a tree
+    /// one. `--base` is the ref to diff FROM (defaults to the configured
+    /// `base_ref`); omit `--to` to judge the WORKING TREE, which is the shape a
+    /// proposed, uncommitted change has.
+    Changed {
+        /// Ref to diff from (defaults to the configured `base_ref`).
+        #[arg(long)]
+        base: Option<String>,
+        /// Ref to diff to. Omit to diff against the working tree.
+        #[arg(long)]
+        to: Option<String>,
+    },
     /// Find the definition sites of a symbol by name.
     Refs {
         /// Symbol name to locate.
@@ -240,6 +254,7 @@ impl Cli {
                 *forward,
                 *hops,
             ),
+            Commands::Changed { base, to } => self.changed(base.as_deref(), to.as_deref()),
             Commands::Verify { file, buffer } => {
                 cli_cmds::verify(self.json, self.quiet, file, buffer)
             }
@@ -353,6 +368,67 @@ impl Cli {
                     sym.tier
                 );
             }
+        }
+        Ok(())
+    }
+
+    /// Print the entities a change touches — and, separately, the files it
+    /// could NOT read.
+    ///
+    /// The two lists are printed apart on purpose. A rule enforced on the first
+    /// list while the second is non-empty has judged a SUBSET of the change and
+    /// will report a clean result for it; the operator has to be able to see
+    /// that from the output, not infer it. Exit 2 when anything was unread, for
+    /// the same reason: a caller that only checks the exit code still learns
+    /// that the answer was partial.
+    fn changed(&self, base: Option<&str>, to: Option<&str>) -> anyhow::Result<()> {
+        let root = std::env::current_dir()?;
+        let config = HankConfig::load(&root)?;
+        let base = base.unwrap_or(&config.base_ref);
+
+        let set = match crate::change::changed_entities(&root, base, to) {
+            Ok(set) => set,
+            Err(e) => {
+                // NOT an empty change. Say which, and fail — a caller that read
+                // "0 entities" here would treat an unevaluated change as a clean
+                // one, which is the premise this command exists to protect.
+                if self.json {
+                    println!(
+                        "{}",
+                        serde_json::json!({ "error": e.to_string(), "evaluated": false })
+                    );
+                } else {
+                    eprintln!("hank: {e}");
+                }
+                std::process::exit(2);
+            }
+        };
+
+        if self.json {
+            println!("{}", serde_json::to_string_pretty(&set)?);
+        } else {
+            println!("{}", "hank changed".bold());
+            println!("  base : {}", set.base);
+            println!("  to   : {}", set.to);
+            if set.entities.is_empty() {
+                println!("  entities: none — this change touches no known entities");
+            } else {
+                println!("  entities: {}", set.entities.len());
+                for e in &set.entities {
+                    println!("    {:<9} {} :: {}", e.kind, e.file, e.name);
+                }
+            }
+            if let Some(summary) = set.unread_summary() {
+                println!();
+                println!("  ⚠ {summary}");
+                for u in &set.unread {
+                    println!("    {} — {}", u.file, u.why);
+                }
+                println!("    A rule judged on the entities above has NOT been applied to these.");
+            }
+        }
+        if !set.fully_read() {
+            std::process::exit(2);
         }
         Ok(())
     }
