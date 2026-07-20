@@ -20,6 +20,39 @@ use crate::graph::{reachable_over, CodeGraph, Dir};
 use crate::policy::BlastRadius;
 use crate::types::Symbol;
 
+/// What a measurement attempt produced. THREE ANSWERS, NOT TWO (aegis-nz2x).
+///
+/// This used to be an `Option`, and the `None` meant two opposite things: "the
+/// deadline expired, so the blast-radius rules DID NOT RUN" and "there was nothing
+/// here to measure". The caller allowed on both and said nothing, so a repo big
+/// enough to blow the budget silently lost enforcement while reporting exactly what
+/// a clean pass reports.
+///
+/// MEASURED 2026-07-20, guard wall clock vs the shipped default `deadline_ms = 100`:
+///
+/// ```text
+/// hank      8,817 lines    45 ms    within budget
+/// quipu    33,094 lines   152 ms    OVER - rules already off
+/// bobbin   69,118 lines   313 ms    OVER by 3.1x - rules already off
+/// ```
+///
+/// So this is not a future risk on a hypothetical large repo; on two of the fleet's
+/// three Rust trees the blast-radius guard is already disabling itself on every edit.
+/// Keeping the two cases apart is what lets the caller be loud about the one that
+/// means "unguarded" and quiet about the one that means "nothing to guard".
+#[derive(Debug, PartialEq, Eq)]
+pub enum Measured {
+    /// The walk completed inside the budget.
+    Radius(BlastRadius),
+    /// The budget expired first. The rules did not run — this is an ENFORCEMENT GAP.
+    TimedOut,
+    /// The walk completed and found nothing to size: no anchors, or a file this
+    /// extractor does not read. NOT a gap, and must stay quiet — today the graph is
+    /// Rust-only (aegis-81t2), so every .py/.ts edit lands here and warning on it
+    /// would bury the real signal in noise on the first day.
+    NotMeasurable,
+}
+
 /// Measure the edit's blast radius, abandoning the attempt if `budget` expires.
 ///
 /// The work runs on a worker thread so the deadline is real wall-clock, not a
@@ -32,9 +65,10 @@ pub fn measure_within(
     input: &HookInput,
     max_hops: u32,
     budget: Duration,
-) -> Option<BlastRadius> {
+) -> Measured {
+    // No budget left is not "nothing to measure" — it is no time in which to look.
     if budget.is_zero() {
-        return None;
+        return Measured::TimedOut;
     }
     let (tx, rx) = std::sync::mpsc::channel();
     let (root, file, rel) = (root.to_path_buf(), file.to_path_buf(), rel.to_string());
@@ -47,7 +81,11 @@ pub fn measure_within(
     std::thread::spawn(move || {
         let _ = tx.send(measure(&root, &file, &rel, &anchors, max_hops));
     });
-    rx.recv_timeout(budget).ok().flatten()
+    match rx.recv_timeout(budget) {
+        Ok(Some(radius)) => Measured::Radius(radius),
+        Ok(None) => Measured::NotMeasurable,
+        Err(_) => Measured::TimedOut,
+    }
 }
 
 /// The blast radius of editing the symbols `anchors` fall inside.
@@ -191,7 +229,9 @@ mod tests {
     }
 
     #[test]
-    fn a_zero_budget_measures_nothing() {
+    fn a_zero_budget_reports_TIMED_OUT_not_nothing_to_measure() {
+        // aegis-nz2x: these are opposite facts. "No time to look" is an enforcement
+        // gap the caller must announce; "nothing to look at" is not.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("leaf.rs"), "fn leaf() {}\n").unwrap();
         let input = HookInput::parse(
@@ -205,8 +245,7 @@ mod tests {
             &input,
             5,
             Duration::ZERO,
-        )
-        .is_none());
+        ) == Measured::TimedOut);
     }
 
     #[test]
