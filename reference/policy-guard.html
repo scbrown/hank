@@ -337,6 +337,16 @@ Path patterns are globs matched against the repo-relative path.</p>
 <p>With <code>mode = "advise"</code> the guard reports what it <em>would</em> have denied via
 <code>systemMessage</code> and never blocks — run a new scope in <code>advise</code> for a while
 before promoting it to <code>enforce</code>.</p>
+<p><strong>An advise run is visible to the operator, not to the agent.</strong> <code>systemMessage</code>
+surfaces in the user's pane; it does not enter the model's context, and the tool
+result of an advised edit is indistinguishable from an unguarded one. Confirmed
+by running the same violating edit in both modes on a live pane: <code>advise</code>
+returned an ordinary success to the model, <code>enforce</code> returned the reason.</p>
+<p>Two consequences when staging a scope. Agents will not self-correct during an
+advise run, so the violation counts you collect are the <em>uncorrected</em> rate —
+which is what you want for sizing a ceiling. And "agents behaved no differently
+under advise" is not evidence that they saw the advisory; they did not. Only
+<code>enforce</code> puts the reason in front of the model.</p>
 <h2 id="what-the-guard-checks"><a class="header" href="#what-the-guard-checks">What the guard checks</a></h2>
 <ol>
 <li><strong>Path scope</strong> (FR-25) — is the edited file inside this tenant's writable
