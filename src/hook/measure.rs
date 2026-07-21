@@ -119,8 +119,23 @@ pub fn measure_within(
     rx.recv_timeout(budget).unwrap_or(Sizing::Deadline)
 }
 
-/// The blast radius of editing the symbols `anchors` fall inside.
-fn measure(root: &Path, file: &Path, rel: &str, anchors: &[String], max_hops: u32) -> Sizing {
+/// The per-edit part of a measurement: parse the edited file and find the symbols
+/// the edit lands inside. This is what MUST run per edit (the file content changes
+/// each time); the graph walk that follows is what a resident graph makes cheap.
+/// Split out so [`measure`] (transient graph) and [`measure_with_graph`] (resident
+/// graph, FR-31) share it — and so `measure` keeps its early-outs BEFORE any graph
+/// is built: a NoGrammar/Unreadable/NoAnchors edit never pays for a build.
+enum Touched {
+    /// The edit landed inside these symbols, in `language`.
+    Ok {
+        language: &'static str,
+        touched: Vec<String>,
+    },
+    /// The edit could not be sized, and why — returned as-is by both entry points.
+    Unmeasurable(Sizing),
+}
+
+fn edit_touch(file: &Path, anchors: &[String]) -> Touched {
     // Parse the file as the language it IS. This used to demand `.rs` and then
     // extract as "rust"; every other language fell out here as a silent allow.
     let ext = file
@@ -129,28 +144,37 @@ fn measure(root: &Path, file: &Path, rel: &str, anchors: &[String], max_hops: u3
         .unwrap_or_default()
         .to_string();
     let Some(language) = language_for_extension(&ext) else {
-        return Sizing::NoGrammar { ext };
+        return Touched::Unmeasurable(Sizing::NoGrammar { ext });
     };
     let Ok(source) = std::fs::read_to_string(file) else {
-        return Sizing::Unreadable;
+        return Touched::Unmeasurable(Sizing::Unreadable);
     };
     let Ok(structure) = extract_structure(&source, language) else {
         // The extension mapped, but this build cannot actually parse it. Same
         // ignorance, same report — never a pass.
-        return Sizing::NoGrammar { ext };
+        return Touched::Unmeasurable(Sizing::NoGrammar { ext });
     };
     let touched = touched_symbols(&structure.symbols, &source, anchors);
     if touched.is_empty() {
-        return Sizing::NoAnchors;
+        return Touched::Unmeasurable(Sizing::NoAnchors);
     }
+    Touched::Ok { language, touched }
+}
 
-    let Ok(graph) = CodeGraph::build(root) else {
-        return Sizing::Unreadable;
-    };
+/// Walk `graph` from the edited symbols and count the transitive blast radius.
+/// Graph-source-agnostic: the caller supplies a freshly-built graph or a resident
+/// one, and the answer is identical for the same tree.
+fn walk_blast(
+    graph: &CodeGraph,
+    touched: &[String],
+    rel: &str,
+    language: &str,
+    max_hops: u32,
+) -> BlastRadius {
     let mut symbols: BTreeSet<String> = BTreeSet::new();
     let mut files: BTreeSet<String> = BTreeSet::new();
-    for name in &touched {
-        for reached in reachable_over(&graph, name, Dir::Callers, max_hops) {
+    for name in touched {
+        for reached in reachable_over(graph, name, Dir::Callers, max_hops) {
             // The edited file is the change, not its blast radius.
             if reached.file == rel {
                 continue;
@@ -177,10 +201,43 @@ fn measure(root: &Path, file: &Path, rel: &str, anchors: &[String], max_hops: u3
             files.insert(reached.file);
         }
     }
-    Sizing::Measured(BlastRadius {
+    BlastRadius {
         symbols: symbols.len(),
         files: files.len(),
-    })
+    }
+}
+
+/// The blast radius of editing the symbols `anchors` fall inside — building the
+/// graph transiently. This is today's per-invocation path; the resident daemon
+/// uses [`measure_with_graph`] instead, avoiding the build.
+fn measure(root: &Path, file: &Path, rel: &str, anchors: &[String], max_hops: u32) -> Sizing {
+    let (language, touched) = match edit_touch(file, anchors) {
+        Touched::Ok { language, touched } => (language, touched),
+        Touched::Unmeasurable(sizing) => return sizing,
+    };
+    // Only now — after the cheap early-outs — pay for the graph build.
+    let Ok(graph) = CodeGraph::build(root) else {
+        return Sizing::Unreadable;
+    };
+    Sizing::Measured(walk_blast(&graph, &touched, rel, language, max_hops))
+}
+
+/// The same measurement against an ALREADY-BUILT graph (FR-31, the resident
+/// daemon). The graph is the resident base; the edited file is still read fresh,
+/// so the answer matches [`measure`] on the same tree — proven by test — while the
+/// per-edit graph build is gone.
+pub(crate) fn measure_with_graph(
+    graph: &CodeGraph,
+    file: &Path,
+    rel: &str,
+    anchors: &[String],
+    max_hops: u32,
+) -> Sizing {
+    let (language, touched) = match edit_touch(file, anchors) {
+        Touched::Ok { language, touched } => (language, touched),
+        Touched::Unmeasurable(sizing) => return sizing,
+    };
+    Sizing::Measured(walk_blast(graph, &touched, rel, language, max_hops))
 }
 
 /// The names of the symbols this edit lands inside.
