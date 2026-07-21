@@ -27,6 +27,7 @@
 
 - [Specification](design/specification.md)
 - [Vision](design/vision.md)
+- [Policy edit hooks](design/policy-edit-hooks.md)
 
 # Operations
 
