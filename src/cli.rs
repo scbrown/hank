@@ -58,6 +58,14 @@ enum Commands {
         #[arg(long)]
         http: bool,
     },
+    /// Run the resident-graph daemon: build the base graph once and hold it,
+    /// serving a local liveness surface (Phase 3, FR-31). Query endpoints and the
+    /// hook/MCP thin-client cutover land in later stages.
+    Daemon {
+        /// Port for the daemon's local HTTP surface (defaults to `serve.mcp_http_port`).
+        #[arg(long)]
+        port: Option<u16>,
+    },
     /// Build the base graph for a path and print a summary.
     Analyze {
         /// Directory or file to analyze (defaults to the current directory).
@@ -250,6 +258,7 @@ impl Cli {
                 Ok(())
             }
             Commands::Serve { http } => self.serve(*http).await,
+            Commands::Daemon { port } => self.daemon(*port).await,
             Commands::Callers { symbol, path } => {
                 cli_cmds::callers(self.json, self.quiet, symbol, path)
             }
@@ -621,9 +630,32 @@ impl Cli {
         }
     }
 
+    /// Run the resident-graph daemon (Phase 3, stage 1): build the base graph
+    /// once and serve its liveness surface. Query endpoints are stage 2.
+    async fn daemon(&self, port: Option<u16>) -> anyhow::Result<()> {
+        #[cfg(feature = "mcp")]
+        {
+            let root = std::env::current_dir()?;
+            let config = self.load_config(&root)?;
+            let bind = config.serve.bind_address.clone();
+            let port = port.unwrap_or(config.serve.mcp_http_port);
+            crate::daemon::serve(&root, self.config.as_deref(), &bind, port).await
+        }
+        #[cfg(not(feature = "mcp"))]
+        {
+            let _ = port;
+            self.planned(
+                "daemon",
+                3,
+                "build with `--features mcp` to enable the resident HTTP surface",
+            );
+            Ok(())
+        }
+    }
+
     /// Print a notice for a command whose engine has not yet landed.
-    // Used only by the feature-stub arms (serve without `mcp`, promote without
-    // `quipu`); a build with both features enabled reaches neither, so it is
+    // Used only by the feature-stub arms (serve/daemon without `mcp`, promote
+    // without `quipu`); a build with both features enabled reaches none, so it is
     // legitimately dead there.
     #[allow(dead_code)]
     fn planned(&self, name: &str, phase: u8, detail: &str) {

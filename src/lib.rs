@@ -16,6 +16,7 @@ pub mod cli;
 mod cli_cmds;
 pub mod community;
 pub mod config;
+pub mod daemon;
 pub mod dataflow;
 pub mod docref;
 pub mod errors;
