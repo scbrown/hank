@@ -601,6 +601,10 @@ impl Cli {
     }
 
     /// Print a notice for a command whose engine has not yet landed.
+    // Used only by the feature-stub arms (serve without `mcp`, promote without
+    // `quipu`); a build with both features enabled reaches neither, so it is
+    // legitimately dead there.
+    #[allow(dead_code)]
     fn planned(&self, name: &str, phase: u8, detail: &str) {
         if !self.quiet {
             eprintln!(
@@ -624,12 +628,18 @@ impl Cli {
                  promote the working tree, not that commit. Only --commit HEAD is honoured."
             );
         }
-        let Some(endpoint) = to else {
-            anyhow::bail!(
-                "no Quipu endpoint: pass --to <url> (e.g. --to http://localhost:8080). \
+        // `--to` overrides config for a one-off; otherwise the deployment's
+        // configured endpoint. Empty on both is a refusal, never a guessed graph.
+        let cfg = self.load_config(path)?;
+        let endpoint = match to {
+            Some(t) => t.to_string(),
+            None if !cfg.quipu.endpoint.is_empty() => cfg.quipu.endpoint.clone(),
+            None => anyhow::bail!(
+                "no Quipu endpoint: pass --to <url> or set [hank.quipu] endpoint in config. \
                  Refusing rather than guessing a graph to write into."
-            );
+            ),
         };
+        let endpoint = endpoint.as_str();
         let repo = path
             .canonicalize()
             .ok()

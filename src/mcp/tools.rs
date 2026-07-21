@@ -372,3 +372,35 @@ pub struct VerifyResponse {
     /// Provenance tier (FR-3).
     pub tier: String,
 }
+
+/// Request for `hank_promote` — promote a tree's structural facts into Quipu.
+/// Fields are read only by the `quipu`-gated tool body; the type itself is always
+/// present because the tool method (and thus its signature) always is.
+#[cfg_attr(not(feature = "quipu"), allow(dead_code))]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct PromoteRequest {
+    /// Directory to promote, relative to the root. Omit for the root itself.
+    #[schemars(description = "Directory relative to the root, e.g. 'crates/core'. Omit for the whole root.")]
+    pub path: Option<String>,
+
+    /// Quipu base URL override (e.g. `http://localhost:8080`). Omit to use the
+    /// deployment's configured `[hank.quipu] endpoint`.
+    #[schemars(description = "Quipu base URL override; omit to use the configured endpoint")]
+    pub endpoint: Option<String>,
+}
+
+/// Response for `hank_promote`. Constructed only by the `quipu`-gated tool body.
+#[cfg_attr(not(feature = "quipu"), allow(dead_code))]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct PromoteResponse {
+    /// Did the promotion validate AND write? False means refused; see `violations`.
+    pub wrote: bool,
+    /// Triples present for these facts after the write (idempotence signal). None
+    /// on refusal.
+    pub count: Option<u64>,
+    /// Quipu transaction id, when written.
+    pub tx_id: Option<u64>,
+    /// SHACL violations when refused — empty iff `wrote`. A refusal always carries
+    /// at least one reason.
+    pub violations: Vec<String>,
+}

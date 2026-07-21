@@ -1287,12 +1287,13 @@ have grown from single files into modules.
 
 **CLI commands:** `analyze`, `refs`, `callers`, `impact` (`--cochange`),
 `dataflow`, `export`, `verify`, `hook post-edit`, `hook pre-edit`, `status`,
-`serve` (`mcp` feature), `completions` — all live. `promote` — declared, prints
-a phase notice.
+`serve` (`mcp` feature), `completions` — all live. `promote` — live behind
+the `quipu` feature (SHACL-validate, then write); a phase notice without it.
 
-**MCP tools (10, `mcp` feature):** `hank_status`, `hank_symbols`,
+**MCP tools (11, `mcp` feature):** `hank_status`, `hank_symbols`,
 `hank_references`, `hank_analyze`, `hank_callers`, `hank_callees`, `hank_impact`
-(with `cochange`), `hank_communities`, `hank_dataflow`, `hank_verify`. Over
+(with `cochange`), `hank_communities`, `hank_dataflow`, `hank_verify`,
+`hank_promote` (writes to Quipu; needs the `quipu` feature). Over
 stdio + streamable-HTTP.
 
 **Cargo features:** `default = []`; `mcp`, `langs-extra`, `quipu` (all off by

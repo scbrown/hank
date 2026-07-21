@@ -135,6 +135,12 @@ pub struct QuipuConfig {
     pub branch_model: String,
     /// Directory holding the SHACL shapes promotion validates against.
     pub shapes_path: String,
+    /// Base URL of the Quipu to promote into (e.g. `http://localhost:8080`).
+    /// Deployment config, NOT a per-call parameter: the graph a promotion writes
+    /// into is data identity, not a caller's choice. Empty by default so a
+    /// misconfigured deployment refuses rather than guessing a graph. The CLI
+    /// `--to` overrides it for one-off promotions.
+    pub endpoint: String,
 }
 
 impl Default for QuipuConfig {
@@ -144,6 +150,7 @@ impl Default for QuipuConfig {
             promote_on: "merge".to_string(),
             branch_model: "named_graph".to_string(),
             shapes_path: "shapes/".to_string(),
+            endpoint: String::new(),
         }
     }
 }

@@ -24,6 +24,9 @@ use super::tools::{
     ReconciliationItem, RefItem, ReferencesRequest, ReferencesResponse, StatusResponse, SymbolItem,
     SymbolsRequest, SymbolsResponse, VerifyRequest, VerifyResponse, ViolationItem,
 };
+use super::tools::PromoteRequest;
+#[cfg(feature = "quipu")]
+use super::tools::PromoteResponse;
 use crate::config::HankConfig;
 use crate::dataflow::{Dataflow, FlowDir};
 use crate::extract::{extract_symbols, rust_files};
@@ -316,6 +319,74 @@ impl HankMcpServer {
             tier: "treesitter".to_string(),
         };
         json_result(&response)
+    }
+
+    // Always REGISTERED (the `#[tool_router]` macro references every `#[tool]`
+    // method unconditionally, so cfg-gating the whole method breaks an `mcp`-only
+    // build). The BODY is feature-split: real promotion under `quipu`, an honest
+    // refusal without it — the same shape the CLI's `promote` uses.
+    #[tool(
+        description = "Promote a subtree's structural code facts into Quipu: emits Turtle, SHACL-validates it IN-PROCESS, and writes it only if it conforms (all-or-nothing). Returns wrote + triple count on success, or violations on refusal. The write is guarded by serve.read_only. Best for: 'get this code's structure into the knowledge graph, validated'."
+    )]
+    async fn hank_promote(
+        &self,
+        Parameters(req): Parameters<PromoteRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        #[cfg(not(feature = "quipu"))]
+        {
+            let _ = &req;
+            return Err(internal(crate::errors::Error::Config(
+                "hank_promote needs the `quipu` feature; this server was built without it"
+                    .to_string(),
+            )));
+        }
+        #[cfg(feature = "quipu")]
+        {
+            let config =
+                HankConfig::resolve(self.config.as_deref(), &self.root).map_err(internal)?;
+            // Promotion is a WRITE — honour the same guard the CLI does. Refused
+            // before any work, so read_only means read_only even here.
+            config.write_guard("promotion").map_err(internal)?;
+
+            let endpoint = req
+                .endpoint
+                .filter(|e| !e.is_empty())
+                .or_else(|| Some(config.quipu.endpoint.clone()).filter(|e| !e.is_empty()))
+                .ok_or_else(|| {
+                    internal(crate::errors::Error::Promote(
+                        "no Quipu endpoint: set [hank.quipu] endpoint or pass one in the \
+                         request. Refusing rather than guessing a graph."
+                            .to_string(),
+                    ))
+                })?;
+
+            let base = req
+                .path
+                .as_ref()
+                .map_or_else(|| self.root.clone(), |p| self.root.join(p));
+            let repo = base
+                .canonicalize()
+                .ok()
+                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                .unwrap_or_else(|| "repo".to_string());
+            let turtle = crate::export::to_turtle(&base, &repo).map_err(internal)?;
+
+            let response = match crate::promote::promote(&endpoint, &turtle).map_err(internal)? {
+                crate::promote::Promotion::Wrote(k) => PromoteResponse {
+                    wrote: true,
+                    count: Some(k.count),
+                    tx_id: k.tx_id,
+                    violations: Vec::new(),
+                },
+                crate::promote::Promotion::Refused(violations) => PromoteResponse {
+                    wrote: false,
+                    count: None,
+                    tx_id: None,
+                    violations,
+                },
+            };
+            json_result(&response)
+        }
     }
 
     #[tool(

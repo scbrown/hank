@@ -53,8 +53,8 @@ fn registered_tools() -> BTreeSet<String> {
 }
 
 /// The tools the `## Live tools` table in the MCP reference documents. Stops at
-/// the next `##` so the `## Planned` table (which holds `hank_promote`, not a
-/// registered tool) is excluded — the reference is right to list it separately.
+/// the next `##` so any later section is excluded. `hank_promote` moved INTO this
+/// table when it was wired (Phase 4); it is always registered, so it belongs here.
 fn documented_live_tools() -> BTreeSet<String> {
     let md = read("docs/book/src/reference/mcp-tools.md");
     let start = md.find("## Live tools").expect("Live tools section");
@@ -73,8 +73,8 @@ fn registered_tools_match_the_mcp_reference() {
     let docs = documented_live_tools();
     assert_eq!(
         code.len(),
-        10,
-        "expected 10 registered hank_* tools, got {code:?}"
+        11,
+        "expected 11 registered hank_* tools, got {code:?}"
     );
     assert_eq!(
         code, docs,
@@ -107,7 +107,7 @@ fn readme_and_quickstart_state_the_right_tool_count() {
     // The count is spelled as a word in the prose; pin it to the registered count
     // and forbid the two stale numbers that were live (`eight`, `nine`).
     let n = registered_tools().len();
-    assert_eq!(n, 10);
+    assert_eq!(n, 11);
     for (file, rel) in [
         ("README.md", "README.md"),
         (
@@ -117,12 +117,12 @@ fn readme_and_quickstart_state_the_right_tool_count() {
     ] {
         let text = flow(&read(rel));
         assert!(
-            text.contains("ten `hank_*` tools") || text.contains("ten MCP tools"),
-            "{file} does not state ten tools"
+            text.contains("eleven `hank_*` tools") || text.contains("eleven MCP tools"),
+            "{file} does not state eleven tools"
         );
         assert!(
-            !text.contains("eight `hank_*`") && !text.contains("eight MCP tools"),
-            "{file} still says eight tools"
+            !text.contains("ten `hank_*`") && !text.contains("ten MCP tools"),
+            "{file} still says ten tools"
         );
     }
 }

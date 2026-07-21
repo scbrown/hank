@@ -47,7 +47,7 @@ It is the substrate under Phase-4 promotion into Quipu; see the
 
 ## The MCP server
 
-Built with the `mcp` feature, `hank serve` exposes ten `hank_*` tools over MCP —
+Built with the `mcp` feature, `hank serve` exposes eleven `hank_*` tools over MCP —
 starting with `hank_status`, `hank_symbols`, `hank_references`, and `hank_analyze`
 (the full set is in the [MCP Tools reference](../reference/mcp-tools.md)):
 
@@ -61,7 +61,7 @@ See the [MCP Tools reference](../reference/mcp-tools.md).
 ## What works today
 
 `analyze`, `refs`, `status`, the call-graph commands `callers`/`impact`,
-`dataflow`, `verify` (the FR-23/FR-24 edit-buffer verdict), and the ten MCP tools
+`dataflow`, `verify` (the FR-23/FR-24 edit-buffer verdict), and the eleven MCP tools
 are live. Only `promote` is still declared with its final shape and prints a phase
 notice until its engine lands — see the
 [Specification](../design/specification.md).

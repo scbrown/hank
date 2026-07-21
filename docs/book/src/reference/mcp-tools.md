@@ -32,12 +32,7 @@ hank serve --http     # streamable-HTTP at http://127.0.0.1:3040/mcp
 | `hank_impact` | Blast radius — transitive callers, N hops; reconciles against a `cochange` set (FR-11) |
 | `hank_dataflow` | Intra-procedural data dependence within a function |
 | `hank_verify` | Verdict on a **proposed** edit buffer, before you write it (FR-23/FR-24) |
-
-## Planned (later phases)
-
-| Tool | Purpose | Phase |
-|------|---------|-------|
-| `hank_promote` | Trigger promotion of a commit to Quipu | 4 |
+| `hank_promote` | Promote a subtree's facts to Quipu — SHACL-validate, then write (needs the `quipu` feature) |
 
 ## `hank_verify`
 
