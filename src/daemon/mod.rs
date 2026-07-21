@@ -4,8 +4,8 @@
 //! per invocation. FR-31 makes a resident process that holds the base graph in
 //! memory the foundation for the sub-100ms guard budget and for per-tenant
 //! overlays. This module is that process's core: it builds the graph ONCE, holds
-//! it, and (stage 1) exposes only a liveness/status surface. The query endpoints
-//! are stage 2; the hook/MCP thin-client cutover is stage 3. Landing in stages is
+//! it, and exposes a liveness/status surface (stage 1) plus graph-backed query
+//! endpoints (stage 2). The hook/MCP thin-client cutover is stage 3. Landing in stages is
 //! deliberate — a half-built resident guard is a footgun (see below).
 //!
 //! ## Two invariants this stage exists to establish before any query lands
@@ -31,8 +31,9 @@ use std::time::SystemTime;
 use serde::Serialize;
 
 use crate::config::HankConfig;
-use crate::graph::CodeGraph;
+use crate::graph::{CodeGraph, Dir, Reached};
 use crate::policy::PolicyConfig;
+use crate::types::Tier;
 
 pub mod client;
 #[cfg(feature = "mcp")]
@@ -94,6 +95,40 @@ impl ResidentEngine {
         &self.inner.config.policy
     }
 
+    /// Direct callers or callees of `symbol`, from the RESIDENT graph — no
+    /// per-call rebuild, which is the daemon's whole point. This is the shared
+    /// query layer: the HTTP surface (stage 2) calls it now, and the hook/MCP thin
+    /// clients (stage 3) will call the same method instead of building transiently.
+    #[must_use]
+    pub fn neighbors(&self, symbol: &str, dir: Dir) -> Neighbors {
+        let graph = self.graph();
+        Neighbors {
+            symbol: symbol.to_string(),
+            found: graph.has_symbol(symbol),
+            neighbors: graph.direct(symbol, dir).iter().map(reached_item).collect(),
+            tier: graph_tier(),
+        }
+    }
+
+    /// Blast radius: symbols transitively affected by changing `symbol`, up to
+    /// `hops`. Resident-graph, no rebuild.
+    #[must_use]
+    pub fn impact(&self, symbol: &str, hops: u32) -> Impact {
+        let graph = self.graph();
+        let reachable = graph.reachable(symbol, Dir::Callers, hops);
+        let files: std::collections::BTreeSet<String> =
+            reachable.iter().map(|r| r.file.clone()).collect();
+        Impact {
+            symbol: symbol.to_string(),
+            found: graph.has_symbol(symbol),
+            hops,
+            count: reachable.len(),
+            reachable: reachable.iter().map(reached_item).collect(),
+            files: files.into_iter().collect(),
+            tier: graph_tier(),
+        }
+    }
+
     /// A machine-readable liveness/status snapshot — real facts about what is
     /// resident, so a probe distinguishes "up and holding a graph" from "up but
     /// empty" as well as from "not reachable at all" (the last is the client's
@@ -132,10 +167,78 @@ pub struct EngineStatus {
     pub tier: Vec<String>,
 }
 
+/// The provenance tier of every reachability fact the resident graph serves.
+/// One source of truth for the string, mirroring `mcp::server::graph_tier`; the
+/// place to propagate a real per-node tier from when the LSP/CPG tiers land.
+fn graph_tier() -> String {
+    Tier::TreeSitter.as_str().to_string()
+}
+
+/// One reached symbol in a neighbors/impact reply. Owned + `Serialize` so the
+/// daemon layer does not depend on the `mcp` feature's response types.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ReachedItem {
+    /// Symbol name.
+    pub name: String,
+    /// File, relative to the analysis root.
+    pub file: String,
+    /// 1-based definition line.
+    pub start_line: usize,
+    /// Hop distance from the seed (1 = direct).
+    pub distance: u32,
+    /// Relationship to the seed (`calls` or `called_by`).
+    pub via: &'static str,
+}
+
+fn reached_item(r: &Reached) -> ReachedItem {
+    ReachedItem {
+        name: r.name.clone(),
+        file: r.file.clone(),
+        start_line: r.start_line,
+        distance: r.distance,
+        via: r.via,
+    }
+}
+
+/// Reply for `/callers` and `/callees`. `found` is separate from an empty
+/// `neighbors` on purpose: "the symbol is not in the graph" and "the symbol has
+/// no callers" are different answers, and collapsing them is the fact-vs-absence
+/// bug this project keeps paying for.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Neighbors {
+    /// The queried symbol.
+    pub symbol: String,
+    /// Whether the symbol exists in the resident graph at all.
+    pub found: bool,
+    /// Direct neighbors in the requested direction.
+    pub neighbors: Vec<ReachedItem>,
+    /// Provenance tier of these facts.
+    pub tier: String,
+}
+
+/// Reply for `/impact` — the transitive blast radius of changing a symbol.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Impact {
+    /// The queried symbol.
+    pub symbol: String,
+    /// Whether the symbol exists in the resident graph at all.
+    pub found: bool,
+    /// Hops followed.
+    pub hops: u32,
+    /// Number of transitively affected symbols.
+    pub count: usize,
+    /// The affected symbols (callers).
+    pub reachable: Vec<ReachedItem>,
+    /// Distinct files in the impact set.
+    pub files: Vec<String>,
+    /// Provenance tier of these facts.
+    pub tier: String,
+}
+
 /// Build the resident engine and serve its liveness surface on `bind`.
 ///
-/// Stage 1 serves only `/health` and `/status`; the query endpoints are stage 2.
-/// Runs until the process is signalled.
+/// Serves `/health`, `/status` (stage 1) and the graph-backed query endpoints
+/// `/callers`, `/callees`, `/impact` (stage 2). Runs until the process is signalled.
 #[cfg(feature = "mcp")]
 pub async fn serve(
     root: &Path,
@@ -150,4 +253,82 @@ pub async fn serve(
         status.nodes, status.edges, status.root
     );
     http::serve(engine, bind, port).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `leaf` is called by `caller`, which is called by `top` — a 2-hop chain so
+    // impact can be tested past a single hop.
+    fn chain_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("leaf.rs"), "fn leaf() {}\n").unwrap();
+        std::fs::write(dir.path().join("mid.rs"), "fn caller() { leaf(); }\n").unwrap();
+        std::fs::write(dir.path().join("top.rs"), "fn top() { caller(); }\n").unwrap();
+        dir
+    }
+
+    #[test]
+    fn callers_of_a_known_symbol_come_from_the_resident_graph() {
+        let dir = chain_repo();
+        let engine = ResidentEngine::build(dir.path(), None).unwrap();
+        let n = engine.neighbors("leaf", Dir::Callers);
+        assert!(n.found, "leaf is in the graph");
+        assert!(
+            n.neighbors.iter().any(|r| r.name == "caller"),
+            "leaf's direct caller is `caller`, got {:?}",
+            n.neighbors
+        );
+        assert_eq!(n.tier, "treesitter");
+    }
+
+    #[test]
+    fn an_unknown_symbol_is_NOT_FOUND_distinct_from_no_neighbors() {
+        // found=false and an empty list are different answers; a symbol that IS in
+        // the graph but has no callers would be found=true + empty.
+        let dir = chain_repo();
+        let engine = ResidentEngine::build(dir.path(), None).unwrap();
+        let missing = engine.neighbors("does_not_exist", Dir::Callers);
+        assert!(!missing.found);
+        assert!(missing.neighbors.is_empty());
+
+        let top = engine.neighbors("top", Dir::Callers);
+        assert!(top.found, "top exists");
+        assert!(top.neighbors.is_empty(), "nothing calls top");
+    }
+
+    #[test]
+    fn impact_follows_the_chain_transitively() {
+        let dir = chain_repo();
+        let engine = ResidentEngine::build(dir.path(), None).unwrap();
+        let imp = engine.impact("leaf", 5);
+        assert!(imp.found);
+        // Changing leaf transitively affects caller AND top.
+        let names: Vec<&str> = imp.reachable.iter().map(|r| r.name.as_str()).collect();
+        assert!(names.contains(&"caller"), "got {names:?}");
+        assert!(names.contains(&"top"), "got {names:?}");
+    }
+
+    #[test]
+    fn a_resident_impact_query_is_far_under_the_SLO() {
+        // The daemon's reason for being: the query runs against the RESIDENT graph,
+        // with NO rebuild. hank #1's SLO is blast-radius 5 hops < 300ms p95. Against
+        // a resident graph a single query is microseconds; this pins that the query
+        // path itself carries no rebuild cost. (Build time is paid once, at startup,
+        // and is excluded here on purpose — that is exactly what the daemon moves off
+        // the per-query path.)
+        let dir = chain_repo();
+        let engine = ResidentEngine::build(dir.path(), None).unwrap();
+        let start = std::time::Instant::now();
+        for _ in 0..100 {
+            let _ = engine.impact("leaf", 5);
+        }
+        let per_query = start.elapsed() / 100;
+        assert!(
+            per_query < std::time::Duration::from_millis(50),
+            "a resident-graph impact query took {per_query:?} — the SLO win is that \
+             this path has no rebuild cost"
+        );
+    }
 }

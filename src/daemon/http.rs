@@ -1,23 +1,33 @@
-//! The daemon's liveness surface — stage 1 only (aegis-1qze).
+//! The daemon's HTTP surface (aegis-1qze).
 //!
-//! Two routes: `/health` (a bare 200 for the [`super::client`] probe) and
-//! `/status` (the resident graph's real counts). The query endpoints
-//! (refs/definition/callers/callees/impact/dataflow/symbols) are stage 2 and land
-//! in `src/http/` per hank #1; this module is intentionally just enough to make
-//! the resident process observable and reachable, so stage 1 is testable and
-//! mergeable on its own.
+//! - stage 1: `/health` (a bare 200 for the [`super::client`] probe) and
+//!   `/status` (the resident graph's real counts).
+//! - stage 2: the graph-backed query endpoints — `/callers`, `/callees`,
+//!   `/impact` — answered from the RESIDENT graph with no per-call rebuild, which
+//!   is the daemon's whole point. They mirror the `hank_callers`/`callees`/`impact`
+//!   MCP tools, so stage 3 can point the MCP surface at the same engine methods.
+//!
+//! Still deferred: `/symbols` and `/references` (they re-extract from files rather
+//! than reading the resident graph, so they are not the daemon's value-add) and
+//! `/dataflow` (a separate subsystem, not the `CodeGraph`). Kept out of stage 2 to
+//! keep it about the resident graph; noted here rather than silently omitted.
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
+use serde::Deserialize;
 
-use super::{EngineStatus, ResidentEngine};
+use super::{EngineStatus, Impact, Neighbors, ResidentEngine};
+use crate::graph::Dir;
 
-/// Build the stage-1 router over a resident engine.
+/// Build the daemon router over a resident engine.
 pub fn router(engine: ResidentEngine) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/status", get(status))
+        .route("/callers", get(callers))
+        .route("/callees", get(callees))
+        .route("/impact", get(impact))
         .with_state(engine)
 }
 
@@ -31,6 +41,43 @@ async fn health() -> &'static str {
 /// later) reads to confirm the daemon is holding a non-empty graph.
 async fn status(State(engine): State<ResidentEngine>) -> Json<EngineStatus> {
     Json(engine.status())
+}
+
+/// `?symbol=NAME` for the neighbor endpoints.
+#[derive(Debug, Deserialize)]
+struct SymbolQuery {
+    symbol: String,
+}
+
+/// `?symbol=NAME&hops=N` for `/impact`; `hops` defaults to 5, matching the CLI.
+#[derive(Debug, Deserialize)]
+struct ImpactQuery {
+    symbol: String,
+    hops: Option<u32>,
+}
+
+/// Direct callers of a symbol, from the resident graph.
+async fn callers(
+    State(engine): State<ResidentEngine>,
+    Query(q): Query<SymbolQuery>,
+) -> Json<Neighbors> {
+    Json(engine.neighbors(&q.symbol, Dir::Callers))
+}
+
+/// Direct callees of a symbol, from the resident graph.
+async fn callees(
+    State(engine): State<ResidentEngine>,
+    Query(q): Query<SymbolQuery>,
+) -> Json<Neighbors> {
+    Json(engine.neighbors(&q.symbol, Dir::Callees))
+}
+
+/// Blast radius of changing a symbol, from the resident graph.
+async fn impact(
+    State(engine): State<ResidentEngine>,
+    Query(q): Query<ImpactQuery>,
+) -> Json<Impact> {
+    Json(engine.impact(&q.symbol, q.hops.unwrap_or(5)))
 }
 
 /// Bind `host:port` and serve the router until the process is signalled.
@@ -81,7 +128,7 @@ mod tests {
         assert_eq!(r, Reachability::Up, "a live daemon must probe UP");
 
         // And /status reports the same real counts the engine holds.
-        let body = get_status_json(port).await;
+        let body = get_json(port, "/status").await;
         assert_eq!(body["nodes"].as_u64().unwrap() as usize, served.nodes);
         assert_eq!(body["edges"].as_u64().unwrap() as usize, served.edges);
         assert_eq!(body["status"].as_str().unwrap(), "ok");
@@ -98,14 +145,49 @@ mod tests {
         assert!(r.down_reason().unwrap().contains("no daemon"));
     }
 
-    // Minimal HTTP GET of /status without pulling a client dep into the crate:
-    // reuse the probe's raw-socket approach but read the whole body as JSON.
-    async fn get_status_json(port: u16) -> serde_json::Value {
+    #[tokio::test]
+    async fn the_query_endpoints_answer_from_the_resident_graph() {
+        let dir = tiny_repo();
+        let engine = ResidentEngine::build(dir.path(), None).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router(engine)).await;
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // /callers?symbol=leaf — `caller` calls `leaf`.
+        let callers = get_json(port, "/callers?symbol=leaf").await;
+        assert_eq!(callers["found"].as_bool().unwrap(), true);
+        let names: Vec<&str> = callers["neighbors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"caller"), "got {names:?}");
+        assert_eq!(callers["tier"].as_str().unwrap(), "treesitter");
+
+        // /impact?symbol=leaf — the transitive blast radius.
+        let impact = get_json(port, "/impact?symbol=leaf&hops=5").await;
+        assert_eq!(impact["found"].as_bool().unwrap(), true);
+        assert!(impact["count"].as_u64().unwrap() >= 1);
+
+        // An unknown symbol is found=false, not an error.
+        let missing = get_json(port, "/callers?symbol=nope").await;
+        assert_eq!(missing["found"].as_bool().unwrap(), false);
+    }
+
+    // Minimal HTTP GET without pulling a client dep into the crate: reuse the
+    // probe's raw-socket approach and read the whole body as JSON.
+    async fn get_json(port: u16, path: &str) -> serde_json::Value {
+        let path = path.to_string();
         tokio::task::spawn_blocking(move || {
             use std::io::{Read, Write};
             let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-            s.write_all(b"GET /status HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
-                .unwrap();
+            let req =
+                format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+            s.write_all(req.as_bytes()).unwrap();
             let mut raw = String::new();
             s.read_to_string(&mut raw).unwrap();
             let body = raw.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
