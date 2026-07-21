@@ -48,9 +48,7 @@ pub struct Validation {
 /// violations. A parse failure of either input is itself a non-conformance we can
 /// name, never a silent pass — an unparseable projection must not reach Quipu.
 pub fn validate(data_ttl: &str, shapes_ttl: &str) -> Result<Validation> {
-    use rudof_lib::formats::{
-        DataFormat, InputSpec, ResultShaclValidationFormat, ShaclFormat,
-    };
+    use rudof_lib::formats::{DataFormat, InputSpec, ResultShaclValidationFormat, ShaclFormat};
     use rudof_lib::{Rudof, RudofConfig};
 
     let mut rudof = Rudof::new(RudofConfig::default());
@@ -186,7 +184,10 @@ impl Promotion {
                 Ok(true)
             }
             Promotion::Refused(vs) => {
-                writeln!(w, "  REFUSED — promotion did not pass SHACL, wrote nothing:")?;
+                writeln!(
+                    w,
+                    "  REFUSED — promotion did not pass SHACL, wrote nothing:"
+                )?;
                 for v in vs {
                     writeln!(w, "    - {v}")?;
                 }
