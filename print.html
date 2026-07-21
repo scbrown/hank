@@ -466,9 +466,13 @@ structure for reasoning and governance.</p>
 from <code>use</code>/<code>mod</code> declarations at the tree-sitter tier — best-effort by module
 stem, so they over-connect on shared names like any tree-sitter-tier fact; the
 <code>lsp</code> tier refines them.</p>
-<pre><code class="language-bash">hank export src --repo myrepo --format turtle   # dump the referential graph
-# hank export --to quipu                         # promote it (Phase 4)
+<pre><code class="language-bash">hank export src --repo myrepo --format turtle    # dump the referential graph
+hank promote --commit HEAD --to http://quipu.svc .  # SHACL-validate + write it
 </code></pre>
+<p><code>hank promote</code> needs <code>--features quipu</code>; without it the binary says so rather
+than pretending. It emits the Turtle, SHACL-validates in-process against
+<code>shapes/</code>, and writes to <code>/knot</code> <strong>only if it conforms</strong> — a rejected promotion
+exits non-zero so a script can't read it as landed.</p>
 <p>Code and docs are one referential graph (spec §5.10): code leans real-time (the
 live graph + edit hook), docs lean asynchronous (this export). Once in Quipu,
 doc rot becomes a SPARQL query — "every <code>Document</code> referencing a <code>CodeSymbol</code>
@@ -481,6 +485,27 @@ the shapes in <code>shapes/code-entities.ttl</code> (extended with edge shapes).
 <code>Store::transact</code>), honoring <code>valid_from</code>/<code>valid_to</code>, <code>actor</code>, and <code>source</code>
 (the commit SHA).</li>
 </ul>
+<h2 id="querying-it-back--dependency-and-blast-radius"><a class="header" href="#querying-it-back--dependency-and-blast-radius">Querying it back — dependency and blast radius</a></h2>
+<p>Once promoted, the dependency graph is queryable in Quipu. Store the <strong>direct</strong>
+edges (<code>bobbin:calls</code>, <code>bobbin:imports</code>) and let SPARQL property paths do the
+transitive work — never pre-compute and store a transitive closure that goes
+stale. These queries are verified against live Quipu (<code>POST /query</code>, JSON body
+<code>{"query": "…"}</code>).</p>
+<p><strong>What does a symbol depend on?</strong> (one hop)</p>
+<pre><code class="language-sparql">PREFIX bobbin: &lt;http://aegis.gastown.local/ontology/&gt;
+SELECT ?dep WHERE { ?s bobbin:name "hbiw_alpha" . ?s bobbin:calls ?dep }
+</code></pre>
+<p><strong>Blast radius — what breaks if a symbol changes?</strong> The transitive set of callers,
+the <code>+</code> property path (this is the "if X dies, what breaks?" query; assert its
+<em>members</em>, not a nonzero count):</p>
+<pre><code class="language-sparql">PREFIX bobbin: &lt;http://aegis.gastown.local/ontology/&gt;
+SELECT ?affected WHERE { ?t bobbin:name "hbiw_beta" . ?affected bobbin:calls+ ?t }
+</code></pre>
+<p>Code entities do <strong>not</strong> suffer the alias-fragmentation that afflicts the
+human-named infrastructure graph (a blast-radius query over fragmented nodes
+returns a confident <em>subset</em>, worse than nothing): Hank mints one deterministic
+IRI per symbol (<code>…/code/&lt;repo&gt;/&lt;file&gt;::&lt;symbol&gt;</code>), so re-promotion updates the
+same node rather than minting a synonym, and the <code>calls+</code> closure is complete.</p>
 <h2 id="branches-as-named-graphs"><a class="header" href="#branches-as-named-graphs">Branches as named graphs</a></h2>
 <p>Each branch's committed facts belong in an RDF <strong>named graph</strong>, bitemporally
 versioned within. Quipu is a triple store today, so this is tracked as an
