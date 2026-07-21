@@ -34,6 +34,8 @@ jobs:
             flags: "--features langs-extra"
           - name: quipu
             flags: "--features quipu"
+          - name: mcp+quipu
+            flags: "--features mcp,quipu"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -65,6 +67,8 @@ jobs:
             flags: "--features langs-extra"
           - name: quipu
             flags: "--features quipu"
+          - name: mcp+quipu
+            flags: "--features mcp,quipu"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
