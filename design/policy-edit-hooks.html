@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Contributing - Hank — Live Code Structure</title>
+        <title>Policy edit hooks - Hank — Live Code Structure</title>
 
 
         <!-- Custom HTML head -->
@@ -147,7 +147,7 @@
                         <a href="https://github.com/scbrown/hank" title="Git repository" aria-label="Git repository">
                             <i id="git-repository-button" class="fa fa-github"></i>
                         </a>
-                        <a href="https://github.com/scbrown/hank/edit/main/docs/book/src/reference/contributing.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                        <a href="https://github.com/scbrown/hank/edit/main/docs/book/src/design/policy-edit-hooks.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
                             <i id="git-edit-button" class="fa fa-edit"></i>
                         </a>
 
@@ -181,29 +181,108 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="contributing"><a class="header" href="#contributing">Contributing</a></h1>
-<p>See <a href="https://github.com/scbrown/hank/blob/main/CONTRIBUTING.md"><code>CONTRIBUTING.md</code></a>
-and <a href="https://github.com/scbrown/hank/blob/main/AGENTS.md"><code>AGENTS.md</code></a> at the
-repository root.</p>
-<p>The essentials:</p>
+                        <h1 id="policy-edit-hooks--the-hank-side"><a class="header" href="#policy-edit-hooks--the-hank-side">Policy edit hooks — the hank side</a></h1>
+<p>This documents hank's half of the <strong>performant edit hooks for policy</strong> design.
+The write-time enforcement half lives in quipu and is already implemented; see
+<a href="https://github.com/scbrown/quipu/blob/main/docs/design/policy-edit-hooks.md">quipu <code>docs/design/policy-edit-hooks.md</code></a>
+for the full split. This page records what hank owns, why none of it ships yet,
+and the backlog.</p>
+<h2 id="deciding-principle-evidence-locality"><a class="header" href="#deciding-principle-evidence-locality">Deciding principle: evidence locality</a></h2>
+<p>Evaluate a policy where its evidence is already hot.</p>
 <ul>
-<li><strong>Use <code>just</code>, never raw <code>cargo</code>.</strong></li>
-<li>Run <code>just check</code> and <code>just test</code> before every push — both must pass.</li>
-<li>Clippy is <code>-D warnings</code>; the lint policy mirrors Quipu's.</li>
-<li>Keep source files small (warn at 400 lines, fail at 500).</li>
-<li>Tag every served fact with a <code>tier</code> and <code>freshness</code>.</li>
-<li>No Cargo feature ships dark — add it to the CI matrix in the same change.</li>
-<li>Work is not complete until it is pushed and CI is green.</li>
+<li><strong>Governed-fact policies</strong> — the claim reasons over quipu's committed graph
+(provenance, prior verdicts, workflow state). Quipu evaluates these at its
+pre-commit gate.</li>
+<li><strong>Structural-evidence policies</strong> — the claim reasons over the call graph,
+reachability, blast radius, or symbols. <strong>Hank</strong> holds that hot, per tenant,
+at the <code>boundary:"action"</code> edit-time seam (<code>hank hook pre-edit</code> + the resident
+daemon). Hank evaluates these against a hot <strong>projection</strong> of quipu's canonical
+policies.</li>
+</ul>
+<p>Canonical policy definitions, SHACL validation, verdict signing, and the
+human-owned <code>VerifierRegistration</code> root of trust stay in quipu regardless. Hank
+holds only a projected read cache — a policy is never <em>defined</em> in hank.</p>
+<h2 id="what-hank-owns"><a class="header" href="#what-hank-owns">What hank owns</a></h2>
+<ul>
+<li>A <strong>hot projection</strong> of quipu's <code>boundary:"action"</code> policies whose claims are
+structural, refreshed through hank's existing watch/daemon machinery. Strictly
+one-directional (quipu canonical → hank cache) with invalidation on quipu
+policy writes. If it diverged, hank could allow what quipu would deny — so the
+projection is a cache, never a source of truth.</li>
+<li><strong>Edit-time evaluation</strong> at <code>hook pre-edit</code>: an edit that violates a structural
+<code>deny</code> policy is blocked at edit time, against the resident graph, with a
+tier-tagged verdict.</li>
+<li><strong>Verdict promotion</strong>: hank's edit-time verdicts promote back into quipu as
+signed, bitemporal facts, extending the existing <code>commit → touched</code> promote
+path.</li>
+</ul>
+<h2 id="why-none-of-this-ships-yet"><a class="header" href="#why-none-of-this-ships-yet">Why none of this ships yet</a></h2>
+<p>Everything above is <strong>Phase 4</strong> and deliberately gated:</p>
+<ul>
+<li>The <code>quipu</code> dependency is commented out in <code>Cargo.toml</code>
+(<code>rev = "&lt;pin-in-phase-4&gt;"</code>). Hank builds standalone in CI; there is no quipu
+rev to project from today.</li>
+<li>Edit-time policy verdicts need to declare whether the registry they used was
+fresh or stale — that is FR-3 freshness, which is <strong>not served yet</strong> (Phase 3;
+it lands with the copy-on-write overlays + frontier-bounded incremental
+update). A verdict computed against a stale projection must be tagged stale,
+never silently <code>fresh</code>.</li>
+</ul>
+<p>Adding a projection registry now — with nothing to populate it and no freshness
+to qualify it — would ship a dark feature: a gate that gates nothing, or a
+verdict that lies about its freshness. That is exactly the anti-pattern hank has
+already corrected once (the <code>cpg</code>/<code>lsp</code> features were deleted because they gated
+no code). So the hank side stays as design + backlog until its Phase-3/4
+prerequisites land, rather than shipping scaffolding that advertises a precision
+it does not have.</p>
+<h2 id="sequencing"><a class="header" href="#sequencing">Sequencing</a></h2>
+<pre><code class="language-text">Phase 3 (hank)          Phase 4 (hank)                 quipu (done)
+─────────────────       ─────────────────────          ────────────────────
+freshness serving  ──▶  pin quipu dep (H-DEP)   ──┐
+overlays + frontier      project action policies    │   write-path gate
+                         (H-PROJECTION)              ├─▶ (enforce_on_write)
+                         edit-time eval (H-EDIT)     │   already enforces
+                         promote verdicts ───────────┘   governed-fact policies
+                         (H-PROMOTE-VERDICT)
+</code></pre>
+<p>Quipu already enforces governed-fact policies on its write path. Hank adds the
+structural, edit-time half once the dependency and freshness prerequisites are
+in place.</p>
+<h2 id="backlog"><a class="header" href="#backlog">Backlog</a></h2>
+<p>Acceptance criteria per item. Status: ☐ open (all Phase-3/4-blocked).</p>
+<ul>
+<li><strong>H-DEP</strong> ☐ Pin and wire the <code>quipu</code> dependency (Phase-4 kickoff).
+<em>AC:</em> <code>--features quipu</code> builds against a real quipu rev; the promote path
+reaches a live <code>/knot</code>. <em>Blocked by:</em> Phase-4 decision to unpin.</li>
+<li><strong>H-PROJECTION</strong> ☐ Hot, one-directional projection of quipu
+<code>boundary:"action"</code> structural policies, with invalidation on quipu policy
+writes. <em>AC:</em> a policy added in quipu appears in hank's registry on the next
+refresh; hank never originates a policy definition. <em>Blocked by:</em> H-DEP.</li>
+<li><strong>H-EDIT-EVAL</strong> ☐ Evaluate projected structural policies at <code>hook pre-edit</code>
+against the resident graph. <em>AC:</em> an edit violating a structural <code>deny</code> policy
+is blocked at edit time with a tier-tagged verdict. <em>Blocked by:</em>
+H-PROJECTION.</li>
+<li><strong>H-FRESHNESS</strong> ☐ Serve FR-3 freshness so a projected-policy verdict declares
+fresh/stale of the registry it used. <em>AC:</em> a verdict computed against a stale
+projection is tagged stale, never silently <code>fresh</code>. <em>Blocked by:</em> Phase-3
+overlays + frontier-bounded incremental update.</li>
+<li><strong>H-PROMOTE-VERDICT</strong> ☐ Promote hank edit-time verdicts into quipu as signed
+facts, extending the <code>commit → touched</code> promote path. <em>AC:</em> a hank verdict
+lands as a bitemporal quipu Verdict attributable to the hank verifier
+identity. <em>Blocked by:</em> H-DEP.</li>
 </ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../design/policy-edit-hooks.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../design/vision.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
+                            <a rel="next prefetch" href="../reference/contributing.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -211,10 +290,13 @@ repository root.</p>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../design/policy-edit-hooks.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../design/vision.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
                     </a>
 
+                    <a rel="next prefetch" href="../reference/contributing.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
             </nav>
 
         </div>
