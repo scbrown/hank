@@ -120,7 +120,9 @@ enum Commands {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
-    /// Export the referential structure (modules, symbols, edges) as Turtle.
+    /// Export the referential structure (modules, symbols, edges) as Turtle,
+    /// or promote it into Quipu with `--to` (FR-34; the promotion spelling of
+    /// `promote`, spec §15).
     Export {
         /// Directory to export (defaults to current dir).
         #[arg(default_value = ".")]
@@ -131,6 +133,10 @@ enum Commands {
         /// Output format.
         #[arg(long, default_value = "turtle")]
         format: ExportFormat,
+        /// Promote into the Quipu at this base URL instead of printing Turtle.
+        /// SHACL-validates before writing, exactly like `hank promote`.
+        #[arg(long)]
+        to: Option<String>,
     },
     /// Intra-procedural data dependence within a function.
     Dataflow {
@@ -261,9 +267,24 @@ impl Cli {
                 *hops,
                 cochange.as_deref(),
             ),
-            Commands::Export { path, repo, format } => {
+            Commands::Export {
+                path,
+                repo,
+                format,
+                to,
+            } => {
                 let ExportFormat::Turtle = format;
-                cli_cmds::export(path, repo.as_deref())
+                match to {
+                    // `export --to quipu` IS promotion (spec §15's other spelling),
+                    // so it routes through the one promotion path — validate then
+                    // write — rather than a second implementation that could drift
+                    // from `promote`. It is a write, so honour the guard first.
+                    Some(_) => {
+                        self.load_config(path)?.write_guard("promotion")?;
+                        self.promote(path, "HEAD", to.as_deref())
+                    }
+                    None => cli_cmds::export(path, repo.as_deref()),
+                }
             }
             Commands::Dataflow {
                 function,

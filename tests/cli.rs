@@ -642,3 +642,41 @@ fn serve_read_only_refuses_a_write() {
         assert.success();
     }
 }
+
+/// `hank export` prints Turtle; `hank export --to <url>` PROMOTES instead — one
+/// promotion path, two spec spellings (§15). This pins the routing: `--to`
+/// reaches the same validate-then-write path `promote` does, and plain `export`
+/// still prints.
+#[test]
+fn export_to_routes_through_promotion_not_print() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("x.rs"), "pub fn x() -> u32 { y() }\nfn y() -> u32 { 1 }\n")
+        .unwrap();
+
+    // Plain export prints Turtle in the bobbin ontology — a read, always.
+    Command::cargo_bin("hank")
+        .unwrap()
+        .arg("export")
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("bobbin:"))
+        .stdout(predicate::str::contains("CodeSymbol"));
+
+    // export --to <unreachable>: with quipu it routes into promotion, validates
+    // the (valid) Turtle, then fails to REACH the endpoint — proving it took the
+    // write path, not the print path (a print would have succeeded and emitted
+    // Turtle). Without quipu it is the phase-4 stub.
+    let assert = Command::cargo_bin("hank")
+        .unwrap()
+        .args(["export", "--to", "http://127.0.0.1:1"])
+        .current_dir(dir.path())
+        .assert();
+    if cfg!(feature = "quipu") {
+        assert
+            .failure()
+            .stdout(predicate::str::contains("bobbin:").not());
+    } else {
+        assert.success();
+    }
+}
