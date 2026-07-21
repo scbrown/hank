@@ -230,6 +230,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fetch_measure_client_gets_a_reply_from_a_LIVE_daemon() {
+        // The "daemon expected AND up" quadrant of the hook cutover, at the client
+        // level: fetch_measure against a real daemon returns a measured reply.
+        use crate::daemon::client::fetch_measure;
+        let dir = tiny_repo(); // leaf.rs <- caller.rs
+        let engine = ResidentEngine::build(dir.path(), None).unwrap();
+        let leaf = dir.path().join("leaf.rs").to_string_lossy().to_string();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router(engine)).await;
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let reply = tokio::task::spawn_blocking(move || {
+            fetch_measure(
+                "127.0.0.1",
+                port,
+                &leaf,
+                "leaf.rs",
+                &["fn leaf".to_string()],
+                5,
+                Duration::from_millis(500),
+            )
+        })
+        .await
+        .unwrap();
+        let reply = reply.expect("a live daemon must answer fetch_measure");
+        assert!(reply.measured);
+        assert!(reply.symbols >= 1);
+
+        // And against a CLOSED port it is an Err with a reason — never a silent ok.
+        let err = tokio::task::spawn_blocking(|| {
+            fetch_measure(
+                "127.0.0.1",
+                1,
+                "/x",
+                "x",
+                &[],
+                5,
+                Duration::from_millis(200),
+            )
+        })
+        .await
+        .unwrap();
+        assert!(
+            err.is_err(),
+            "a closed port must be an Err, never a silent reply"
+        );
+    }
+
+    #[tokio::test]
     async fn measure_sizes_an_edit_and_confines_to_the_root() {
         let dir = tiny_repo(); // leaf.rs <- caller.rs
         let engine = ResidentEngine::build(dir.path(), None).unwrap();

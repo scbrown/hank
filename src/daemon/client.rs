@@ -19,6 +19,8 @@ use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
+use super::MeasureReply;
+
 /// Whether a resident daemon answered a liveness probe.
 ///
 /// `Down` is a first-class outcome, not an error to be `?`-propagated away: the
@@ -103,6 +105,76 @@ pub fn probe(host: &str, port: u16, timeout: Duration) -> Reachability {
         Some(code) => Reachability::Down(format!("daemon at {addr} returned HTTP {code}")),
         None => Reachability::Down(format!("daemon at {addr} sent no status line")),
     }
+}
+
+/// Ask the resident daemon to size an edit: `POST /measure`. Returns the
+/// [`MeasureReply`] on a 2xx, or an `Err(reason)` on ANY other outcome —
+/// connection refused (no daemon), a non-2xx (e.g. the file is outside the
+/// daemon's root, so it serves a different repo), a timeout, or an unparseable
+/// body. The caller MUST treat `Err` as "the daemon could not size this edit" and
+/// fall back — never as "allow". Same `std::net`-only, synchronous shape as
+/// [`probe`], because the pre-edit hook that calls this runs sync on stdin.
+///
+/// The reason string distinguishes the failures (a connection error reads
+/// differently from an "HTTP 400"), so a caller can say WHY the daemon was
+/// unusable in its loud notice — down vs. serving-another-repo are different
+/// operator problems.
+pub fn fetch_measure(
+    host: &str,
+    port: u16,
+    file: &str,
+    rel: &str,
+    anchors: &[String],
+    max_hops: u32,
+    timeout: Duration,
+) -> Result<MeasureReply, String> {
+    let addr = format!("{host}:{port}");
+    let body = serde_json::json!({
+        "file": file,
+        "rel": rel,
+        "anchors": anchors,
+        "max_hops": max_hops,
+    })
+    .to_string();
+
+    let Ok(mut addrs) = addr.to_socket_addrs() else {
+        return Err(format!("cannot resolve {addr}"));
+    };
+    let Some(sockaddr) = addrs.next() else {
+        return Err(format!("no address for {addr}"));
+    };
+    let mut stream = TcpStream::connect_timeout(&sockaddr, timeout)
+        .map_err(|e| format!("no daemon at {addr} ({e})"))?;
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+
+    let req = format!(
+        "POST /measure HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| format!("write to {addr} failed ({e})"))?;
+
+    let mut raw = String::new();
+    stream
+        .read_to_string(&mut raw)
+        .map_err(|e| format!("read from {addr} failed ({e})"))?;
+
+    let status = raw
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| format!("daemon at {addr} sent no status line"))?;
+    if !status.starts_with('2') {
+        return Err(format!("daemon at {addr} returned HTTP {status}"));
+    }
+    let payload = raw
+        .split("\r\n\r\n")
+        .nth(1)
+        .ok_or_else(|| format!("daemon at {addr} sent no body"))?;
+    serde_json::from_str::<MeasureReply>(payload)
+        .map_err(|e| format!("daemon at {addr} sent an unparseable measure reply ({e})"))
 }
 
 #[cfg(test)]
