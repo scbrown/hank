@@ -28,10 +28,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::HankConfig;
 use crate::graph::{CodeGraph, Dir, Reached};
+use crate::hook::Sizing;
 use crate::policy::PolicyConfig;
 use crate::types::Tier;
 
@@ -87,6 +88,14 @@ impl ResidentEngine {
         &self.inner.graph
     }
 
+    /// The analysis root the resident graph was built from. Used to confine the
+    /// `/measure` endpoint to files under this root, and to check a client is
+    /// talking to a daemon serving the repo it means to measure.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.inner.root
+    }
+
     /// The resident policy, from the config snapshot taken at build time. The
     /// aegis-hac0 signed cache will verify the source of this at load; callers
     /// read it from here rather than re-reading config from disk per request.
@@ -127,6 +136,22 @@ impl ResidentEngine {
             files: files.into_iter().collect(),
             tier: graph_tier(),
         }
+    }
+
+    /// Size an edit against the RESIDENT graph — the exact question the pre-edit
+    /// guard asks, answered without the per-invocation `CodeGraph::build`. The
+    /// edited file is still read fresh (its content is what changed), so the answer
+    /// matches the transient path on the same tree; only the graph build is saved.
+    /// This is what the hook becomes a thin client of in the cutover (stage 3b).
+    #[must_use]
+    pub fn measure_edit(
+        &self,
+        file: &Path,
+        rel: &str,
+        anchors: &[String],
+        max_hops: u32,
+    ) -> Sizing {
+        crate::hook::measure_with_graph(self.graph(), file, rel, anchors, max_hops)
     }
 
     /// A machine-readable liveness/status snapshot — real facts about what is
@@ -235,6 +260,51 @@ pub struct Impact {
     pub tier: String,
 }
 
+/// The wire form of a [`Sizing`] — what `/measure` returns and a thin-client hook
+/// parses. `measured` is separate from a zero radius on purpose: an UNMEASURED edit
+/// (no grammar, unreadable, deadline) is NOT a radius of zero, and the client must
+/// treat it as "not evaluated", never "within limits" (the fail-open/loud contract).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MeasureReply {
+    /// Whether a blast radius was actually computed.
+    pub measured: bool,
+    /// Symbols transitively affected (0 when not measured).
+    pub symbols: usize,
+    /// Files transitively affected (0 when not measured).
+    pub files: usize,
+    /// The `Sizing` variant tag: `measured`, `deadline`, `no-grammar`, …. Lets the
+    /// client key its once-per-session loud notice by kind, exactly as the in-process
+    /// guard does.
+    pub kind: String,
+    /// The operator-facing reason it was not measured; `None` when measured.
+    pub reason: Option<String>,
+}
+
+impl MeasureReply {
+    /// Map a `Sizing` to its wire form. A measured radius carries its counts; every
+    /// unmeasured variant carries its kind tag and reason and a zero radius that the
+    /// `measured: false` flag forbids reading as "within limits".
+    #[must_use]
+    pub fn from_sizing(sizing: &Sizing) -> Self {
+        match sizing {
+            Sizing::Measured(radius) => Self {
+                measured: true,
+                symbols: radius.symbols,
+                files: radius.files,
+                kind: "measured".to_string(),
+                reason: None,
+            },
+            other => Self {
+                measured: false,
+                symbols: 0,
+                files: 0,
+                kind: other.kind_tag().to_string(),
+                reason: other.unmeasured_reason(),
+            },
+        }
+    }
+}
+
 /// Build the resident engine and serve its liveness surface on `bind`.
 ///
 /// Serves `/health`, `/status` (stage 1) and the graph-backed query endpoints
@@ -296,6 +366,41 @@ mod tests {
         let top = engine.neighbors("top", Dir::Callers);
         assert!(top.found, "top exists");
         assert!(top.neighbors.is_empty(), "nothing calls top");
+    }
+
+    #[test]
+    fn measure_edit_sizes_against_the_resident_graph() {
+        // The exact question the pre-edit guard asks, answered from the resident
+        // graph. Editing `leaf` reaches `caller` (mid.rs) and `top` (top.rs) — two
+        // symbols across two files; the edited file itself is excluded. `measure_edit`
+        // shares `edit_touch` + `walk_blast` with the transient `measure`, differing
+        // only in graph source, so this radius is the transient path's radius too.
+        let dir = chain_repo();
+        let engine = ResidentEngine::build(dir.path(), None).unwrap();
+        let file = dir.path().join("leaf.rs");
+        let sizing = engine.measure_edit(&file, "leaf.rs", &["fn leaf".to_string()], 5);
+        match sizing {
+            Sizing::Measured(radius) => {
+                assert_eq!(radius.symbols, 2, "leaf reaches caller and top");
+                assert_eq!(radius.files, 2, "in mid.rs and top.rs");
+            }
+            other => panic!("expected a measured radius, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn measure_edit_reports_UNMEASURED_for_an_unparseable_file_never_a_silent_zero() {
+        // The fail-open/loud contract flows through unchanged: a file the graph
+        // cannot parse is NOT a radius of zero (which would read as "within limits").
+        let dir = chain_repo();
+        std::fs::write(dir.path().join("notes.md"), "# hi\n").unwrap();
+        let engine = ResidentEngine::build(dir.path(), None).unwrap();
+        let file = dir.path().join("notes.md");
+        let sizing = engine.measure_edit(&file, "notes.md", &[], 5);
+        assert!(
+            !matches!(sizing, Sizing::Measured(_)),
+            "an unparseable file must be UNMEASURED, not a measured zero: {sizing:?}"
+        );
     }
 
     #[test]

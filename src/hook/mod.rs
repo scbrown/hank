@@ -27,6 +27,10 @@ mod pre_edit;
 
 pub use post_edit::{advisory_for, run_post_edit};
 pub use pre_edit::{run_pre_edit, Outcome};
+// The resident-graph measurement path (FR-31): the daemon measures an edit against
+// its resident graph via `measure_with_graph`, returning the same `Sizing` the
+// transient path does. Crate-visible so `crate::daemon` can call it.
+pub(crate) use measure::{measure_with_graph, Sizing};
 
 use std::path::PathBuf;
 
