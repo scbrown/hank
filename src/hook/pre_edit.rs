@@ -14,10 +14,10 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use super::measure::{measure_within, relative, Sizing};
+use super::measure::{measure_within, relative};
 use super::{deny_envelope, first_notice_for_session, system_message, HookInput};
 use crate::config::HankConfig;
-use crate::policy::Mode;
+use crate::policy::{BlastRadius, Mode};
 
 /// What the guard decided — the value the CLI turns into stdout.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,8 +113,19 @@ pub fn guard(
     if scope.max_impacted_symbols.is_none() && scope.max_impacted_files.is_none() {
         return Outcome::Allow; // Nothing to measure against.
     }
-    let radius = match measure_within(&root, &file, &rel, &input, config.policy.max_hops, budget) {
-        Sizing::Measured(radius) => radius,
+
+    // Size the edit against the RESIDENT daemon when one is expected and usable,
+    // else the transient build (FR-31 thin-client cutover). Both paths yield the
+    // same `MeasureReply`; `daemon_absent` is set when a daemon was EXPECTED but
+    // could not be used, so we can be LOUD about it below.
+    let (reply, daemon_absent) = blast_reply(&config, &root, &file, &rel, &input, budget);
+
+    let radius = if reply.measured {
+        BlastRadius {
+            symbols: reply.symbols,
+            files: reply.files,
+        }
+    } else {
         // NOT MEASURED. Allowing is still the contract — the guard is fail-open by
         // design and a language we cannot parse must not brick an agent's edits.
         // But allowing SILENTLY is the defect: an unparseable file and a
@@ -123,27 +134,102 @@ pub fn guard(
         // instead. Rate-limited to once per session by the same gate the
         // fail-open notice uses, because a per-edit message would be scrolled
         // past and then ignored.
-        unmeasured => {
-            let reason = unmeasured
-                .unmeasured_reason()
-                .unwrap_or_else(|| "unmeasured".to_string());
-            eprintln!("hank: blast radius UNMEASURED for `{rel}`: {reason}");
-            let kind = format!("unmeasured-{}-{rel}", unmeasured.kind_tag());
-            if first_notice_for_session(input.session_id.as_deref(), &kind) {
-                return Outcome::Notify(format!(
-                    "hank: blast-radius rules were NOT EVALUATED for `{rel}` — \
-                     {reason}. The edit is allowed (the guard fails open), but \
-                     tenant `{tenant}`'s ceilings did not apply to it. Treat this \
-                     file as UNGUARDED by blast radius, not as within limits."
-                ));
-            }
-            return Outcome::Allow;
+        let reason = reply
+            .reason
+            .clone()
+            .unwrap_or_else(|| "unmeasured".to_string());
+        eprintln!("hank: blast radius UNMEASURED for `{rel}`: {reason}");
+        let kind = format!("unmeasured-{}-{rel}", reply.kind);
+        if first_notice_for_session(input.session_id.as_deref(), &kind) {
+            return Outcome::Notify(format!(
+                "hank: blast-radius rules were NOT EVALUATED for `{rel}` — \
+                 {reason}. The edit is allowed (the guard fails open), but \
+                 tenant `{tenant}`'s ceilings did not apply to it. Treat this \
+                 file as UNGUARDED by blast radius, not as within limits."
+            ));
         }
+        return Outcome::Allow;
     };
 
-    match scope.check_blast(radius, &rel, tenant) {
+    let verdict = match scope.check_blast(radius, &rel, tenant) {
         Some(violation) => decide(config.policy.mode, violation.message),
         None => Outcome::Allow,
+    };
+
+    // DAEMON EXPECTED BUT DOWN — the cheapest-bypass scenario the daemon exists to
+    // prevent. Always log it; and when the edit is otherwise ALLOWED, surface it to
+    // the model once per session, because an allowed edit while the resident guard
+    // is down is exactly the silent bypass we must not let pass quietly. A Deny wins
+    // (blocking the edit is the priority; the daemon-down stays on stderr); an
+    // UNMEASURED Notify already returned above. The fail-open is intact: the edit was
+    // still guarded, by the transient rebuild.
+    if let Some(reason) = daemon_absent {
+        eprintln!("hank: resident guard daemon EXPECTED but unusable: {reason}");
+        if matches!(verdict, Outcome::Allow)
+            && first_notice_for_session(input.session_id.as_deref(), "daemon-absent")
+        {
+            return Outcome::Notify(format!(
+                "hank: the resident guard daemon is DOWN ({reason}). This edit was guarded by a \
+                 transient rebuild and ALLOWED — but the daemon a caller could kill to bypass \
+                 the guard on every edit is not running. Restart it."
+            ));
+        }
+    }
+    verdict
+}
+
+/// Size an edit into a [`MeasureReply`], from the resident daemon when one is
+/// EXPECTED and usable, else the transient build. Returns `(reply, daemon_absent)`;
+/// `daemon_absent` is `Some(reason)` only when a daemon was expected but could not
+/// be used — so the caller can be loud about it without ever treating "daemon down"
+/// as "allow".
+///
+/// This is the whole cutover, and its shape is the safety contract:
+/// - No daemon expected (`use_daemon = false`, the default and every case today):
+///   transient build, `None`. Absence is normal and stays silent.
+/// - Daemon expected and it answered: use its reply, `None`.
+/// - Daemon expected and it could NOT answer (down, or serving a different repo so
+///   `/measure` 400s): FALL BACK to the transient build, and return the reason so
+///   the caller warns. The guard still runs — fail-open is preserved.
+fn blast_reply(
+    config: &HankConfig,
+    root: &Path,
+    file: &Path,
+    rel: &str,
+    input: &HookInput,
+    budget: Duration,
+) -> (crate::daemon::MeasureReply, Option<String>) {
+    let transient = || {
+        crate::daemon::MeasureReply::from_sizing(&measure_within(
+            root,
+            file,
+            rel,
+            input,
+            config.policy.max_hops,
+            budget,
+        ))
+    };
+
+    if !config.serve.use_daemon {
+        return (transient(), None);
+    }
+
+    let anchors: Vec<String> = input
+        .replaced_texts()
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    match crate::daemon::client::fetch_measure(
+        &config.serve.bind_address,
+        config.serve.mcp_http_port,
+        &file.to_string_lossy(),
+        rel,
+        &anchors,
+        config.policy.max_hops,
+        budget,
+    ) {
+        Ok(reply) => (reply, None),
+        Err(reason) => (transient(), Some(reason)),
     }
 }
 
@@ -571,5 +657,83 @@ mod tests {
         };
         assert!(message.contains("UNGUARDED"));
         assert!(message.contains("does not exist"));
+    }
+
+    // --- FR-31 thin-client cutover: daemon expected vs. absent (aegis-1qze) ------
+    //
+    // Four quadrants of (daemon expected?) x (daemon reachable?). A closed port
+    // (mcp_http_port = 1, never listening) stands in for "down" without a tokio
+    // server. The "up and used" quadrant is covered at the client level by the
+    // fetch_measure test against a live daemon in `daemon::http`.
+
+    const ALLOWS: &str = "[hank.policy.scopes.t]\nmax_impacted_files = 50\n";
+    const FORBIDS: &str = "[hank.policy.scopes.t]\nmax_impacted_files = 0\n";
+
+    fn policy_with_daemon(scope: &str, use_daemon: bool) -> String {
+        format!(
+            "[hank.policy]\nmode = \"enforce\"\ndeadline_ms = 30000\n{scope}\n\
+             [hank.serve]\nuse_daemon = {use_daemon}\nbind_address = \"127.0.0.1\"\n\
+             mcp_http_port = 1\n"
+        )
+    }
+
+    #[test]
+    fn no_daemon_expected_is_silent_transient_the_normal_case() {
+        // use_daemon = false (the default, and every case today). The guard builds
+        // transiently and says NOTHING about a daemon — absence is normal.
+        let dir = wide_repo();
+        write_policy(dir.path(), &policy_with_daemon(ALLOWS, false));
+        let payload = edit_payload(dir.path(), "leaf.rs", "fn leaf() {}");
+        assert_eq!(
+            guard(&payload, dir.path(), Some("t"), None),
+            Outcome::Allow,
+            "no daemon expected: transient build, allowed, silent"
+        );
+    }
+
+    #[test]
+    fn daemon_EXPECTED_but_DOWN_falls_back_and_is_LOUD_when_allowed() {
+        // The cheapest-bypass case. A daemon is expected (use_daemon = true) but the
+        // port is closed. The guard must STILL run (fail-open, via transient) and,
+        // because the edit is allowed, say LOUDLY that the resident guard is down.
+        let dir = wide_repo();
+        write_policy(dir.path(), &policy_with_daemon(ALLOWS, true));
+        let payload = edit_payload(dir.path(), "leaf.rs", "fn leaf() {}");
+        let Outcome::Notify(msg) = guard(&payload, dir.path(), Some("t"), None) else {
+            panic!("an allowed edit while the expected daemon is down must be LOUD, not silent");
+        };
+        assert!(msg.contains("daemon is DOWN"), "{msg}");
+    }
+
+    #[test]
+    fn daemon_EXPECTED_but_DOWN_still_DENIES_a_violation_block_wins() {
+        // Fail-open does not mean fail-quiet on a real violation: a down daemon must
+        // not turn a Deny into an allow. The transient fallback still enforces, and a
+        // Deny wins over the daemon-absent notice.
+        let dir = wide_repo(); // leaf is called from three files
+        write_policy(dir.path(), &policy_with_daemon(FORBIDS, true));
+        let payload = edit_payload(dir.path(), "leaf.rs", "fn leaf() {}");
+        assert!(
+            matches!(
+                guard(&payload, dir.path(), Some("t"), None),
+                Outcome::Deny(_)
+            ),
+            "a violation must still be denied even with the expected daemon down"
+        );
+    }
+
+    #[test]
+    fn daemon_EXPECTED_but_DOWN_keeps_the_UNMEASURED_contract() {
+        // An unparseable file is still UNMEASURED (not a silent zero), and that notice
+        // takes precedence over the daemon-absent one — the transient fallback reports
+        // it exactly as it would with no daemon configured.
+        let dir = wide_repo();
+        std::fs::write(dir.path().join("notes.md"), "# hi\n").unwrap();
+        write_policy(dir.path(), &policy_with_daemon(ALLOWS, true));
+        let payload = edit_payload(dir.path(), "notes.md", "# hi");
+        let Outcome::Notify(msg) = guard(&payload, dir.path(), Some("t"), None) else {
+            panic!("an unmeasurable file must stay UNMEASURED-loud");
+        };
+        assert!(msg.contains("NOT EVALUATED"), "{msg}");
     }
 }

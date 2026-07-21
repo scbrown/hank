@@ -110,6 +110,17 @@ pub struct ServeConfig {
     pub mcp_http_port: u16,
     /// Write guard for the broker / promotion endpoints.
     pub read_only: bool,
+    /// Whether the pre-edit guard should EXPECT a resident daemon at
+    /// `bind_address:mcp_http_port` and use it to size edits (FR-31).
+    ///
+    /// This flag is what makes "daemon not running" LOUD rather than noisy. When
+    /// false (the default, and true everywhere today since no daemon runs), the
+    /// guard builds the graph transiently and says nothing — absence is normal. When
+    /// true, the guard asks the daemon and, if it cannot, warns ONCE per session that
+    /// the resident guard is down while still guarding via a transient rebuild. Only
+    /// an operator who has actually started a daemon sets this, so the warning fires
+    /// exactly when a daemon was expected and isn't there — the cheapest-bypass case.
+    pub use_daemon: bool,
 }
 
 impl Default for ServeConfig {
@@ -118,6 +129,7 @@ impl Default for ServeConfig {
             bind_address: "127.0.0.1".to_string(),
             mcp_http_port: 3040,
             read_only: false,
+            use_daemon: false,
         }
     }
 }
