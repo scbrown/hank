@@ -20,9 +20,14 @@ stem, so they over-connect on shared names like any tree-sitter-tier fact; the
 `lsp` tier refines them.
 
 ```bash
-hank export src --repo myrepo --format turtle   # dump the referential graph
-# hank export --to quipu                         # promote it (Phase 4)
+hank export src --repo myrepo --format turtle    # dump the referential graph
+hank promote --commit HEAD --to http://quipu.svc .  # SHACL-validate + write it
 ```
+
+`hank promote` needs `--features quipu`; without it the binary says so rather
+than pretending. It emits the Turtle, SHACL-validates in-process against
+`shapes/`, and writes to `/knot` **only if it conforms** — a rejected promotion
+exits non-zero so a script can't read it as landed.
 
 Code and docs are one referential graph (spec §5.10): code leans real-time (the
 live graph + edit hook), docs lean asynchronous (this export). Once in Quipu,
@@ -35,6 +40,36 @@ that no longer exists."
 - Writes go through Quipu's existing surface (`quipu_knot` / `POST /knot` /
   `Store::transact`), honoring `valid_from`/`valid_to`, `actor`, and `source`
   (the commit SHA).
+
+## Querying it back — dependency and blast radius
+
+Once promoted, the dependency graph is queryable in Quipu. Store the **direct**
+edges (`bobbin:calls`, `bobbin:imports`) and let SPARQL property paths do the
+transitive work — never pre-compute and store a transitive closure that goes
+stale. These queries are verified against live Quipu (`POST /query`, JSON body
+`{"query": "…"}`).
+
+**What does a symbol depend on?** (one hop)
+
+```sparql
+PREFIX bobbin: <http://aegis.gastown.local/ontology/>
+SELECT ?dep WHERE { ?s bobbin:name "hbiw_alpha" . ?s bobbin:calls ?dep }
+```
+
+**Blast radius — what breaks if a symbol changes?** The transitive set of callers,
+the `+` property path (this is the "if X dies, what breaks?" query; assert its
+*members*, not a nonzero count):
+
+```sparql
+PREFIX bobbin: <http://aegis.gastown.local/ontology/>
+SELECT ?affected WHERE { ?t bobbin:name "hbiw_beta" . ?affected bobbin:calls+ ?t }
+```
+
+Code entities do **not** suffer the alias-fragmentation that afflicts the
+human-named infrastructure graph (a blast-radius query over fragmented nodes
+returns a confident *subset*, worse than nothing): Hank mints one deterministic
+IRI per symbol (`…/code/<repo>/<file>::<symbol>`), so re-promotion updates the
+same node rather than minting a synonym, and the `calls+` closure is complete.
 
 ## Branches as named graphs
 
