@@ -17,6 +17,9 @@ use serde::Serialize;
 
 use std::collections::BTreeSet;
 
+use super::tools::PromoteRequest;
+#[cfg(feature = "quipu")]
+use super::tools::PromoteResponse;
 use super::tools::{
     AnalyzeRequest, AnalyzeResponse, CommunitiesRequest, CommunitiesResponse, CommunityItem,
     CommunityMemberItem, DataflowRequest, DataflowResponse, DepEdgeItem, FlowStepItem,
@@ -24,9 +27,6 @@ use super::tools::{
     ReconciliationItem, RefItem, ReferencesRequest, ReferencesResponse, StatusResponse, SymbolItem,
     SymbolsRequest, SymbolsResponse, VerifyRequest, VerifyResponse, ViolationItem,
 };
-use super::tools::PromoteRequest;
-#[cfg(feature = "quipu")]
-use super::tools::PromoteResponse;
 use crate::config::HankConfig;
 use crate::dataflow::{Dataflow, FlowDir};
 use crate::extract::{extract_symbols, rust_files};

@@ -380,7 +380,9 @@ pub struct VerifyResponse {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct PromoteRequest {
     /// Directory to promote, relative to the root. Omit for the root itself.
-    #[schemars(description = "Directory relative to the root, e.g. 'crates/core'. Omit for the whole root.")]
+    #[schemars(
+        description = "Directory relative to the root, e.g. 'crates/core'. Omit for the whole root."
+    )]
     pub path: Option<String>,
 
     /// Quipu base URL override (e.g. `http://localhost:8080`). Omit to use the

@@ -650,8 +650,11 @@ fn serve_read_only_refuses_a_write() {
 #[test]
 fn export_to_routes_through_promotion_not_print() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("x.rs"), "pub fn x() -> u32 { y() }\nfn y() -> u32 { 1 }\n")
-        .unwrap();
+    std::fs::write(
+        dir.path().join("x.rs"),
+        "pub fn x() -> u32 { y() }\nfn y() -> u32 { 1 }\n",
+    )
+    .unwrap();
 
     // Plain export prints Turtle in the bobbin ontology — a read, always.
     Command::cargo_bin("hank")
