@@ -104,6 +104,10 @@ oxrdf = { version = "0.3", optional = true }
 oxttl = { version = "0.2", optional = true }
 oxrdfio = { version = "0.2", optional = true }
 rudof_lib = { version = "0.2.8", optional = true }
+# Blocking HTTP client for POST /knot (FR-21 REST promotion surface). ureq, not
+# reqwest: promotion is a one-shot CLI action, so a blocking client with no async
+# runtime is the honest fit and keeps the `quipu` feature off the tokio graph.
+ureq = { version = "2", optional = true }
 # quipu = { git = "https://github.com/scbrown/quipu", rev = "<pin-in-phase-4>", default-features = false, optional = true }
 
 [features]
@@ -127,7 +131,7 @@ langs-extra = [
 # re-introduce the feature HERE alongside the code it gates AND add the tier to
 # `Tier::served()` (src/types.rs) — the two must move together.
 # Phase 4: promote committed facts into Quipu, SHACL-validated.
-quipu = ["dep:oxrdf", "dep:oxttl", "dep:oxrdfio", "dep:rudof_lib"]
+quipu = ["dep:oxrdf", "dep:oxttl", "dep:oxrdfio", "dep:rudof_lib", "dep:ureq"]
 
 [dev-dependencies]
 tempfile = "3"

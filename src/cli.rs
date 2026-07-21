@@ -4,9 +4,9 @@
 //! `callers`/`impact` and `dataflow`, `export` (referential structure as Turtle,
 //! §5.10/FR-34), the `watch` file-watcher (debounced, tiered re-extraction,
 //! §5.5/FR-17), and the `hook` adapter (edit-reactive harness integration,
-//! §5.9/FR-30) and `verify` (the FR-23/FR-24 edit-buffer verdict) are live. Only
-//! `promote` is still declared with its final shape and prints a phase notice
-//! until its engine lands (`docs/hank-spec.md`).
+//! §5.9/FR-30) and `verify` (the FR-23/FR-24 edit-buffer verdict) are live.
+//! `promote` (Phase-4 Quipu promotion, FR-19/20/21) is live behind the `quipu`
+//! feature and prints a phase notice in a build without it (`docs/hank-spec.md`).
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -163,6 +163,13 @@ enum Commands {
         /// Commit-ish to promote.
         #[arg(long, default_value = "HEAD")]
         commit: String,
+        /// Quipu base URL to promote into (e.g. `http://localhost:8080`). Required
+        /// for a real promotion; without it, promotion is unwired and refuses.
+        #[arg(long)]
+        to: Option<String>,
+        /// Directory to promote (defaults to current dir).
+        #[arg(default_value = ".")]
+        path: PathBuf,
     },
     /// Watch a tree and re-extract changed files, debounced and tiered (FR-17).
     Watch {
@@ -277,20 +284,12 @@ impl Cli {
             Commands::Verify { file, buffer } => {
                 cli_cmds::verify(self.json, self.quiet, file, buffer)
             }
-            Commands::Promote { .. } => {
+            Commands::Promote { commit, to, path } => {
                 // THE WRITE GUARD, made real (aegis-ltjo). Promotion is the write
-                // hank performs, so `serve.read_only` must refuse it — BEFORE the
-                // stub does anything, so the guard is honoured even while the
-                // operation itself is a Phase-4 placeholder. This is the check the
-                // config claimed and did not perform.
-                let root = std::env::current_dir()?;
-                self.load_config(&root)?.write_guard("promotion")?;
-                self.planned(
-                    "promote",
-                    4,
-                    "Quipu promotion lands in Phase 4 (`--features quipu`)",
-                );
-                Ok(())
+                // hank performs, so `serve.read_only` must refuse it — BEFORE any
+                // work, so the guard holds regardless of feature.
+                self.load_config(path)?.write_guard("promotion")?;
+                self.promote(path, commit, to.as_deref())
             }
         }
     }
@@ -609,6 +608,55 @@ impl Cli {
                 "note:".yellow().bold()
             );
         }
+    }
+
+    /// Promote a tree's structural facts into Quipu: emit Turtle, SHACL-validate it
+    /// in-process, and write it iff it conforms (FR-19/20/21).
+    #[cfg(feature = "quipu")]
+    #[allow(clippy::unused_self)] // method form for call-site symmetry with the stub arm
+    fn promote(&self, path: &Path, commit: &str, to: Option<&str>) -> anyhow::Result<()> {
+        // Arbitrary-commit checkout is not wired yet: `export::to_turtle` reads the
+        // working tree, so a non-HEAD `--commit` would promote the WRONG facts and
+        // report success. Refuse loudly rather than promote a lie (#15 follow-up).
+        if commit != "HEAD" {
+            anyhow::bail!(
+                "promoting an arbitrary commit is not wired yet: --commit {commit} would \
+                 promote the working tree, not that commit. Only --commit HEAD is honoured."
+            );
+        }
+        let Some(endpoint) = to else {
+            anyhow::bail!(
+                "no Quipu endpoint: pass --to <url> (e.g. --to http://localhost:8080). \
+                 Refusing rather than guessing a graph to write into."
+            );
+        };
+        let repo = path
+            .canonicalize()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| "repo".to_string());
+        let turtle = crate::export::to_turtle(path, &repo)?;
+        let outcome = crate::promote::promote(endpoint, &turtle)?;
+        let mut out = std::io::stdout();
+        let wrote = outcome.report(&mut out)?;
+        // A refusal is a could-not-promote, not a success: exit non-zero so a script
+        // cannot read a rejected promotion as a landed one.
+        if !wrote {
+            std::process::exit(2);
+        }
+        Ok(())
+    }
+
+    /// Without the `quipu` feature, promotion is unbuilt — say so honestly.
+    #[cfg(not(feature = "quipu"))]
+    #[allow(clippy::unused_self)] // method form for call-site symmetry with the quipu arm
+    fn promote(&self, _path: &Path, _commit: &str, _to: Option<&str>) -> anyhow::Result<()> {
+        self.planned(
+            "promote",
+            4,
+            "Quipu promotion needs `--features quipu` (this binary was built without it)",
+        );
+        Ok(())
     }
 }
 

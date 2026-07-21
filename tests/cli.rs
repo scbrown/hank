@@ -620,12 +620,25 @@ fn serve_read_only_refuses_a_write() {
         .stderr(predicate::str::contains("read_only"))
         .stderr(predicate::str::contains("refused"));
 
-    // read_only = false -> the (Phase-4 stub) write is allowed to proceed.
+    // read_only = false -> the write guard PASSES. What happens next depends on the
+    // build, and the point of this half is only that the failure (if any) is NOT the
+    // guard: whatever stops the promotion, it is never `read_only`.
     with_config(dir.path(), "[hank.serve]\nread_only = false\n");
-    Command::cargo_bin("hank")
+    let assert = Command::cargo_bin("hank")
         .unwrap()
         .arg("promote")
         .current_dir(dir.path())
-        .assert()
-        .success();
+        .assert();
+    if cfg!(feature = "quipu") {
+        // With promotion wired, `promote` with no `--to` refuses for lack of an
+        // endpoint — a real precondition, reached only because the guard let it
+        // through. The guard is proven passed by the absence of its name here.
+        assert
+            .failure()
+            .stderr(predicate::str::contains("--to").or(predicate::str::contains("endpoint")))
+            .stderr(predicate::str::contains("read_only").not());
+    } else {
+        // Without the feature, promotion is a phase-4 stub that succeeds.
+        assert.success();
+    }
 }

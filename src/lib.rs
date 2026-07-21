@@ -27,6 +27,9 @@ pub mod hook;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 pub mod policy;
+/// Phase-4 Quipu promotion: SHACL-validate a Turtle projection, then write it.
+#[cfg(feature = "quipu")]
+pub mod promote;
 pub mod reconcile;
 mod render;
 pub mod types;

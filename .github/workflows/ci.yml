@@ -32,6 +32,8 @@ jobs:
             flags: "--features mcp"
           - name: langs-extra
             flags: "--features langs-extra"
+          - name: quipu
+            flags: "--features quipu"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -61,6 +63,8 @@ jobs:
             flags: "--features mcp"
           - name: langs-extra
             flags: "--features langs-extra"
+          - name: quipu
+            flags: "--features quipu"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -76,9 +80,10 @@ jobs:
             ${{ runner.os }}-cargo-
       - run: cargo test ${{ matrix.flags }}
 
-  # Feature arms that land in later phases join the matrix as their engines do,
-  # so a feature can never "ship dark" (Bobbin's hard-won lesson):
-  #   Phase 4 -> --features quipu
+  # Feature arms join the matrix as their engines land, so a feature can never
+  # "ship dark" (Bobbin's hard-won lesson). --features quipu joined in Phase 4
+  # (promotion): its tests are in-process (rudof SHACL) and the refusal path
+  # returns before any network call, so the arm needs no live Quipu.
 
   build:
     name: Build

@@ -20,6 +20,10 @@ pub enum Error {
     /// The requested language is not supported by the current build.
     #[error("unsupported language: {0}")]
     UnsupportedLanguage(String),
+
+    /// A Phase-4 promotion could not be validated or written (`quipu` feature).
+    #[error("promote error: {0}")]
+    Promote(String),
 }
 
 /// The crate-wide result alias.
