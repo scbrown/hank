@@ -20,6 +20,7 @@ use super::{deny_envelope, first_notice_for_session, system_message, HookInput};
 use crate::config::HankConfig;
 use crate::extract::language_for_extension;
 use crate::policy::{BlastRadius, Mode};
+use crate::types::Freshness;
 
 /// What the guard decided — the value the CLI turns into stdout.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -290,12 +291,35 @@ fn rule_check(config: &HankConfig, input: &HookInput, rel: &str) -> Option<Outco
     if violations.is_empty() {
         return None;
     }
-    let message = violations
+    // FR-3 freshness: a rule verdict declares how current it is. Rules loaded from
+    // local config are the authoritative source (not a cache), and evidence is the
+    // exact proposed edit — so the verdict is genuinely FRESH. When rules instead
+    // come from a projected quipu registry (Phase 4), the registry's own sync state
+    // is threaded here so a verdict computed against a stale projection is tagged
+    // STALE, never silently fresh.
+    let message = rule_verdict_message(&violations, Freshness::Fresh);
+    Some(decide(config.policy.mode, message))
+}
+
+/// Combine rule violations into one model-facing verdict and DECLARE its freshness
+/// (FR-3). The freshness is the policy registry's currency: `Fresh` for the local
+/// config source, or the projection's real sync state once Phase 4 wires it — never
+/// a silent assumption of `fresh`.
+fn rule_verdict_message(violations: &[crate::rules::RuleViolation], freshness: Freshness) -> String {
+    let body = violations
         .iter()
         .map(|v| v.message.clone())
         .collect::<Vec<_>>()
         .join("\n");
-    Some(decide(config.policy.mode, message))
+    let note = match freshness {
+        Freshness::Fresh => "verdict freshness: fresh (evaluated against the exact proposed \
+             edit and the loaded policy set)",
+        Freshness::Stale => "verdict freshness: STALE — the projected policy registry could not \
+             be refreshed from quipu, so this verdict may not reflect the latest governed policy",
+        Freshness::Recomputing => "verdict freshness: recomputing — the policy registry is \
+             mid-refresh",
+    };
+    format!("{body}\n({note})")
 }
 
 /// The text an edit INTRODUCES: the full `Write` content, else the `new_string`s
@@ -780,8 +804,11 @@ mod tests {
         };
         assert!(reason.contains("no-ticket-in-comment"), "{reason}");
         assert!(reason.contains("ABC-123"), "{reason}");
-        // Honest about provenance.
+        // Honest about provenance AND freshness (FR-3): a local-config verdict is
+        // computed against the exact proposed edit, so it declares itself fresh —
+        // it never silently omits or fakes the tag.
         assert!(reason.contains("treesitter tier"), "{reason}");
+        assert!(reason.contains("verdict freshness: fresh"), "{reason}");
     }
 
     #[test]
