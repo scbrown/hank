@@ -89,6 +89,14 @@ pub fn guard(
         return outcome;
     }
 
+    // Governed structural policies projected from quipu (Phase 4), evaluated where
+    // the evidence is hot. Opt-in (quipu.enabled + endpoint), and behind the
+    // `quipu` feature so a default build carries none of it.
+    #[cfg(feature = "quipu")]
+    if let Some(outcome) = projected_check(&config, &input, &rel) {
+        return outcome;
+    }
+
     // No scope for this tenant — mode is off, or the tenant is unconstrained.
     let (Some(tenant), Some(scope)) = (tenant, config.policy.scope_for(tenant)) else {
         return Outcome::Allow;
@@ -305,19 +313,114 @@ fn rule_check(config: &HankConfig, input: &HookInput, rel: &str) -> Option<Outco
 /// (FR-3). The freshness is the policy registry's currency: `Fresh` for the local
 /// config source, or the projection's real sync state once Phase 4 wires it — never
 /// a silent assumption of `fresh`.
-fn rule_verdict_message(violations: &[crate::rules::RuleViolation], freshness: Freshness) -> String {
+fn rule_verdict_message(
+    violations: &[crate::rules::RuleViolation],
+    freshness: Freshness,
+) -> String {
     let body = violations
         .iter()
         .map(|v| v.message.clone())
         .collect::<Vec<_>>()
         .join("\n");
     let note = match freshness {
-        Freshness::Fresh => "verdict freshness: fresh (evaluated against the exact proposed \
-             edit and the loaded policy set)",
-        Freshness::Stale => "verdict freshness: STALE — the projected policy registry could not \
-             be refreshed from quipu, so this verdict may not reflect the latest governed policy",
-        Freshness::Recomputing => "verdict freshness: recomputing — the policy registry is \
-             mid-refresh",
+        Freshness::Fresh => {
+            "verdict freshness: fresh (evaluated against the exact proposed \
+             edit and the loaded policy set)"
+        }
+        Freshness::Stale => {
+            "verdict freshness: STALE — the projected policy registry could not \
+             be refreshed from quipu, so this verdict may not reflect the latest governed policy"
+        }
+        Freshness::Recomputing => {
+            "verdict freshness: recomputing — the policy registry is \
+             mid-refresh"
+        }
+    };
+    format!("{body}\n({note})")
+}
+
+/// Evaluate governed structural policies projected from quipu (Phase 4).
+///
+/// Opt-in: only runs when `quipu.enabled` and a `quipu.endpoint` are set. Fetches
+/// the `boundary:"action"` structural policies over HTTP, evaluates them like any
+/// rule, and maps the governed `effect` to a decision — a `deny` policy blocks
+/// under [`Mode::Enforce`], `warn` advises, and [`Mode::Advise`] never blocks
+/// (the local advise-first ceiling still applies). A projection that cannot be
+/// fetched fails OPEN loudly: governed policy that could not be projected must be
+/// visible, never a silent pass.
+///
+/// The verdict declares the projection's [`Freshness`] — a successful sync is
+/// `Fresh`. NB: this fetches per edit; the resident/async cache that makes it
+/// cheap (FR-31) is the daemon-side form of `H-PROJECTION`.
+#[cfg(feature = "quipu")]
+fn projected_check(config: &HankConfig, input: &HookInput, rel: &str) -> Option<Outcome> {
+    if config.policy.mode == Mode::Off || !config.quipu.enabled || config.quipu.endpoint.is_empty()
+    {
+        return None;
+    }
+    let ext = Path::new(rel).extension().and_then(OsStr::to_str)?;
+    let language = language_for_extension(ext)?;
+    let introduced = introduced_text(input)?;
+
+    let mut registry = crate::project::ProjectionRegistry::new(&config.quipu.endpoint);
+    if let Err(e) = registry.refresh() {
+        return Some(fail_open(
+            input,
+            "projection",
+            &format!("could not project governed policy from quipu: {e}"),
+        ));
+    }
+
+    // A projected rule set that does not compile is a broken sync; fail open loudly.
+    let rules: Vec<crate::rules::Rule> =
+        registry.policies().iter().map(|p| p.rule.clone()).collect();
+    let errors = crate::rules::errors(&rules);
+    if !errors.is_empty() {
+        let detail: Vec<String> = errors
+            .iter()
+            .map(|(name, why)| format!("`{name}` ({why})"))
+            .collect();
+        return Some(fail_open(
+            input,
+            "projection-rules",
+            &format!("projected policies do not compile: {}", detail.join(", ")),
+        ));
+    }
+
+    let violations =
+        crate::project::evaluate_projected(registry.policies(), &introduced, language, rel);
+    if violations.is_empty() {
+        return None;
+    }
+    let blocks = config.policy.mode == Mode::Enforce && violations.iter().any(|v| v.blocking);
+    let body = violations
+        .iter()
+        .map(|v| v.message.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let message = rule_verdict_message_from(&body, registry.freshness());
+    if blocks {
+        Some(Outcome::Deny(message))
+    } else {
+        Some(Outcome::Notify(format!(
+            "hank (governed, not blocking): {message}"
+        )))
+    }
+}
+
+/// Attach the FR-3 freshness declaration to an already-joined verdict body.
+#[cfg(feature = "quipu")]
+fn rule_verdict_message_from(body: &str, freshness: Freshness) -> String {
+    let note = match freshness {
+        Freshness::Fresh => "verdict freshness: fresh (governed policy projected from quipu)",
+        Freshness::Stale => {
+            "verdict freshness: STALE — the projected policy registry could not \
+             be refreshed from quipu, so this verdict may not reflect the latest governed policy"
+        }
+        Freshness::Recomputing => {
+            "verdict freshness: recomputing — the policy registry is \
+             mid-refresh"
+        }
     };
     format!("{body}\n({note})")
 }
@@ -872,6 +975,27 @@ mod tests {
         };
         assert!(msg.contains("UNGUARDED"), "{msg}");
         assert!(msg.contains("do not compile"), "{msg}");
+    }
+
+    /// Projection is opt-in and behind the `quipu` feature: when quipu cannot be
+    /// reached, governed policy that could not be projected must be VISIBLE — a
+    /// loud fail-open, never a silent pass. (An unreachable port stands in for a
+    /// down quipu without a live server.)
+    #[cfg(feature = "quipu")]
+    #[test]
+    fn an_unreachable_quipu_projection_fails_open_loudly() {
+        let dir = wide_repo();
+        write_policy(
+            dir.path(),
+            "[hank.policy]\nmode = \"enforce\"\n\
+             [hank.quipu]\nenabled = true\nendpoint = \"http://127.0.0.1:1\"\n",
+        );
+        let payload = rule_edit_payload(dir.path(), "fn leaf() {} // whatever");
+        let Outcome::Notify(msg) = guard(&payload, dir.path(), Some("t"), None) else {
+            panic!("an unreachable quipu projection must fail open loudly, not pass silently");
+        };
+        assert!(msg.contains("UNGUARDED"), "{msg}");
+        assert!(msg.contains("could not project governed policy"), "{msg}");
     }
 
     // --- FR-31 thin-client cutover: daemon expected vs. absent (aegis-1qze) ------

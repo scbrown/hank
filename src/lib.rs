@@ -28,6 +28,9 @@ pub mod hook;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 pub mod policy;
+/// Phase-4 projection: a hot, one-directional cache of quipu's structural policies.
+#[cfg(feature = "quipu")]
+pub mod project;
 /// Phase-4 Quipu promotion: SHACL-validate a Turtle projection, then write it.
 #[cfg(feature = "quipu")]
 pub mod promote;

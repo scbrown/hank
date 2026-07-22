@@ -62,7 +62,7 @@ impl MatchType {
 }
 
 /// One structural rule: a Selector (tree-sitter query) + a Predicate (regex).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rule {
     /// Stable identifier, used in verdicts and in the projected-policy IRI.
     pub name: String,

@@ -24,6 +24,11 @@ pub enum Error {
     /// A Phase-4 promotion could not be validated or written (`quipu` feature).
     #[error("promote error: {0}")]
     Promote(String),
+
+    /// A Phase-4 policy projection could not be fetched or decoded from quipu
+    /// (`quipu` feature).
+    #[error("projection error: {0}")]
+    Projection(String),
 }
 
 /// The crate-wide result alias.
