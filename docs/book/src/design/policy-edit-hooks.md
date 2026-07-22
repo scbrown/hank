@@ -87,8 +87,10 @@ stays commented; the RDF/`ureq` crates the feature already pulls are enough.
   frontier code-graph freshness (Phase 3) is only needed for *graph-consulting*
   structural rules, which are not shipped — the buffer-local rules are fresh by
   construction.
-- **H-PROMOTE-VERDICT** ☐ Promote hank verdicts into quipu as signed
-  `aegis:Verdict` facts. *Blocked by:* verdict signing — quipu's `VerdictShape`
-  mandates `aegis:signature` (`minCount 1`), so an unsigned verdict is rejected
-  at write; ed25519 signing + a `publicKey` on the `VerifierRegistration` is the
-  real prerequisite, not the dep pin.
+- **H-PROMOTE-VERDICT** ✅ `src/verdict.rs`: ed25519 signing that MIRRORS quipu's
+  `signing.rs` (same `ring`, same canonical `v1|…` message, same hex encodings),
+  a `VerdictShape`-conformant signed `aegis:Verdict` Turtle, and `promote_verdict`
+  over `/knot`. `hank verifier` prints the public key a human registers as
+  `aegis:publicKey`. *Remaining:* wiring the trigger (promote a verdict on the
+  post-commit `commit → touched` path) and key rotation — the signing + promotion
+  primitives are done and interop-tested against the shared scheme.

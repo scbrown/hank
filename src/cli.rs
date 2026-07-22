@@ -203,6 +203,14 @@ enum Commands {
         /// Target shell.
         shell: clap_complete::Shell,
     },
+    /// Show the ed25519 public key of hank's verdict-signing identity, to
+    /// register in quipu as this verifier's `aegis:publicKey` (quipu feature).
+    #[cfg(feature = "quipu")]
+    Verifier {
+        /// Path to the PKCS#8 signing key (created 0600 if absent).
+        #[arg(long, default_value = "hank-signing.pk8")]
+        key_path: PathBuf,
+    },
 }
 
 /// Supported agent-harness hook events.
@@ -255,6 +263,13 @@ impl Cli {
             Commands::Completions { shell } => {
                 let mut cmd = Cli::command();
                 clap_complete::generate(*shell, &mut cmd, "hank", &mut io::stdout());
+                Ok(())
+            }
+            #[cfg(feature = "quipu")]
+            Commands::Verifier { key_path } => {
+                let keypair = crate::verdict::load_or_generate(key_path)?;
+                println!("verifier: {}", crate::verdict::VERIFIER);
+                println!("public_key: {}", crate::verdict::public_key_hex(&keypair));
                 Ok(())
             }
             Commands::Serve { http } => self.serve(*http).await,

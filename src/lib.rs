@@ -38,6 +38,9 @@ pub mod reconcile;
 mod render;
 pub mod rules;
 pub mod types;
+/// Phase-4 verdict signing + promotion (H-PROMOTE-VERDICT).
+#[cfg(feature = "quipu")]
+pub mod verdict;
 pub mod verify;
 pub mod watch;
 

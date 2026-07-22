@@ -1238,6 +1238,7 @@ dependencies = [
  "petgraph 0.7.1",
  "predicates",
  "regex",
+ "ring",
  "rmcp",
  "rudof_lib",
  "schemars",
