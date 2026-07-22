@@ -29,6 +29,7 @@ mod go;
 mod java;
 #[cfg(feature = "langs-extra")]
 mod python;
+pub mod query;
 mod rust;
 #[cfg(feature = "langs-extra")]
 mod typescript;

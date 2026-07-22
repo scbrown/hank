@@ -10,6 +10,7 @@
 //! blocks an edit; every error, timeout, and unknown degrades to "allow". See
 //! `docs/book/src/reference/policy-guard.md` for the pinned contract.
 
+use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -17,6 +18,7 @@ use std::time::{Duration, Instant};
 use super::measure::{measure_within, relative};
 use super::{deny_envelope, first_notice_for_session, system_message, HookInput};
 use crate::config::HankConfig;
+use crate::extract::language_for_extension;
 use crate::policy::{BlastRadius, Mode};
 
 /// What the guard decided — the value the CLI turns into stdout.
@@ -74,6 +76,18 @@ pub fn guard(
         Err(e) => return fail_open(&input, "config", &format!("unreadable config ({e})")),
     };
 
+    let file = PathBuf::from(&file_path);
+    let rel = relative(&file, &root);
+
+    // Structural rules (tree-sitter tier) govern the TEXT an edit introduces and
+    // are NOT per-tenant: a "no ticket id in a comment" rule holds for everyone.
+    // Evaluate them before the tenant-scope gate so they apply even to an
+    // unconstrained tenant. A rule Deny/Notify short-circuits the scope checks —
+    // one guard decision per edit.
+    if let Some(outcome) = rule_check(&config, &input, &rel) {
+        return outcome;
+    }
+
     // No scope for this tenant — mode is off, or the tenant is unconstrained.
     let (Some(tenant), Some(scope)) = (tenant, config.policy.scope_for(tenant)) else {
         return Outcome::Allow;
@@ -96,9 +110,6 @@ pub fn guard(
             ),
         );
     }
-
-    let file = PathBuf::from(&file_path);
-    let rel = relative(&file, &root);
 
     // 1. Path scope — cheap, no graph needed, so it runs even under a blown
     //    deadline. This is the check that must never be skipped.
@@ -230,6 +241,83 @@ fn blast_reply(
     ) {
         Ok(reply) => (reply, None),
         Err(reason) => (transient(), Some(reason)),
+    }
+}
+
+/// Evaluate the structural rule set against the text this edit introduces.
+///
+/// Returns `Some(outcome)` when the rules had something to say — a Deny/Notify
+/// for a violation under the active mode, or a loud fail-open when the rule set
+/// itself does not compile — and `None` when they were clean or inapplicable, so
+/// the caller falls through to the capability-scope checks.
+///
+/// Rules read only the text the edit ADDS (the `Write` content, or the
+/// `new_string`s of an `Edit`/`MultiEdit`), so an agent is answerable for what it
+/// writes, not for pre-existing debt elsewhere in the file — the same "size the
+/// touched region" discipline the blast-radius path uses.
+fn rule_check(config: &HankConfig, input: &HookInput, rel: &str) -> Option<Outcome> {
+    // Mode::Off disarms the whole guard, rules included.
+    if config.policy.mode == Mode::Off {
+        return None;
+    }
+    let rules = &config.policy.rules;
+    if rules.is_empty() {
+        return None;
+    }
+
+    // A rule set that does not compile is misconfigured; fail open LOUDLY rather
+    // than quietly under-enforce (the malformed-glob discipline, for rules).
+    let errors = crate::rules::errors(rules);
+    if !errors.is_empty() {
+        let detail: Vec<String> = errors
+            .iter()
+            .map(|(name, why)| format!("`{name}` ({why})"))
+            .collect();
+        return Some(fail_open(
+            input,
+            "rules",
+            &format!("policy rules do not compile: {}", detail.join(", ")),
+        ));
+    }
+
+    // Rules are language-specific: a file this build cannot parse simply has no
+    // applicable rule, so there is nothing to evaluate (not a gap to report).
+    let ext = Path::new(rel).extension().and_then(OsStr::to_str)?;
+    let language = language_for_extension(ext)?;
+    let introduced = introduced_text(input)?;
+
+    let violations = crate::rules::evaluate(rules, &introduced, language, rel);
+    if violations.is_empty() {
+        return None;
+    }
+    let message = violations
+        .iter()
+        .map(|v| v.message.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(decide(config.policy.mode, message))
+}
+
+/// The text an edit INTRODUCES: the full `Write` content, else the `new_string`s
+/// of an `Edit`/`MultiEdit` joined by newlines. `None` when the payload adds no
+/// text (e.g. a pure deletion), in which case there is nothing for a rule to see.
+fn introduced_text(input: &HookInput) -> Option<String> {
+    if let Some(content) = &input.tool_input.content {
+        return Some(content.clone());
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    if let Some(new) = input.tool_input.new_string.as_deref() {
+        parts.push(new);
+    }
+    for edit in &input.tool_input.edits {
+        if let Some(new) = edit.new_string.as_deref() {
+            parts.push(new);
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n"))
     }
 }
 

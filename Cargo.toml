@@ -58,6 +58,13 @@ anyhow = "1"
 # Tree-sitter (fast structural extraction — always-on breadth)
 tree-sitter = "0.25"
 tree-sitter-rust = "0.24"
+# StreamingIterator drives tree-sitter 0.25's QueryCursor::matches (used by the
+# structural-rule matcher in src/extract/query.rs — the crate's one .scm consumer).
+streaming-iterator = "0.1"
+
+# Regex predicates for structural rules (src/rules.rs). The lexical half of a
+# tree-sitter policy: the Selector query picks nodes, the regex tests their text.
+regex = "1"
 
 # In-memory graph
 petgraph = "0.7"

@@ -74,6 +74,11 @@ pub struct PolicyConfig {
     /// Per-tenant capability scopes, keyed by tenant/role id. A tenant with no
     /// entry here is unconstrained.
     pub scopes: BTreeMap<String, Scope>,
+    /// Structural (tree-sitter-tier) rules applied to the text an edit
+    /// introduces (`[[hank.policy.rules]]`). Unlike [`Self::scopes`], these are
+    /// not per-tenant: a rule like "no ticket id in a comment" governs the code,
+    /// not who wrote it. See [`crate::rules`].
+    pub rules: Vec<crate::rules::Rule>,
 }
 
 impl Default for PolicyConfig {
@@ -84,6 +89,7 @@ impl Default for PolicyConfig {
             notify_on_fail_open: true,
             max_hops: DEFAULT_MAX_HOPS,
             scopes: BTreeMap::new(),
+            rules: Vec::new(),
         }
     }
 }

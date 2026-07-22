@@ -33,6 +33,7 @@ pub mod policy;
 pub mod promote;
 pub mod reconcile;
 mod render;
+pub mod rules;
 pub mod types;
 pub mod verify;
 pub mod watch;
