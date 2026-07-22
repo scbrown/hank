@@ -747,6 +747,106 @@ mod tests {
         assert!(message.contains("does not exist"));
     }
 
+    // --- Structural rules (tree-sitter tier) at the guard level -----------------
+
+    /// A `[[hank.policy.rules]]` set banning ticket ids in comments. TOML literal
+    /// (single-quote) strings keep the regex and query free of escape doubling.
+    const NO_TICKET_RULE: &str = "[hank.policy]\nmode = \"enforce\"\n\n\
+         [[hank.policy.rules]]\nname = \"no-ticket-in-comment\"\nlanguage = \"rust\"\n\
+         query = '(line_comment) @c'\nmatch_type = \"must-not-match\"\n\
+         pattern = '\\b[A-Z]+-[0-9]+\\b'\n";
+
+    fn rule_edit_payload(dir: &Path, new_string: &str) -> String {
+        serde_json::json!({
+            "session_id": unique_session(),
+            "cwd": dir.to_str().unwrap(),
+            "tool_name": "Edit",
+            "tool_input": {
+                "file_path": dir.join("leaf.rs").to_str().unwrap(),
+                "old_string": "fn leaf() {}",
+                "new_string": new_string,
+            },
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn a_rule_denies_an_edit_introducing_a_forbidden_comment() {
+        let dir = wide_repo();
+        write_policy(dir.path(), NO_TICKET_RULE);
+        let payload = rule_edit_payload(dir.path(), "fn leaf() {} // see ABC-123");
+        let Outcome::Deny(reason) = guard(&payload, dir.path(), Some("t"), None) else {
+            panic!("a forbidden comment must be denied");
+        };
+        assert!(reason.contains("no-ticket-in-comment"), "{reason}");
+        assert!(reason.contains("ABC-123"), "{reason}");
+        // Honest about provenance.
+        assert!(reason.contains("treesitter tier"), "{reason}");
+    }
+
+    #[test]
+    fn a_rule_allows_a_clean_edit() {
+        let dir = wide_repo();
+        write_policy(dir.path(), NO_TICKET_RULE);
+        let payload = rule_edit_payload(dir.path(), "fn leaf() {} // no ticket here");
+        assert_eq!(guard(&payload, dir.path(), Some("t"), None), Outcome::Allow);
+    }
+
+    #[test]
+    fn a_rule_applies_even_without_a_tenant_scope() {
+        // Rules are global: no scopes table and no tenant, still enforced. This is
+        // the whole reason they run BEFORE the tenant-scope gate.
+        let dir = wide_repo();
+        write_policy(dir.path(), NO_TICKET_RULE);
+        let payload = rule_edit_payload(dir.path(), "fn leaf() {} // ABC-123");
+        assert!(matches!(
+            guard(&payload, dir.path(), None, None),
+            Outcome::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn advise_mode_reports_a_rule_without_blocking() {
+        let dir = wide_repo();
+        write_policy(dir.path(), &NO_TICKET_RULE.replace("enforce", "advise"));
+        let payload = rule_edit_payload(dir.path(), "fn leaf() {} // ABC-123");
+        let Outcome::Notify(msg) = guard(&payload, dir.path(), Some("t"), None) else {
+            panic!("advise must not block");
+        };
+        assert!(msg.contains("not blocking"), "{msg}");
+    }
+
+    #[test]
+    fn a_pre_existing_comment_is_not_re_flagged_only_the_introduced_text_is() {
+        // The edit introduces a CLEAN comment; a bad comment already on disk is not
+        // the agent's doing this turn, so the rule (which reads only introduced
+        // text) allows.
+        let dir = wide_repo();
+        std::fs::write(
+            dir.path().join("leaf.rs"),
+            "// legacy XYZ-999\nfn leaf() {}\n",
+        )
+        .unwrap();
+        write_policy(dir.path(), NO_TICKET_RULE);
+        let payload = rule_edit_payload(dir.path(), "fn leaf() {} // clean now");
+        assert_eq!(guard(&payload, dir.path(), Some("t"), None), Outcome::Allow);
+    }
+
+    #[test]
+    fn a_malformed_rule_fails_open_loudly() {
+        let dir = wide_repo();
+        let bad = "[hank.policy]\nmode = \"enforce\"\n\n\
+             [[hank.policy.rules]]\nname = \"broken\"\nlanguage = \"rust\"\n\
+             query = '(nonexistent_node) @x'\nmatch_type = \"must-not-match\"\npattern = 'x'\n";
+        write_policy(dir.path(), bad);
+        let payload = rule_edit_payload(dir.path(), "fn leaf() {} // whatever");
+        let Outcome::Notify(msg) = guard(&payload, dir.path(), Some("t"), None) else {
+            panic!("a malformed rule must fail open loudly, not block and not pass silently");
+        };
+        assert!(msg.contains("UNGUARDED"), "{msg}");
+        assert!(msg.contains("do not compile"), "{msg}");
+    }
+
     // --- FR-31 thin-client cutover: daemon expected vs. absent (aegis-1qze) ------
     //
     // Four quadrants of (daemon expected?) x (daemon reachable?). A closed port
