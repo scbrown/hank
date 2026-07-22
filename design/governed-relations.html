@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Contributing - Hank — Live Code Structure</title>
+        <title>Governed Relations - Hank — Live Code Structure</title>
 
 
         <!-- Custom HTML head -->
@@ -147,7 +147,7 @@
                         <a href="https://github.com/scbrown/hank" title="Git repository" aria-label="Git repository">
                             <i id="git-repository-button" class="fa fa-github"></i>
                         </a>
-                        <a href="https://github.com/scbrown/hank/edit/main/docs/book/src/reference/contributing.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                        <a href="https://github.com/scbrown/hank/edit/main/docs/book/src/design/governed-relations.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
                             <i id="git-edit-button" class="fa fa-edit"></i>
                         </a>
 
@@ -181,29 +181,122 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="contributing"><a class="header" href="#contributing">Contributing</a></h1>
-<p>See <a href="https://github.com/scbrown/hank/blob/main/CONTRIBUTING.md"><code>CONTRIBUTING.md</code></a>
-and <a href="https://github.com/scbrown/hank/blob/main/AGENTS.md"><code>AGENTS.md</code></a> at the
-repository root.</p>
-<p>The essentials:</p>
+                        <h1 id="governed-relations--hank--quipu"><a class="header" href="#governed-relations--hank--quipu">Governed Relations — Hank ⋈ Quipu</a></h1>
+<blockquote>
+<p>Hank knows the <em>live</em> structure of the code. Quipu knows the <em>governed record</em>
+of everything related to it — docs, work items, commits, policies, decisions.
+They share one IRI scheme, so Hank can tell you, at the moment you touch a
+symbol, <strong>everything the governed graph already knows about what you changed.</strong></p>
+</blockquote>
+<h2 id="the-idea"><a class="header" href="#the-idea">The idea</a></h2>
+<p>Hank exports its structure in the <strong>same <code>bobbin:</code> code ontology that Quipu
+stores</strong> (FR-20; <code>src/export.rs</code> mirrors Quipu's <code>namespace.rs</code>). A <code>CodeSymbol</code>
+IRI in Hank's live graph <em>is</em> the same node in Quipu's governed graph. That
+shared IRI is a free join key: Hank's live blast radius on one side, Quipu's
+committed neighborhood on the other, joined by identity.</p>
+<p>This turns a single question into a general one. "Which docs reference this
+symbol?" stops being a special case and becomes one filter over <strong>"what governed
+facts relate to these IRIs?"</strong></p>
+<h2 id="the-primitive"><a class="header" href="#the-primitive">The primitive</a></h2>
+<blockquote>
+<p>Given a symbol — or the impacted set from an edit — ask Quipu for the governed
+neighborhood of those IRIs, and fold it back <strong>tagged as the past.</strong></p>
+</blockquote>
+<p>Hank keeps ownership of the live structural answer (blast radius, dataflow). The
+neighborhood is Quipu's governed answer. Hank does the join and annotates its own
+output — it never re-derives or re-owns Quipu's edges.</p>
+<pre><code class="language-text">impacted set (Hank, live)          governed neighborhood (Quipu, committed)
+  foo::bar  ─────────────┐         Section --references--&gt; foo::bar   (docs/x.md#y)
+  foo::baz  ─────────────┼──⋈──►   GitCommit --modifies--&gt; foo::bar   (bead st-42)
+  ...                    │         Policy --targets--&gt; &lt;type of foo::bar&gt;
+                         └──────►  Decision --targetRef--&gt; foo::bar    (prior HITL)
+</code></pre>
+<h2 id="the-join-key-one-ontology"><a class="header" href="#the-join-key-one-ontology">The join key: one ontology</a></h2>
 <ul>
-<li><strong>Use <code>just</code>, never raw <code>cargo</code>.</strong></li>
-<li>Run <code>just check</code> and <code>just test</code> before every push — both must pass.</li>
-<li>Clippy is <code>-D warnings</code>; the lint policy mirrors Quipu's.</li>
-<li>Keep source files small (warn at 400 lines, fail at 500).</li>
-<li>Tag every served fact with a <code>tier</code> and <code>freshness</code>.</li>
-<li>No Cargo feature ships dark — add it to the CI matrix in the same change.</li>
-<li>Work is not complete until it is pushed and CI is green.</li>
+<li>Hank promotes / exports <code>CodeModule</code> / <code>CodeSymbol</code> with <code>definedIn</code> / <code>calls</code>
+/ <code>imports</code> in the <code>bobbin:</code> ontology (FR-19/FR-20, <code>hank export</code>).</li>
+<li>Quipu's <code>shapes/code-entities.ttl</code> defines the same <code>CodeModule</code> / <code>CodeSymbol</code>
+/ <code>Document</code> / <code>Section</code>, and the governance plane
+(<code>shapes/governance.ttl</code>) extends that model in the same namespace.</li>
+<li>Because both sides mint the same IRIs, the join is identity — no mapping table,
+no fuzzy match.</li>
+</ul>
+<h2 id="tiering-this-is-the-past-and-it-says-so"><a class="header" href="#tiering-this-is-the-past-and-it-says-so">Tiering: this is the past, and it says so</a></h2>
+<p>Every fact Hank serves carries a <code>tier</code> and <code>freshness</code> (FR-3). Governed
+relations come back tagged <code>committed</code> (or <code>attested</code> for signed verdicts) —
+<strong>never mixed into the live <code>treesitter</code> / <code>lsp</code> structural tier.</strong> This is the
+present-vs-past split (§9) made legible at the fact level: Hank annotates the
+<em>present</em> (its live edit) with the <em>past</em> (Quipu's settled record), and the
+consumer always knows which is which.</p>
+<h2 id="relation-types-this-unlocks"><a class="header" href="#relation-types-this-unlocks">Relation types this unlocks</a></h2>
+<p>One query, different predicate filters:</p>
+<div class="table-wrapper"><table><thead><tr><th>Governed edge (Quipu)</th><th>Surfaced as</th></tr></thead><tbody>
+<tr><td><code>Section --references--&gt; CodeSymbol</code></td><td>doc-staleness — "docs/x.md#y may be stale"</td></tr>
+<tr><td><code>GitCommit --modifies--&gt;</code>, <code>Bead --implements--&gt;</code></td><td>traceability — "traces to bead st-42 / epic E-3"</td></tr>
+<tr><td><code>Policy --targets--&gt; &lt;type&gt;</code>, <code>PlanStep --references--&gt;</code></td><td>governance — "a policy gates this; a plan step depends on it"</td></tr>
+<tr><td><code>Decision</code> / <code>Verdict --targetRef--&gt;</code></td><td>staleness of intent — "a prior decision was bound to this code"</td></tr>
+<tr><td>cooccurrence / PageRank neighborhood</td><td>"these entities usually move together"</td></tr>
+</tbody></table>
+</div>
+<h2 id="principles"><a class="header" href="#principles">Principles</a></h2>
+<ul>
+<li><strong>Borrow, don't derive (§9.6).</strong> Quipu is the single source of truth for
+governed relations. Hank <em>reads</em> them and tags them <code>committed</code>; it never
+promotes them back or treats them as its own structural facts. The day Hank
+re-owns a Quipu edge is the day there are two sources of truth.</li>
+<li><strong>Optional, and it degrades.</strong> Gate the enrichment behind the existing <code>quipu</code>
+feature. If Quipu is unreachable, the enrichment is simply <em>absent</em> — the code
+blast radius still answers. "Could not look" is not "nothing there" (the tier
+discipline, one layer up).</li>
+<li><strong>Latency by surface.</strong> The advisory <code>post-edit</code> hook can afford a best-effort
+synchronous Quipu query. The blocking <code>pre-edit</code> guard cannot — it stays on the
+live graph (or a startup-loaded cache), never a synchronous Quipu round-trip
+(FR-31's sub-100ms budget).</li>
+</ul>
+<h2 id="surfaces"><a class="header" href="#surfaces">Surfaces</a></h2>
+<ul>
+<li><strong><code>hank relations &lt;symbol&gt;</code> / <code>hank_relations</code> (MCP)</strong> — the governed
+neighborhood of a symbol, with an optional predicate filter, tier-tagged
+<code>committed</code>.</li>
+<li><strong>Folded into <code>hank impact</code></strong> — the impact response gains a <code>governed_relations</code>
+section for the impacted set.</li>
+<li><strong>Folded into the <code>post-edit</code> hook</strong> — the advisory gains a "governed relations
+touching your change" block.</li>
+</ul>
+<h2 id="worked-example-doc-staleness"><a class="header" href="#worked-example-doc-staleness">Worked example: doc-staleness</a></h2>
+<p>Doc-staleness is the <code>references</code> filter over the primitive. On an edit to
+<code>foo::bar</code>, Hank's blast radius yields the affected symbols; the join asks Quipu
+for <code>Section --references--&gt;</code> edges into that set; the advisory says:</p>
+<pre><code class="language-text">governed relations (committed):
+  docs/architecture.md#data-flow  references foo::bar  — may be stale
+</code></pre>
+<p>Once the referential graph is in Quipu, the same fact is auditable over time as a
+SPARQL query — <em>"every Document that references a CodeSymbol which no longer
+exists"</em> (§5.10). The live hook is the in-the-moment view; the query is the
+durable one.</p>
+<h2 id="status"><a class="header" href="#status">Status</a></h2>
+<ul>
+<li><strong>Exists today:</strong> <code>hank export --format turtle</code> emits the code side
+(<code>CodeModule</code> / <code>CodeSymbol</code> + <code>definedIn</code> / <code>calls</code> / <code>imports</code>) and, via
+<code>src/docref.rs</code>, the doc→code <code>Section --references--&gt; CodeSymbol</code> edges.</li>
+<li><strong>This design adds:</strong> the <em>read</em> direction — Hank querying Quipu by shared IRI
+to enrich its live output, tier-tagged <code>committed</code>, behind the <code>quipu</code> feature,
+exposed as <code>hank_relations</code> and folded into <code>impact</code> / <code>post-edit</code>.</li>
+<li><strong>Boundary held:</strong> Hank owns structural references; embeddings and semantic
+retrieval stay in Bobbin, the governed record stays in Quipu (§5.10).</li>
 </ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../design/workflow-gated-edits.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../design/policy-edit-hooks.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
+                            <a rel="next prefetch" href="../design/workflow-gated-edits.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -211,10 +304,13 @@ repository root.</p>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../design/workflow-gated-edits.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../design/policy-edit-hooks.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
                     </a>
 
+                    <a rel="next prefetch" href="../design/workflow-gated-edits.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
             </nav>
 
         </div>

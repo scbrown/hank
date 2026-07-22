@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Contributing - Hank — Live Code Structure</title>
+        <title>Workflow-Gated Edits - Hank — Live Code Structure</title>
 
 
         <!-- Custom HTML head -->
@@ -147,7 +147,7 @@
                         <a href="https://github.com/scbrown/hank" title="Git repository" aria-label="Git repository">
                             <i id="git-repository-button" class="fa fa-github"></i>
                         </a>
-                        <a href="https://github.com/scbrown/hank/edit/main/docs/book/src/reference/contributing.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                        <a href="https://github.com/scbrown/hank/edit/main/docs/book/src/design/workflow-gated-edits.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
                             <i id="git-edit-button" class="fa fa-edit"></i>
                         </a>
 
@@ -181,29 +181,121 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="contributing"><a class="header" href="#contributing">Contributing</a></h1>
-<p>See <a href="https://github.com/scbrown/hank/blob/main/CONTRIBUTING.md"><code>CONTRIBUTING.md</code></a>
-and <a href="https://github.com/scbrown/hank/blob/main/AGENTS.md"><code>AGENTS.md</code></a> at the
-repository root.</p>
-<p>The essentials:</p>
+                        <h1 id="workflow-gated-edits--process-around-a-change"><a class="header" href="#workflow-gated-edits--process-around-a-change">Workflow-Gated Edits — process around a change</a></h1>
+<blockquote>
+<p>Some edits need a <em>process</em> around them — "changing this file requires a demo
+of its effect on the UI," "this module needs a security review." That process
+need not happen at edit time, or by the agent that made the edit. This design
+is how a governed edit assigns a workflow <strong>asynchronously</strong>, across the
+Hank × Quipu × Shantytown stack, without any tool growing a job that isn't its.</p>
+</blockquote>
+<h2 id="the-shared-currency"><a class="header" href="#the-shared-currency">The shared currency</a></h2>
+<p>A governed <code>aegis:Workflow</code> (Steps + guarded Transitions, defined in Quipu's
+<code>shapes/governance.ttl</code>) is the unit passed between tools. Each tool touches it
+at exactly one point:</p>
+<div class="table-wrapper"><table><thead><tr><th>Tool</th><th>One job</th></tr></thead><tbody>
+<tr><td><strong>Hank</strong></td><td>Record structure — promote the entity change to Quipu (FR-19). Structure-only: it does <strong>not</strong> evaluate policy or orchestrate workflows. It informs the <em>acting agent</em> in-loop via the <code>post-edit</code> hook (configurable).</td></tr>
+<tr><td><strong>Quipu</strong></td><td>Own the rule and the record — the <code>Policy</code> (<code>targets</code> + <code>assignsWorkflow</code>), the <code>Workflow</code> / <code>Step</code> / <code>Transition</code>, the resulting <code>Decision</code> / <code>Verdict</code> — and act as the <strong>event source</strong> (bitemporal transaction log).</td></tr>
+<tr><td><strong>Shantytown</strong></td><td>Subscribe and route — watch Quipu's entity events, evaluate the policy at the subscription boundary, deliver the required workflow to the administrator, who <em>acts</em>.</td></tr>
+</tbody></table>
+</div>
+<h2 id="the-loop-async-first"><a class="header" href="#the-loop-async-first">The loop (async-first)</a></h2>
+<pre><code class="language-text">agent (via Hank) edits src/ui/widget.rs
+ → Hank promotes the entity change to Quipu               (async; a new transaction)
+ → Shantytown subscribes to Quipu entity events
+      sees the change → asks Quipu /policy/check "is a workflow required?"
+ → yes: aegis:Workflow "UI-demo-required" → route to the ADMINISTRATOR
+ → admin ACTS: creates a bead "demo UI effects of the widget change"
+      (assignable to anyone, anytime — not necessarily now, not necessarily that agent)
+ → Hank's post-edit hook informs the ORIGINAL agent in-loop (configurable, FR-30)
+</code></pre>
+<p>The requirement surfaces as a <strong>Quipu entity event</strong>, not a synchronous block.
+That matches the domain: "requires a UI demo" is inherently decoupled — it does
+not belong to the edit or the editor.</p>
+<h2 id="why-async-is-the-right-default"><a class="header" href="#why-async-is-the-right-default">Why async is the right default</a></h2>
 <ul>
-<li><strong>Use <code>just</code>, never raw <code>cargo</code>.</strong></li>
-<li>Run <code>just check</code> and <code>just test</code> before every push — both must pass.</li>
-<li>Clippy is <code>-D warnings</code>; the lint policy mirrors Quipu's.</li>
-<li>Keep source files small (warn at 400 lines, fail at 500).</li>
-<li>Tag every served fact with a <code>tier</code> and <code>freshness</code>.</li>
-<li>No Cargo feature ships dark — add it to the CI matrix in the same change.</li>
-<li>Work is not complete until it is pushed and CI is green.</li>
+<li><strong>It fits the work.</strong> The process can be done later, by someone else. A
+synchronous guard would have to fake that.</li>
+<li><strong>It stays inside "not a mayor."</strong> The administrator reacts to an event by
+creating <em>work</em> — a bead — assignable to anyone, anytime. No agent is
+auto-assigned; no hierarchy reorganizes. Event-driven is not autonomous: the
+system surfaces, a human acts.</li>
+<li><strong>Workflows are just one event kind.</strong> The same subscription carries verdicts,
+policy effects, and doc-staleness. Gating an edit is one filter over it.</li>
+</ul>
+<h2 id="the-secondary-path-the-synchronous-guard"><a class="header" href="#the-secondary-path-the-synchronous-guard">The secondary path: the synchronous guard</a></h2>
+<p>For hard trust-boundary cases (capability-scoped <code>polecats</code>), the opt-in
+<code>pre-edit</code> guard (FR-30) still evaluates a <code>boundary=action</code> Policy and may
+<code>deny</code> before the edit lands. On <code>require-approval</code>, its verdict <em>names</em> the
+workflow rather than blocking:</p>
+<pre><code class="language-json">{
+  "verdict": "require-approval",
+  "effect": "require-approval",
+  "required_workflow": "aegis:workflow/ui-demo-required",
+  "reason": "edit touches a UI surface governed by ui-demo policy",
+  "tier": "committed"
+}
+</code></pre>
+<p>Even here Hank only <strong>references</strong> the workflow — it names the requirement; it
+does not run it. Blocking guards stay opt-in, because a wrong hard-deny is worse
+than none (FR-30).</p>
+<h2 id="boundary-discipline"><a class="header" href="#boundary-discipline">Boundary discipline</a></h2>
+<ul>
+<li><strong>Hank records structure and (guard only) references a workflow.</strong> It never
+evaluates policy on the hot path or orchestrates. Policy evaluation and routing
+live in Shantytown; the record lives in Quipu.</li>
+<li><strong>Quipu owns the rule.</strong> "This entity type requires this workflow" is a governed
+<code>aegis:Policy</code> with <code>targets</code> + <code>assignsWorkflow</code> — SHACL-validated at write, so
+a malformed rule is rejected at definition time.</li>
+<li><strong>Shantytown owns delivery.</strong> It is already the tool that routes work to agents
+and injects prompts into terminals; the assigned workflow is one more thing it
+routes — to the administrator, for a human decision.</li>
+</ul>
+<h2 id="the-pieces-this-needs"><a class="header" href="#the-pieces-this-needs">The pieces this needs</a></h2>
+<ul>
+<li><strong>Quipu — <code>aegis:assignsWorkflow</code></strong> (Policy → Workflow) in <code>governance.ttl</code>, so
+a <code>require-approval</code> / <code>escalate</code> effect can name the workflow to run.</li>
+<li><strong>Quipu — a transactions cursor</strong> (<code>GET /transactions?since=&lt;tx&gt;&amp;limit=&lt;n&gt;</code>) so
+Shantytown's subscription poll is O(new events), not O(whole log).</li>
+<li><strong>Shantytown — a <code>QuipuEvents</code> subscriber</strong> over the transaction log, filtered
+to the kinds it cares about, with the four-state liveness discipline (a stalled
+watermark on a busy graph is surfaced, never silently green).</li>
+</ul>
+<h2 id="worked-example-changing-this-file-requires-a-ui-demo"><a class="header" href="#worked-example-changing-this-file-requires-a-ui-demo">Worked example: "changing this file requires a UI demo"</a></h2>
+<ol>
+<li>A <code>ui-demo</code> <code>aegis:Policy</code> in Quipu <code>targets</code> the <code>src/ui/**</code> module type and
+<code>assignsWorkflow</code> the <code>ui-demo-required</code> <code>aegis:Workflow</code>.</li>
+<li>An agent edits <code>src/ui/widget.rs</code>. Hank promotes the entity change; the agent
+gets the in-loop <code>post-edit</code> advisory.</li>
+<li>Shantytown's subscription sees the change, asks <code>/policy/check</code>, learns a
+workflow is required, and routes it to the administrator.</li>
+<li>The administrator creates a bead — <em>demo the UI effects of the widget change</em> —
+assignable to any agent, at any time. The edit is not blocked; the process is
+captured and owned.</li>
+</ol>
+<h2 id="status"><a class="header" href="#status">Status</a></h2>
+<ul>
+<li><strong>Exists today:</strong> <code>hank hook post-edit</code> (the in-loop agent advisory); Quipu's
+governance plane (<code>Workflow</code> / <code>Step</code> / <code>Policy</code> / <code>Verdict</code>) and
+<code>tool_policy_check</code>.</li>
+<li><strong>This design adds:</strong> <code>aegis:assignsWorkflow</code> and the transactions cursor in
+Quipu; the <code>QuipuEvents</code> subscriber and admin routing in Shantytown; the
+optional <code>required_workflow</code> field on the <code>pre-edit</code> verdict in Hank.</li>
+<li><strong>See also:</strong> <a href="governed-relations.html">Governed Relations</a> — the Hank ⋈ Quipu
+join this builds on.</li>
 </ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../design/workflow-gated-edits.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../design/governed-relations.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
+                            <a rel="next prefetch" href="../reference/contributing.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -211,10 +303,13 @@ repository root.</p>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../design/workflow-gated-edits.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../design/governed-relations.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
                     </a>
 
+                    <a rel="next prefetch" href="../reference/contributing.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
             </nav>
 
         </div>
