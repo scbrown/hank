@@ -216,60 +216,58 @@ tier-tagged verdict.</li>
 signed, bitemporal facts, extending the existing <code>commit → touched</code> promote
 path.</li>
 </ul>
-<h2 id="why-none-of-this-ships-yet"><a class="header" href="#why-none-of-this-ships-yet">Why none of this ships yet</a></h2>
-<p>Everything above is <strong>Phase 4</strong> and deliberately gated:</p>
+<h2 id="two-rule-sources-one-engine"><a class="header" href="#two-rule-sources-one-engine">Two rule sources, one engine</a></h2>
+<p>Structural policies reach the guard from two sources, evaluated by the same
+<code>rules</code> engine (<code>src/rules.rs</code>) — a Selector (a tree-sitter <code>.scm</code> capture) + a
+Predicate (a regex + a <code>must-match</code> / <code>must-not-match</code> / <code>must-exist</code> direction)
+over the text an edit <strong>introduces</strong>:</p>
 <ul>
-<li>The <code>quipu</code> dependency is commented out in <code>Cargo.toml</code>
-(<code>rev = "&lt;pin-in-phase-4&gt;"</code>). Hank builds standalone in CI; there is no quipu
-rev to project from today.</li>
-<li>Edit-time policy verdicts need to declare whether the registry they used was
-fresh or stale — that is FR-3 freshness, which is <strong>not served yet</strong> (Phase 3;
-it lands with the copy-on-write overlays + frontier-bounded incremental
-update). A verdict computed against a stale projection must be tagged stale,
-never silently <code>fresh</code>.</li>
+<li><strong>Local config</strong> (<code>[[hank.policy.rules]]</code>) — ships today, no quipu needed. The
+operational plane, the same status the capability <code>scopes</code> have: hank-local,
+authoritative, always fresh. This is where "no ticket id in a comment" lives
+for a standalone hank.</li>
+<li><strong>Projected from quipu</strong> (<code>quipu</code> feature) — the governed plane. Hank fetches
+quipu's <code>boundary:"action"</code>, <code>tree-sitter</code>-tier policies and decodes them into
+the <em>same</em> <code>Rule</code> shape (field-for-field congruence with <code>aegis:Selector</code> +
+<code>aegis:Predicate</code>), so a projected policy is just a <code>Rule</code> the engine already
+runs. Opt-in via <code>[hank.quipu] enabled + endpoint</code>. Hank never <em>defines</em> a
+governed policy — the projection is one-directional (quipu canonical → hank
+cache), and a verdict declares the cache's freshness.</li>
 </ul>
-<p>Adding a projection registry now — with nothing to populate it and no freshness
-to qualify it — would ship a dark feature: a gate that gates nothing, or a
-verdict that lies about its freshness. That is exactly the anti-pattern hank has
-already corrected once (the <code>cpg</code>/<code>lsp</code> features were deleted because they gated
-no code). So the hank side stays as design + backlog until its Phase-3/4
-prerequisites land, rather than shipping scaffolding that advertises a precision
-it does not have.</p>
-<h2 id="sequencing"><a class="header" href="#sequencing">Sequencing</a></h2>
-<pre><code class="language-text">Phase 3 (hank)          Phase 4 (hank)                 quipu (done)
-─────────────────       ─────────────────────          ────────────────────
-freshness serving  ──▶  pin quipu dep (H-DEP)   ──┐
-overlays + frontier      project action policies    │   write-path gate
-                         (H-PROJECTION)              ├─▶ (enforce_on_write)
-                         edit-time eval (H-EDIT)     │   already enforces
-                         promote verdicts ───────────┘   governed-fact policies
-                         (H-PROMOTE-VERDICT)
-</code></pre>
-<p>Quipu already enforces governed-fact policies on its write path. Hank adds the
-structural, edit-time half once the dependency and freshness prerequisites are
-in place.</p>
+<p>Both are <code>Mode</code>-staged (advise-first) and fail open: a rule set that will not
+compile, or a quipu that cannot be reached, is a LOUD allow, never a silent pass.</p>
+<h2 id="what-ships-now-and-what-remains"><a class="header" href="#what-ships-now-and-what-remains">What ships now, and what remains</a></h2>
+<p>The <code>cpg</code>/<code>lsp</code> lesson still binds — a feature must gate real code and never
+advertise precision it lacks. What ships is real and tier-tagged; what does not
+is named honestly below.</p>
+<p><strong>Reframed:</strong> projection is HTTP, not a crate pin. Like promotion (<code>POST /knot</code>),
+Hank reads policies over quipu's <code>POST /query</code> (W3C <code>sparql-results+json</code>), so
+<code>--features quipu</code> needs no <code>quipu</code> <em>crate</em> dependency — H-DEP's "pin the dep" is
+not a prerequisite for projection. The commented-out <code>quipu = { git = … }</code> line
+stays commented; the RDF/<code>ureq</code> crates the feature already pulls are enough.</p>
 <h2 id="backlog"><a class="header" href="#backlog">Backlog</a></h2>
-<p>Acceptance criteria per item. Status: ☐ open (all Phase-3/4-blocked).</p>
 <ul>
-<li><strong>H-DEP</strong> ☐ Pin and wire the <code>quipu</code> dependency (Phase-4 kickoff).
-<em>AC:</em> <code>--features quipu</code> builds against a real quipu rev; the promote path
-reaches a live <code>/knot</code>. <em>Blocked by:</em> Phase-4 decision to unpin.</li>
-<li><strong>H-PROJECTION</strong> ☐ Hot, one-directional projection of quipu
-<code>boundary:"action"</code> structural policies, with invalidation on quipu policy
-writes. <em>AC:</em> a policy added in quipu appears in hank's registry on the next
-refresh; hank never originates a policy definition. <em>Blocked by:</em> H-DEP.</li>
-<li><strong>H-EDIT-EVAL</strong> ☐ Evaluate projected structural policies at <code>hook pre-edit</code>
-against the resident graph. <em>AC:</em> an edit violating a structural <code>deny</code> policy
-is blocked at edit time with a tier-tagged verdict. <em>Blocked by:</em>
-H-PROJECTION.</li>
-<li><strong>H-FRESHNESS</strong> ☐ Serve FR-3 freshness so a projected-policy verdict declares
-fresh/stale of the registry it used. <em>AC:</em> a verdict computed against a stale
-projection is tagged stale, never silently <code>fresh</code>. <em>Blocked by:</em> Phase-3
-overlays + frontier-bounded incremental update.</li>
-<li><strong>H-PROMOTE-VERDICT</strong> ☐ Promote hank edit-time verdicts into quipu as signed
-facts, extending the <code>commit → touched</code> promote path. <em>AC:</em> a hank verdict
-lands as a bitemporal quipu Verdict attributable to the hank verifier
-identity. <em>Blocked by:</em> H-DEP.</li>
+<li><strong>H-DEP</strong> ✅ (reframed) Projection + promotion run over HTTP; no quipu crate
+pin needed. <code>--features quipu</code> is in the CI matrix.</li>
+<li><strong>H-PROJECTION</strong> ✅ <code>src/project.rs</code>: decode quipu's structural policies into
+<code>Rule</code>s, a <code>ProjectionRegistry</code> with sync-state freshness. <em>Remaining:</em> the
+resident/async refresh cache (FR-31) — today's projection fetches per edit,
+which is the daemon-side optimization, not the semantics.</li>
+<li><strong>H-EDIT-EVAL</strong> ✅ <code>hook pre-edit</code> evaluates projected policies; a <code>deny</code>-effect
+policy blocks under <code>Enforce</code>, tier- and freshness-tagged.</li>
+<li><strong>H-FRESHNESS</strong> ✅ (slice) A verdict declares its freshness: local config is
+<code>fresh</code> (evidence is the exact proposed edit); a projection reports its real
+sync state (<code>fresh</code>, or <code>stale</code> when a refresh fails). The full copy-on-write /
+frontier code-graph freshness (Phase 3) is only needed for <em>graph-consulting</em>
+structural rules, which are not shipped — the buffer-local rules are fresh by
+construction.</li>
+<li><strong>H-PROMOTE-VERDICT</strong> ✅ <code>src/verdict.rs</code>: ed25519 signing that MIRRORS quipu's
+<code>signing.rs</code> (same <code>ring</code>, same canonical <code>v1|…</code> message, same hex encodings),
+a <code>VerdictShape</code>-conformant signed <code>aegis:Verdict</code> Turtle, and <code>promote_verdict</code>
+over <code>/knot</code>. <code>hank verifier</code> prints the public key a human registers as
+<code>aegis:publicKey</code>. <em>Remaining:</em> wiring the trigger (promote a verdict on the
+post-commit <code>commit → touched</code> path) and key rotation — the signing + promotion
+primitives are done and interop-tested against the shared scheme.</li>
 </ul>
 
                     </main>
