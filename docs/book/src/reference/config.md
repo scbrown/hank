@@ -64,6 +64,31 @@ allow_paths = ["src/**", "tests/**"]   # empty = any path
 deny_paths = ["src/config.rs"]         # beats allow_paths
 max_impacted_symbols = 25
 max_impacted_files = 10
+
+# Structural (tree-sitter-tier) rules — checks a linter finds hard or slow.
+# Unlike scopes, rules are NOT per-tenant: they govern the code an edit
+# introduces, for everyone. Each rule pairs a Selector (a tree-sitter .scm
+# capture query) with a Predicate (a regex + a match_type). Evaluated against
+# the text the edit ADDS, Mode-staged, fail-open. Use TOML literal (single-
+# quote) strings so regex backslashes are not doubled.
+[[hank.policy.rules]]
+name = "no-ticket-in-comment"
+language = "rust"                      # the grammar the query targets
+query = '(line_comment) @c'            # Selector: which nodes
+match_type = "must-not-match"          # must-match | must-not-match | must-exist
+pattern = '\b[A-Z]+-[0-9]+\b'          # Predicate: the regex
+# gate = '\bTODO\b'                    # optional: only test captures matching this
+# applies_to = ["src/**"]              # optional path globs; empty = any path
+# message = "keep ticket refs in commits, not comments"  # optional override
 ```
 
 An unrecognized `mode` is a config **error**, not a silently inert guard.
+
+## Projected governed policy (Phase 4, `quipu` feature)
+
+With the `quipu` feature and `[hank.quipu] enabled = true` plus an `endpoint`,
+the guard also fetches quipu's `boundary:"action"` structural policies and
+evaluates them like any rule — a governed `deny` policy blocks under
+`mode = "enforce"`. An unreachable quipu fails open loudly; the verdict declares
+whether the projection was fresh. Hank never defines a governed policy — it only
+projects quipu's. See the design note "Policy edit hooks — the hank side".
