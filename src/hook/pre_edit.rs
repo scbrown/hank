@@ -49,9 +49,51 @@ pub fn run_pre_edit(tenant: Option<&str>, config_override: Option<&Path>) -> any
     Ok(())
 }
 
-/// Decide an edit. Pure apart from reading the repo, so it is directly testable.
+/// Decide an edit, and SPOOL the decision (aegis-0nng): one `guard` metrics
+/// line per invocation — result, duration, extension — through the
+/// fail-silent spool, after the outcome is already fixed. Measurement rides
+/// behind the decision; it can never lean on it.
 #[must_use]
 pub fn guard(
+    input_json: &str,
+    default_root: &Path,
+    tenant: Option<&str>,
+    config_override: Option<&Path>,
+) -> Outcome {
+    let started = Instant::now();
+    let outcome = guard_inner(input_json, default_root, tenant, config_override);
+    let result = match &outcome {
+        Outcome::Allow => "allow",
+        Outcome::Deny(_) => "deny",
+        Outcome::Notify(_) => "notify",
+    };
+    let ext = HookInput::parse(input_json)
+        .and_then(|i| i.tool_input.file_path)
+        .and_then(|f| {
+            Path::new(&f)
+                .extension()
+                .and_then(OsStr::to_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    crate::metrics::emit(
+        "guard",
+        &[
+            ("result", result.into()),
+            (
+                "duration_ms",
+                u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX).into(),
+            ),
+            ("ext", ext.into()),
+        ],
+    );
+    outcome
+}
+
+/// The decision itself. Pure apart from reading the repo, so it is directly
+/// testable without a spool in the way.
+#[must_use]
+fn guard_inner(
     input_json: &str,
     default_root: &Path,
     tenant: Option<&str>,
@@ -413,6 +455,7 @@ fn governed_check(
 
     let mut messages: Vec<String> = Vec::new();
     let mut any_blocking = false;
+    let mut structural_count = 0usize;
 
     // --- TEXT plane: every file, no grammar required ------------------------
     let text_violations = crate::textrules::evaluate(registry.text_rules(), &introduced, rel);
@@ -439,6 +482,7 @@ fn governed_check(
     {
         let violations =
             crate::project::evaluate_projected(registry.policies(), &introduced, language, rel);
+        structural_count = violations.len();
         for v in &violations {
             if v.blocking {
                 any_blocking = true;
@@ -450,6 +494,21 @@ fn governed_check(
     if messages.is_empty() {
         return None;
     }
+    // The leverage headline (aegis-0nng): WHICH governed rules fire, by name.
+    // Text rules carry names; structural violations ride as a count (their
+    // names live only inside composed messages today).
+    let rule_names: Vec<serde_json::Value> = text_violations
+        .iter()
+        .map(|v| serde_json::Value::from(v.rule.clone()))
+        .collect();
+    crate::metrics::emit(
+        "governed",
+        &[
+            ("rules", rule_names.into()),
+            ("structural", (structural_count as u64).into()),
+            ("blocking", any_blocking.into()),
+        ],
+    );
     let blocks = config.policy.mode == Mode::Enforce && any_blocking;
     let message = rule_verdict_message_from(&messages.join("\n"), registry.freshness());
     if blocks {
@@ -565,6 +624,9 @@ fn decide(mode: Mode, message: String) -> Outcome {
 /// surfaced only on exit `2`, so stderr alone would be silent in practice.
 fn fail_open(input: &HookInput, kind: &str, reason: &str) -> Outcome {
     eprintln!("hank: policy guard failed open: {reason}");
+    // The metric that separates "allowed clean" from "allowed because the
+    // check could not run" — the two must never share a label (aegis-0nng).
+    crate::metrics::emit("fail_open", &[("fail_kind", kind.into())]);
     if first_notice_for_session(input.session_id.as_deref(), kind) {
         return Outcome::Notify(format!(
             "hank: policy guard failed open ({reason}) — edits are UNGUARDED this session."

@@ -238,6 +238,33 @@ enum ExportFormat {
     Turtle,
 }
 
+/// The metric name for a DELIBERATELY-invoked command, or None for the two
+/// invocations that are not "use": the hook (the guard spools its own line)
+/// and shell completions. Exhaustive on purpose — a new command must decide
+/// its own answer here or fail to compile, so the leverage metric can never
+/// silently under-count a surface that grew.
+fn deliberate_use_name(cmd: &Commands) -> Option<&'static str> {
+    Some(match cmd {
+        Commands::Hook { .. } | Commands::Completions { .. } => return None,
+        Commands::Serve { .. } => "serve",
+        Commands::Daemon { .. } => "daemon",
+        Commands::Analyze { .. } => "analyze",
+        Commands::Refs { .. } => "refs",
+        Commands::Watch { .. } => "watch",
+        Commands::Status => "status",
+        Commands::Callers { .. } => "callers",
+        Commands::Communities { .. } => "communities",
+        Commands::Impact { .. } => "impact",
+        Commands::Dataflow { .. } => "dataflow",
+        Commands::Verify { .. } => "verify",
+        Commands::Changed { .. } => "changed",
+        Commands::Export { .. } => "export",
+        Commands::Promote { .. } => "promote",
+        #[cfg(feature = "quipu")]
+        Commands::Verifier { .. } => "verifier",
+    })
+}
+
 impl Cli {
     /// Whether `--verbose` was passed. Consulted by `main` to raise the default
     /// tracing verbosity (see [`init_tracing`]).
@@ -257,6 +284,14 @@ impl Cli {
 
     /// Run the parsed command.
     pub async fn run(self) -> anyhow::Result<()> {
+        // DELIBERATE-USE metric (aegis-0nng): the leverage signal aegis-m9ln's
+        // workflow half exists to move — is anyone running analyze/impact/refs
+        // BEFORE a change, or does hank only ever fire as the passive guard?
+        // The hook is excluded (the guard spools its own richer line) and so is
+        // shell completion (not a use). Fail-silent by the spool's contract.
+        if let Some(cmd) = deliberate_use_name(&self.command) {
+            crate::metrics::emit("command", &[("cmd", cmd.into())]);
+        }
         match &self.command {
             Commands::Analyze { path, at } => self.analyze(path, at.as_deref()),
             Commands::Refs { symbol, path } => self.refs(symbol, path),
