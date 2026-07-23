@@ -42,7 +42,13 @@ masking/revert/deletion, and the cost shape.
 The [resident daemon](../reference/daemon.md) wires this live: it holds the
 registry (base at the startup `HEAD`), `POST /edit` is the FR-30 feed (the
 post-edit hook calls it per save), query endpoints take `tenant=`, and
-`/status` reports the base commit and active overlays. Still open: the FR-16
-frontier recompute (hank #3) — until then an overlay-NEW symbol name (one
-with zero base definitions) cannot see its base callers — and FR-17/FR-18
-watch integration and overlay lifecycle (hank #5/#6).
+`/status` reports the base commit and active overlays.
+
+The FR-16 frontier is `graph::update_frontier` (hank #3): editing a symbol
+perturbs its transitive callers AND callees, so the recompute is bounded to
+that reachable frontier — the *second* caller of the one `reachable()` BFS
+(FR-12), never a second traversal. The base also keeps a call-site index
+(`callers_of_name`) keyed by callee name, which is what lets an overlay-NEW
+symbol (one with zero base definitions) find its base callers — the case a
+naive per-file update misses. Still open: FR-17/FR-18 watch integration and
+overlay lifecycle/eviction (hank #5/#6).

@@ -19,10 +19,10 @@
 //! materialized graph, overlay calls are the overlay's own records, and a
 //! base edge into a touched file is remapped BY NAME to the overlay's
 //! definitions (the call lives in the untouched caller; only the callee's
-//! identity changed hands). One deliberate slice-2 limit, closed by the
-//! FR-16 frontier recompute (hank #3): a base caller's call to a name with
-//! ZERO base definitions is not in the base graph at all, so an overlay-new
-//! symbol cannot see that caller until the frontier is recomputed.
+//! identity changed hands). A base caller's call to a name the overlay
+//! INTRODUCED (zero base definitions, so no materialized edge) is resolved
+//! through the base's FR-16 frontier index (`callers_of_name`) — this is
+//! what closes the slice-2 overlay-new-name gap (hank #3).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -31,7 +31,7 @@ use petgraph::graph::NodeIndex;
 use petgraph::Direction as PgDirection;
 
 use super::overlay::{Overlay, ParsedFile};
-use super::{Adjacency, Base, Dir, NodeMeta};
+use super::{Adjacency, Base, Dir, NodeMeta, Reached};
 
 /// A node handle in the composed view — base and overlay ids kept distinct,
 /// never a masked base node.
@@ -195,6 +195,37 @@ impl TenantView<'_> {
         !self.seeds(name).is_empty()
     }
 
+    /// The FR-16 frontier of editing `changed` symbols: everything whose facts
+    /// an edit can perturb — the changed symbols' transitive callers (impact)
+    /// AND callees (dependencies), within `hops`, over the COMPOSED view. This
+    /// is the second caller of the one `reachable_over` BFS (FR-12, "build it
+    /// once"); it walks base+overlay, so the frontier spans the tenant's edit
+    /// and the shared base — including base callers of a name the overlay just
+    /// introduced. Deduplicated by (name, file); the seeds themselves are
+    /// excluded (the frontier is what the edit REACHES). Each item keeps its
+    /// `distance`/`via`, so a caller can see how far a consequence propagated.
+    #[must_use]
+    pub fn frontier(&self, changed: &[&str], hops: u32) -> Vec<Reached> {
+        let seeds: std::collections::BTreeSet<&str> = changed.iter().copied().collect();
+        let mut seen: std::collections::BTreeSet<(String, String)> =
+            std::collections::BTreeSet::new();
+        let mut out = Vec::new();
+        for &name in changed {
+            for dir in [Dir::Callers, Dir::Callees] {
+                for r in super::reachable_over(self, name, dir, hops) {
+                    // A seed reached as another seed's frontier is not itself
+                    // frontier; and each reached symbol counts once.
+                    if !seeds.contains(r.name.as_str())
+                        && seen.insert((r.name.clone(), r.file.clone()))
+                    {
+                        out.push(r);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// The composed definition sites of `name` — overlay definitions plus
     /// unmasked base ones, the same resolution the walk seeds from.
     #[must_use]
@@ -300,28 +331,16 @@ impl TenantView<'_> {
         out
     }
 
-    /// Base callers of `name` from UNTOUCHED files — reconstructed from the
-    /// materialized edges of every base definition of the name (masked ones
-    /// included: the call lives in the caller's file, which is untouched).
-    fn base_callers_of_name(&self, name: &str) -> Vec<SymRef> {
+    /// Base callers of `name` from UNTOUCHED files, of `language`, via the
+    /// FR-16 frontier index. This answers even when `name` has NO base
+    /// definition — the overlay-new symbol a tenant just introduced (hank #3) —
+    /// which walking a definition's incoming edges never could.
+    fn base_callers_of_name(&self, name: &str, language: &'static str) -> Vec<SymRef> {
         let mut out = Vec::new();
-        for &def in self
-            .base
-            .graph()
-            .by_name
-            .get(name)
-            .map_or(&[][..], Vec::as_slice)
-        {
-            for caller in self
-                .base
-                .graph()
-                .graph
-                .neighbors_directed(def, PgDirection::Incoming)
-            {
-                let file = &self.base.graph().graph[caller].file;
-                if !self.touched(file) {
-                    out.push(SymRef::Base(caller));
-                }
+        for &caller in self.base.graph().callers_of_name(name) {
+            let file = self.base.graph().node_file(caller);
+            if !self.touched(file) && self.base_language(caller) == Some(language) {
+                out.push(SymRef::Base(caller));
             }
         }
         out
@@ -414,9 +433,10 @@ impl Adjacency for TenantView<'_> {
                         out.push(SymRef::Overlay(caller));
                     }
                 }
-                // Base callers of my NAME (see the module doc for the
-                // overlay-new-name limit until the FR-16 frontier recompute).
-                out.extend(self.base_callers_of_name(&me.name));
+                // Base callers of my NAME, via the FR-16 frontier index — this
+                // now answers even when the overlay INTRODUCED the name (zero
+                // base defs), which the old edge-walk could not (hank #3).
+                out.extend(self.base_callers_of_name(&me.name, me.language));
             }
         }
         out

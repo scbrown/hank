@@ -405,8 +405,9 @@ tool. For Claude Code (Bobbin already integrates this way for context injection)
 
 - **`hank hook post-edit`** (`PostToolUse` on `Edit|Write|MultiEdit`) — after the
   edit lands, update the overlay and return the cross-file blast radius as
-  injected `additionalContext`. *Advisory by default.* (Implemented; today it
-  builds transiently — see FR-31.)
+  injected `additionalContext`. *Advisory by default.* (Implemented; with a
+  resident daemon it feeds the tenant overlay via `POST /edit`, FR-30/31, and
+  falls back to a transient build otherwise.)
 - **`hank hook pre-edit`** (`PreToolUse`) — before the edit lands, verify the
   *proposed* buffer (§5.7 / FR-23) and, for **capability-scoped agents**
   (polecats), optionally `deny` with a reason so the model revises. This is where
@@ -1040,12 +1041,12 @@ criterion; every phase must keep the `quipu` feature compiling both on and off
 
 ### Phase 3 — Multi-tenancy *(the hard phase)*
 
-- [ ] Shared base + copy-on-write overlays (FR-13, FR-14).
-- [ ] Content-hash structural sharing (FR-15).
-- [ ] Frontier-bounded incremental update reusing the Phase-2 blast primitive (FR-16).
+- [x] Shared base + copy-on-write overlays (FR-13, FR-14): `graph::{Base, Overlay, TenantRegistry, TenantView}`, wired into the resident daemon (hank #2).
+- [x] Content-hash structural sharing (FR-15): per-file content hashes on the base + the registry's parse-intern cache (identical bytes across tenants share one `ParsedFile`).
+- [x] Frontier-bounded incremental update reusing the Phase-2 blast primitive (FR-16): `graph::update_frontier` walks the composed view via the one `reachable()` BFS; the base's `callers_of_name` index closes the overlay-new-name case (hank #3).
 - [ ] File-watch (`notify`) + debounce + tiered scheduling (FR-17).
 - [ ] Overlay lifecycle + high-fan-in handling + eviction (FR-18, §14.2).
-- [ ] `tenant` parameter across the MCP/HTTP surface; `hank_status` shows overlays.
+- [x] `tenant` parameter across the MCP/HTTP surface; `hank_status` shows overlays (hank #2 daemon wiring).
 - [ ] Parallel REST HTTP API beside the MCP mount (FR-27): a per-tool endpoint (`GET /status`, `POST /impact`, …) returning the same payloads as the `hank_*` tools, for the broker and non-MCP consumers. Lands here because it is the resident daemon's shared backplane — a REST facade over a per-request transient build would carry the daemon's latency without its benefit. Until then those consumers reach the tools over the streamable-HTTP MCP transport.
 - **Exit:** N developers edit concurrently; each sees a correct, isolated `base + overlay`; overlays cost O(touched + frontier).
 
