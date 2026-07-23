@@ -6,6 +6,7 @@ name: Release
 on:
   push:
     tags: ["v*"]
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
@@ -16,6 +17,7 @@ permissions:
 jobs:
   binary:
     name: Release binary (x86_64-linux-gnu)
+    if: startsWith(github.ref, 'refs/tags/')
     # ubuntu-22.04 ships glibc 2.35 — older than every consumer host, so a
     # dynamically-linked binary built here runs on all of them (build on the
     # OLDEST glibc you must support; forward-compat only). Static musl is a
@@ -94,3 +96,23 @@ jobs:
           gh release view "${GITHUB_REF_NAME}" --json assets \
             --jq '.assets[].name' | grep -q "${TARBALL}"
           echo "published ${TARBALL} on ${GITHUB_REF_NAME}"
+
+  # Open/refresh the release PR on every main push; merging it tags + releases.
+  # This job is WHY releases happen at all: release-plz.toml existed here for
+  # weeks while nothing executed it, and 43 commits piled up unreleased behind
+  # a tag-only workflow (config-as-prose — the control existed, never ran).
+  release-plz:
+    name: Release-plz
+    if: startsWith(github.ref, 'refs/heads/')
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: MarcoIeni/release-plz-action@v0.5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

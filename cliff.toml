@@ -35,6 +35,22 @@ filter_commits = false
 tag_pattern = "v[0-9].*"
 sort_commits = "oldest"
 
+# Strip internal ticket IDs from PUBLISHED changelog entries. Commit messages
+# keep the refs (internal git history wants them); the public CHANGELOG must
+# not carry them — same enforcement split as the pre-push guard, and the same
+# preprocessor block quipu's cliff.toml carries. Without this, an entry like
+# "... pre-edit guard (<internal-id>)" ships verbatim (it was about to).
+commit_preprocessors = [
+    # "(ID, rest)" -> "(rest)"
+    { pattern = '\((?:aegis|hq|gassy|qp)-[a-z0-9]{3,6},[ \t]*', replace = "(" },
+    # "(rest, ID)" -> "(rest)"
+    { pattern = ',[ \t]*(?:aegis|hq|gassy|qp)-[a-z0-9]{3,6}\)', replace = ")" },
+    # " (ID)" standalone paren -> removed
+    { pattern = '[ \t]*\((?:aegis|hq|gassy|qp)-[a-z0-9]{3,6}\)', replace = "" },
+    # any bare leftover " ID"
+    { pattern = '[ \t]*\b(?:aegis|hq|gassy|qp)-[a-z0-9]{3,6}\b', replace = "" },
+]
+
 commit_parsers = [
     { message = "^feat", group = "Added" },
     { message = "^fix", group = "Fixed" },
