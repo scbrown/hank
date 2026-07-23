@@ -1044,7 +1044,7 @@ criterion; every phase must keep the `quipu` feature compiling both on and off
 - [x] Shared base + copy-on-write overlays (FR-13, FR-14): `graph::{Base, Overlay, TenantRegistry, TenantView}`, wired into the resident daemon (hank #2).
 - [x] Content-hash structural sharing (FR-15): per-file content hashes on the base + the registry's parse-intern cache (identical bytes across tenants share one `ParsedFile`).
 - [x] Frontier-bounded incremental update reusing the Phase-2 blast primitive (FR-16): `graph::update_frontier` walks the composed view via the one `reachable()` BFS; the base's `callers_of_name` index closes the overlay-new-name case (hank #3).
-- [ ] File-watch (`notify`) + debounce + tiered scheduling (FR-17).
+- [x] File-watch (`notify`) + debounce + tiered scheduling (FR-17): `src/watch/` — `.gitignore`-filtered `notify` watcher, debounced tiers; `OverlayRefresh` touches the tenant overlay (fast) then runs `update_frontier` (heavy), with per-file freshness (hank #5).
 - [ ] Overlay lifecycle + high-fan-in handling + eviction (FR-18, §14.2).
 - [x] `tenant` parameter across the MCP/HTTP surface; `hank_status` shows overlays (hank #2 daemon wiring).
 - [ ] Parallel REST HTTP API beside the MCP mount (FR-27): a per-tool endpoint (`GET /status`, `POST /impact`, …) returning the same payloads as the `hank_*` tools, for the broker and non-MCP consumers. Lands here because it is the resident daemon's shared backplane — a REST facade over a per-request transient build would carry the daemon's latency without its benefit. Until then those consumers reach the tools over the streamable-HTTP MCP transport.

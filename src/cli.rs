@@ -649,7 +649,25 @@ impl Cli {
     async fn watch(&self, path: &Path) -> anyhow::Result<()> {
         let config = self.load_config(path)?;
         let scheduler = crate::watch::TieredScheduler::from_config(&config.freshness);
-        let handler = Box::new(crate::watch::GraphRefresh::new(path.to_path_buf()));
+        // With a tenant, the heavy tier drives that tenant's overlay via the
+        // frontier recompute (FR-16/17); without one, the un-tenanted graph
+        // refresh (a full rebuild) stands in. Both honor the same debounce.
+        let handler: Box<dyn crate::watch::TierHandler> = match &self.tenant {
+            Some(tenant) => {
+                let base = crate::graph::Base::build_at(path, &config.base_ref)
+                    .map_err(|e| anyhow::anyhow!("watch: no base graph to overlay: {e}"))?;
+                let registry = std::sync::Arc::new(std::sync::RwLock::new(
+                    crate::graph::TenantRegistry::new(base),
+                ));
+                Box::new(crate::watch::OverlayRefresh::new(
+                    registry,
+                    tenant.clone(),
+                    path.to_path_buf(),
+                    config.policy.max_hops,
+                ))
+            }
+            None => Box::new(crate::watch::GraphRefresh::new(path.to_path_buf())),
+        };
         let _watcher = crate::watch::Watcher::start(
             path,
             scheduler,
