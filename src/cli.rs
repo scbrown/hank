@@ -128,6 +128,16 @@ enum Commands {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
+    /// Count same-file symbol-name collisions — names whose definitions share
+    /// one unqualified symbol IRI and merge into a single node on promotion.
+    /// The sizing input for the scope-qualified IRI migration; only the
+    /// extractor can see the same-kind variant, so this lives here and not in
+    /// a graph query.
+    Census {
+        /// Directory to scan (defaults to the current directory).
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
     /// Export the referential structure (modules, symbols, edges) as Turtle,
     /// or promote it into Quipu with `--to` (FR-34; the promotion spelling of
     /// `promote`, spec §15).
@@ -258,6 +268,7 @@ fn deliberate_use_name(cmd: &Commands) -> Option<&'static str> {
         Commands::Dataflow { .. } => "dataflow",
         Commands::Verify { .. } => "verify",
         Commands::Changed { .. } => "changed",
+        Commands::Census { .. } => "census",
         Commands::Export { .. } => "export",
         Commands::Promote { .. } => "promote",
         #[cfg(feature = "quipu")]
@@ -321,6 +332,7 @@ impl Cli {
                 cli_cmds::callers(self.json, self.quiet, symbol, path)
             }
             Commands::Communities { path } => cli_cmds::communities(self.json, self.quiet, path),
+            Commands::Census { path } => cli_cmds::census(self.json, self.quiet, path),
             Commands::Impact {
                 symbol,
                 path,

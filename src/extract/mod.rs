@@ -207,6 +207,72 @@ pub fn extract_structure(source: &str, language: &str) -> Result<FileStructure> 
     Ok(walk(&spec, tree.root_node(), source.as_bytes()))
 }
 
+/// Symbols in one file that share a NAME — and therefore share the
+/// unqualified symbol IRI `<module>::<name>`, merging into a single graph
+/// node on promotion.
+///
+/// This is the census surface for the scope-qualified IRI migration: the
+/// collision population is countable ONLY here, at the extractor, where the
+/// per-file symbol list still carries start lines. Every downstream surface
+/// is blind by construction — the exported turtle collapses same-kind
+/// duplicates into byte-identical triples, and the live graph keeps one kind
+/// per merged node (only cross-kind collisions survive there, as shape
+/// violations).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct NameCollision {
+    /// The shared symbol name.
+    pub name: String,
+    /// Each definition site: `(kind, start_line)`, in file order.
+    pub sites: Vec<(SymbolKind, usize)>,
+}
+
+impl NameCollision {
+    /// Two sites with the SAME kind — invisible everywhere downstream: they
+    /// merge silently into one node, unioning both symbols' edges.
+    #[must_use]
+    pub fn same_kind(&self) -> bool {
+        self.sites
+            .iter()
+            .enumerate()
+            .any(|(i, (k, _))| self.sites[i + 1..].iter().any(|(k2, _)| k == k2))
+    }
+
+    /// Sites with DIFFERENT kinds — the variant a `symbolKind maxCount 1`
+    /// shape can refuse (the merged node carries two kinds).
+    #[must_use]
+    pub fn cross_kind(&self) -> bool {
+        self.sites.iter().any(|(k, _)| *k != self.sites[0].0)
+    }
+}
+
+/// Group `symbols` by name and return every name defined more than once.
+///
+/// Sites are deduplicated on `(kind, start_line)` first: an extractor emitting
+/// the same definition twice is not a collision. Order within a collision is
+/// file order (by start line).
+#[must_use]
+pub fn name_collisions(symbols: &[Symbol]) -> Vec<NameCollision> {
+    let mut by_name: std::collections::BTreeMap<&str, Vec<(SymbolKind, usize)>> =
+        std::collections::BTreeMap::new();
+    for s in symbols {
+        let sites = by_name.entry(&s.name).or_default();
+        if !sites.contains(&(s.kind, s.start_line)) {
+            sites.push((s.kind, s.start_line));
+        }
+    }
+    by_name
+        .into_iter()
+        .filter(|(_, sites)| sites.len() > 1)
+        .map(|(name, mut sites)| {
+            sites.sort_by_key(|(_, line)| *line);
+            NameCollision {
+                name: name.to_string(),
+                sites,
+            }
+        })
+        .collect()
+}
+
 /// Language-agnostic traversal: collect symbols, intra-file calls, and import
 /// references by asking `spec` about each node. Iterative so a deeply-nested
 /// tree can't overflow the stack.
@@ -301,6 +367,71 @@ pub(crate) fn collect_path_idents(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sym(name: &str, kind: SymbolKind, start_line: usize) -> Symbol {
+        Symbol {
+            name: name.to_string(),
+            kind,
+            start_line,
+            end_line: start_line,
+            tier: Tier::TreeSitter,
+        }
+    }
+
+    #[test]
+    fn no_collision_for_unique_names() {
+        let symbols = [
+            sym("run", SymbolKind::Function, 1),
+            sym("walk", SymbolKind::Function, 5),
+        ];
+        assert!(name_collisions(&symbols).is_empty());
+    }
+
+    #[test]
+    fn same_kind_collision_needs_distinct_start_lines() {
+        // Two `run` functions at different lines: the invisible variant.
+        let symbols = [
+            sym("run", SymbolKind::Function, 1),
+            sym("run", SymbolKind::Function, 40),
+        ];
+        let collisions = name_collisions(&symbols);
+        assert_eq!(collisions.len(), 1);
+        assert!(collisions[0].same_kind());
+        assert!(!collisions[0].cross_kind());
+
+        // The same definition emitted twice is NOT a collision.
+        let dup = [
+            sym("run", SymbolKind::Function, 1),
+            sym("run", SymbolKind::Function, 1),
+        ];
+        assert!(name_collisions(&dup).is_empty());
+    }
+
+    #[test]
+    fn cross_kind_collision_and_mixed() {
+        // function + module sharing a name: the shape-refusable variant.
+        let symbols = [
+            sym("run", SymbolKind::Function, 1),
+            sym("run", SymbolKind::Module, 90),
+        ];
+        let collisions = name_collisions(&symbols);
+        assert_eq!(collisions.len(), 1);
+        assert!(collisions[0].cross_kind());
+        assert!(!collisions[0].same_kind());
+
+        // Three sites, both variants at once; sites come back in line order.
+        let mixed = [
+            sym("run", SymbolKind::Method, 50),
+            sym("run", SymbolKind::Function, 1),
+            sym("run", SymbolKind::Method, 90),
+        ];
+        let collisions = name_collisions(&mixed);
+        assert_eq!(collisions.len(), 1);
+        assert!(collisions[0].same_kind());
+        assert!(collisions[0].cross_kind());
+        let lines: Vec<usize> = collisions[0].sites.iter().map(|(_, l)| *l).collect();
+        assert_eq!(lines, vec![1, 50, 90]);
+    }
 
     #[test]
     fn extracts_rust_symbols() {

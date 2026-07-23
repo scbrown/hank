@@ -279,6 +279,118 @@ pub(crate) fn dataflow(
 }
 
 /// `hank export` — emit the referential structure as Turtle.
+/// `hank census` — same-file symbol-name collisions, the sizing input for the
+/// scope-qualified IRI migration.
+///
+/// Walks the tree exactly like `export` and asks the extractor for each file's
+/// collisions. The count MUST come from here: the exported turtle collapses
+/// same-kind duplicates into identical triples and the graph keeps one kind
+/// per merged node, so both understate the population by construction.
+pub(crate) fn census(json: bool, quiet: bool, path: &Path) -> anyhow::Result<()> {
+    use crate::extract::{extract_structure, name_collisions, source_files};
+
+    let mut files_scanned = 0usize;
+    let mut symbols_seen = 0usize;
+    let mut per_file: Vec<(String, Vec<crate::extract::NameCollision>)> = Vec::new();
+
+    for (file, language) in source_files(path) {
+        let Ok(source) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        let Ok(structure) = extract_structure(&source, language) else {
+            continue;
+        };
+        files_scanned += 1;
+        symbols_seen += structure.symbols.len();
+        let collisions = name_collisions(&structure.symbols);
+        if !collisions.is_empty() {
+            let rel = file
+                .strip_prefix(path)
+                .unwrap_or(&file)
+                .to_string_lossy()
+                .into_owned();
+            per_file.push((rel, collisions));
+        }
+    }
+    per_file.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let same_kind = per_file
+        .iter()
+        .flat_map(|(_, c)| c)
+        .filter(|c| c.same_kind())
+        .count();
+    let cross_kind = per_file
+        .iter()
+        .flat_map(|(_, c)| c)
+        .filter(|c| c.cross_kind())
+        .count();
+    let colliding_names: usize = per_file.iter().map(|(_, c)| c.len()).sum();
+
+    if json {
+        let out = serde_json::json!({
+            "files": per_file.iter().map(|(file, collisions)| serde_json::json!({
+                "file": file,
+                "collisions": collisions.iter().map(|c| serde_json::json!({
+                    "name": c.name,
+                    "sites": c.sites.iter().map(|(kind, line)| serde_json::json!({
+                        "kind": kind.as_str(),
+                        "line": line,
+                    })).collect::<Vec<_>>(),
+                    "same_kind": c.same_kind(),
+                    "cross_kind": c.cross_kind(),
+                })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+            "summary": {
+                "files_scanned": files_scanned,
+                "symbols_seen": symbols_seen,
+                "colliding_files": per_file.len(),
+                "colliding_names": colliding_names,
+                "same_kind": same_kind,
+                "cross_kind": cross_kind,
+            },
+            // Same provenance story as the other tree-sitter surfaces (FR-3).
+            "tier": "treesitter",
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+
+    for (file, collisions) in &per_file {
+        println!("{}", file.bold());
+        for c in collisions {
+            let sites: Vec<String> = c
+                .sites
+                .iter()
+                .map(|(kind, line)| format!("{}@{line}", kind.as_str()))
+                .collect();
+            let tag = match (c.same_kind(), c.cross_kind()) {
+                (true, true) => "same-kind + cross-kind",
+                (true, false) => "same-kind",
+                _ => "cross-kind",
+            };
+            println!("  {}: {}  [{}]", c.name, sites.join(", "), tag.yellow());
+        }
+    }
+    if !quiet {
+        if per_file.is_empty() {
+            println!(
+                "no same-file symbol-name collisions ({files_scanned} files, {symbols_seen} symbols)"
+            );
+        } else {
+            println!(
+                "\n{} colliding name(s) in {} file(s) — {} same-kind (merge silently), {} cross-kind (shape-refusable); {} files / {} symbols scanned",
+                colliding_names,
+                per_file.len(),
+                same_kind,
+                cross_kind,
+                files_scanned,
+                symbols_seen,
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn export(path: &Path, repo: Option<&str>) -> anyhow::Result<()> {
     // Identity chain: explicit --repo, else the origin remote's repo name, else
     // the directory basename. The dir-name fallback survives ONLY here — plain
