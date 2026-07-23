@@ -627,6 +627,12 @@ fn serve_read_only_refuses_a_write() {
     let assert = Command::cargo_bin("hank")
         .unwrap()
         .arg("promote")
+        // HOME is redirected because hank LAYERS ~/.config/bobbin/config.toml
+        // in, and a fleet host's real user config now carries a live
+        // [hank.quipu] endpoint (the m9ln guard rollout) — which turns "no
+        // endpoint configured" into "endpoint found, fail later" and makes
+        // this test's outcome depend on whose machine runs it.
+        .env("HOME", dir.path())
         .current_dir(dir.path())
         .assert();
     if cfg!(feature = "quipu") {

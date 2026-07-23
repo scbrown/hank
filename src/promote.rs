@@ -160,9 +160,51 @@ pub fn write_knot(endpoint: &str, turtle: &str) -> Result<KnotResult> {
     let text = resp
         .into_string()
         .map_err(|e| Error::Promote(format!("could not read /knot response: {e}")))?;
+    // Quipu can REFUSE the write server-side: its persistent shape registry,
+    // when loaded, validates independently of hank's in-process gate, and a
+    // shape the server holds that hank's copy lacks surfaces HERE as HTTP 200
+    // with conforms:false (seen live: a stored symbolKind maxCount(1) refused
+    // a projection hank's shapes accepted). That is a real refusal and must
+    // read as one — not as a JSON parse error on a missing `count` field.
+    if let Ok(refusal) = serde_json::from_str::<KnotRefusal>(&text) {
+        if !refusal.conforms {
+            let issues = refusal
+                .issues
+                .iter()
+                .map(|i| format!("{} {} on {}", i.component, i.message, i.focus_node))
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(Error::Promote(format!(
+                "quipu refused the write (server-side SHACL, {} violation(s)): {issues}. \
+                 hank's own shapes ACCEPTED this projection — the two shape sets have \
+                 drifted; reconcile shapes/code-edges.ttl with quipu's stored registry.",
+                refusal.violations
+            )));
+        }
+    }
     let parsed: KnotResult = serde_json::from_str(&text)
         .map_err(|e| Error::Promote(format!("unexpected /knot response {text:?}: {e}")))?;
     Ok(parsed)
+}
+
+/// Quipu's `/knot` refusal shape (HTTP 200, `conforms:false`).
+#[derive(Debug, serde::Deserialize)]
+struct KnotRefusal {
+    conforms: bool,
+    #[serde(default)]
+    violations: u64,
+    #[serde(default)]
+    issues: Vec<KnotIssue>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct KnotIssue {
+    #[serde(default)]
+    component: String,
+    #[serde(default)]
+    message: String,
+    #[serde(default)]
+    focus_node: String,
 }
 
 /// Quipu `/knot` response. `conforms` here is Quipu's OWN field and is NOT the
