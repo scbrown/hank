@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
 
+use super::Reached;
 use crate::extract::{extract_structure, language_for_extension, FileStructure};
 use crate::types::Tier;
 
@@ -95,6 +96,24 @@ pub struct Overlay {
     /// Overlay callers (ids) of a callee NAME — the exact call records of
     /// touched files, so a deleted call never resurrects through remap.
     callers_of: HashMap<String, Vec<u32>>,
+}
+
+/// The FR-16 frontier of editing `changed` symbols, over `view`'s composed
+/// `base + overlay` graph (hank #3). Updating an overlay is NOT just the
+/// edited file: a signature change perturbs every symbol that references it,
+/// often in files the tenant never opened (§5.5). This bounds that blast to
+/// the changed symbols' transitive callers AND callees — reusing the ONE
+/// `reachable_over` BFS (FR-12), never a second traversal — so the recompute
+/// is `O(edited + frontier)`, not `O(repo)`.
+///
+/// This lives here, next to the overlay, but walks the [`TenantView`] because
+/// the frontier genuinely spans base+overlay: an edited symbol's callers can
+/// be untouched base files, and a newly introduced name's callers are found
+/// through the base's frontier index. The overlay alone cannot see them —
+/// which is the whole reason a naive per-file update is wrong.
+#[must_use]
+pub fn update_frontier(view: &super::TenantView<'_>, changed: &[&str], hops: u32) -> Vec<Reached> {
+    view.frontier(changed, hops)
 }
 
 impl Overlay {

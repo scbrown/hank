@@ -31,7 +31,7 @@ use crate::types::{EdgeKind, Tier};
 pub use base::{Base, FileFacts};
 pub use blast::{reachable_over, Adjacency, Dir, NodeMeta, Reached};
 pub use community::{Community, CommunityMember};
-pub use overlay::{Overlay, OverlaySymbol, ParsedFile};
+pub use overlay::{update_frontier, Overlay, OverlaySymbol, ParsedFile};
 pub use tenant::{OverlayStatus, RegistryStatus, SymRef, TenantRegistry, TenantView, ViewSymbol};
 
 /// A node in the call graph: one defined symbol.
@@ -53,6 +53,13 @@ pub struct SymbolNode {
 pub struct CodeGraph {
     graph: DiGraph<SymbolNode, EdgeKind>,
     by_name: HashMap<String, Vec<NodeIndex>>,
+    /// Every call site keyed by CALLEE NAME → the caller nodes that invoke it,
+    /// recorded whether or not the callee resolves to a definition here. This
+    /// is the FR-16 frontier index (hank #3): the materialized edges above only
+    /// exist when the callee had a definition at build time, so a name a tenant
+    /// overlay ADDS (zero base definitions) has no incoming edge — but its base
+    /// callers are still here, under its name. Deduplicated per name.
+    callers_by_callee: HashMap<String, Vec<NodeIndex>>,
 }
 
 /// Why a baseline could not be built. Distinct from a baseline that is EMPTY:
@@ -199,9 +206,26 @@ impl CodeGraph {
             }
         }
 
+        let mut callers_by_callee: HashMap<String, Vec<NodeIndex>> = HashMap::new();
         for (caller, callee, language) in calls {
-            let (Some(callers), Some(callees)) = (by_name.get(&caller), by_name.get(&callee))
-            else {
+            let Some(callers) = by_name.get(&caller) else {
+                continue;
+            };
+            // Record the frontier index FIRST, before the resolve-or-skip below:
+            // a call to a callee with no definition here (the overlay-new-name
+            // case, FR-16) has no edge, but its base callers still belong under
+            // its name. Language-checked on the caller so cross-language name
+            // collisions are not recorded (the same rule the edges use).
+            for &from in callers {
+                if language_of.get(&from) == Some(&language) {
+                    let slot = callers_by_callee.entry(callee.clone()).or_default();
+                    if !slot.contains(&from) {
+                        slot.push(from);
+                    }
+                }
+            }
+            // Materialized edges still require the callee to resolve to a def.
+            let Some(callees) = by_name.get(&callee) else {
                 continue;
             };
             for &from in callers {
@@ -219,7 +243,29 @@ impl CodeGraph {
             }
         }
 
-        Self { graph, by_name }
+        Self {
+            graph,
+            by_name,
+            callers_by_callee,
+        }
+    }
+
+    /// The base caller nodes that invoke `callee_name` anywhere in the tree —
+    /// the FR-16 frontier index. Unlike walking incoming edges of `callee_name`'s
+    /// definitions, this also answers for a name with NO definition here, which
+    /// is exactly the overlay-new symbol a tenant just introduced (hank #3).
+    #[must_use]
+    pub fn callers_of_name(&self, callee_name: &str) -> &[NodeIndex] {
+        self.callers_by_callee
+            .get(callee_name)
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// The file and language of a base node — used by the tenant view to
+    /// language-filter frontier callers.
+    #[must_use]
+    pub(crate) fn node_file(&self, ix: NodeIndex) -> &str {
+        &self.graph[ix].file
     }
 
     /// Whether any symbol with `name` is in the graph.

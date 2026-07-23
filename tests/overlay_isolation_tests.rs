@@ -3,7 +3,7 @@
 //! and FR-15 interning shares parses across tenants. Everything goes through
 //! the public API: `Base` → `TenantRegistry` → `TenantView` → the FR-12 walk.
 
-use hank::graph::{reachable_over, Base, Dir, TenantRegistry};
+use hank::graph::{reachable_over, update_frontier, Base, Dir, TenantRegistry};
 use std::sync::Arc;
 
 /// A committed 3-hop chain (leaf ← mid ← top) plus `pad` files so `O(touched)`
@@ -203,6 +203,97 @@ fn identical_content_across_tenants_shares_one_parse_fr15() {
     // through its own overlay.
     assert!(reg.view("a").has_symbol("shared_edit"));
     assert!(!reg.view("c").has_symbol("shared_edit"));
+}
+
+#[test]
+fn an_overlay_new_name_now_sees_its_base_callers_fr16() {
+    // The gap slice 2 documented: base files call `helper`, which does NOT
+    // exist at the base commit. A tenant introduces it. Before FR-16 the base
+    // had no edge to a non-existent name, so `helper`'s base callers were
+    // invisible; the frontier index must now surface them.
+    let dir = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?} failed");
+    };
+    run(&["init", "-q", "-b", "main"]);
+    run(&["config", "user.email", "t@t"]);
+    run(&["config", "user.name", "t"]);
+    // Two base files CALL `helper`, but nothing DEFINES it at the base commit.
+    std::fs::write(dir.path().join("a.rs"), "fn a() { helper(); }\n").unwrap();
+    std::fs::write(dir.path().join("b.rs"), "fn b() { helper(); }\n").unwrap();
+    run(&["add", "-A"]);
+    run(&["commit", "-qm", "base"]);
+    let base = Base::build_at(dir.path(), "main").unwrap();
+    let mut reg = TenantRegistry::new(base);
+
+    // No overlay yet: `helper` is undefined, so it has no callers to report.
+    assert!(caller_names(&reg, "x", "helper").is_empty());
+
+    // Tenant introduces helper.rs defining `helper`.
+    reg.touch("x", "helper.rs", "fn helper() {}\n");
+    assert_eq!(
+        caller_names(&reg, "x", "helper"),
+        ["a", "b"],
+        "the overlay-new symbol must see the base callers of its name (FR-16)"
+    );
+    // Still tenant-isolated: another tenant defining helper sees the same base
+    // callers, but not tenant x's overlay.
+    assert!(!reg.view("y").has_symbol("helper"));
+}
+
+#[test]
+fn frontier_is_bounded_and_spans_both_directions_and_is_tenant_isolated() {
+    // leaf <- mid <- top, plus 40 pad files. A tenant rewrites mid.rs.
+    let (_dir, mut reg) = registry();
+    reg.touch("a", "mid.rs", "fn mid() { leaf(); }\n");
+
+    // Editing `mid`: the frontier is its callers (top, transitively) AND its
+    // callees (leaf) — bounded to the chain, never the 43-file repo.
+    let view = reg.view("a");
+    let frontier = update_frontier(&view, &["mid"], 5);
+    let mut names: Vec<&str> = frontier.iter().map(|r| r.name.as_str()).collect();
+    names.sort();
+    names.dedup();
+    assert_eq!(names, ["leaf", "top"], "callers + callees, nothing else");
+    assert!(
+        frontier.len() < reg.base().file_count(),
+        "frontier is O(edited + frontier), not O(repo)"
+    );
+
+    // A leaf edit has a SMALL frontier (just its callers up the chain), no pad.
+    let leaf_frontier = update_frontier(&view, &["leaf"], 5);
+    let mut leaf_names: Vec<&str> = leaf_frontier.iter().map(|r| r.name.as_str()).collect();
+    leaf_names.sort();
+    assert_eq!(leaf_names, ["mid", "top"], "impact up the chain only");
+
+    // Tenant isolation: b's frontier for `mid` is computed over the BASE
+    // (b never touched anything) and must not reflect a's overlay. Here the
+    // shapes match by coincidence, so prove isolation on a NAME only a's
+    // overlay could know: b sees no frontier for an a-only symbol.
+    reg.touch("a", "a_only.rs", "fn a_only() { leaf(); }\n");
+    let b_view = reg.view("b");
+    assert!(
+        update_frontier(&b_view, &["a_only"], 5).is_empty(),
+        "b cannot compute a frontier for a symbol only a's overlay defines"
+    );
+    // But leaf's frontier for a now includes a_only (a new caller), and NOT
+    // for b.
+    let a_leaf: Vec<String> = update_frontier(&reg.view("a"), &["leaf"], 5)
+        .into_iter()
+        .map(|r| r.name)
+        .collect();
+    assert!(a_leaf.contains(&"a_only".to_string()), "got {a_leaf:?}");
+    let b_leaf: Vec<String> = update_frontier(&reg.view("b"), &["leaf"], 5)
+        .into_iter()
+        .map(|r| r.name)
+        .collect();
+    assert!(!b_leaf.contains(&"a_only".to_string()), "isolation");
 }
 
 #[test]
