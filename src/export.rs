@@ -14,15 +14,23 @@ use std::path::Path;
 
 use crate::docref::{doc_files, extract_doc_sections, Mention};
 use crate::errors::Result;
-use crate::extract::{extract_structure, rust_files};
+use crate::extract::{extract_structure, source_files};
 
 /// The code-ontology namespace (matches `shapes/code-entities.ttl`).
 const ONTO: &str = "http://aegis.gastown.local/ontology/";
 
-/// Emit the referential structure of the Rust files under `root` as Turtle,
-/// attributing entities to repository `repo`.
+/// Emit the referential structure of every source file this build can PARSE
+/// under `root` as Turtle, attributing entities to repository `repo`.
+///
+/// EVERY LANGUAGE, not just Rust (the aegis-81t2 class, found again here): the
+/// walk is [`source_files`] — the same drift-proof (path, language) pairing the
+/// guard's graph uses — so a Python or TypeScript repo promotes its real
+/// structure instead of a green empty write. Name/stem resolution is scoped
+/// PER LANGUAGE: a global name map would mint cross-language call edges from
+/// simple collisions (`main`, `run`, `init` exist everywhere), and a lying
+/// edge in the knowledge graph is worse than a missing one.
 pub fn to_turtle(root: &Path, repo: &str) -> Result<String> {
-    let mut modules: Vec<(String, String)> = Vec::new();
+    let mut modules: Vec<(String, String, &'static str)> = Vec::new();
     let mut symbols: Vec<SymbolTriple> = Vec::new();
     let mut by_name: HashMap<String, Vec<String>> = HashMap::new();
     let mut raw_calls: Vec<(String, String)> = Vec::new();
@@ -34,17 +42,20 @@ pub fn to_turtle(root: &Path, repo: &str) -> Result<String> {
     // doc mention to the right module (FR-33 resolution).
     let mut stem_by_sym: HashMap<String, String> = HashMap::new();
 
-    for file in rust_files(root) {
+    for (file, language) in source_files(root) {
         let Ok(source) = std::fs::read_to_string(&file) else {
             continue;
         };
-        let Ok(structure) = extract_structure(&source, "rust") else {
+        let Ok(structure) = extract_structure(&source, language) else {
             continue;
         };
         let rel = rel_path(&file, root);
         let module = module_iri(repo, &rel);
-        let stem = module_stem(&rel);
-        modules.push((module.clone(), rel.clone()));
+        // Language-scoped keys: `use foo` in Rust must never resolve to a
+        // Python module named foo, and a call to `run` must stay within the
+        // language whose parser saw it.
+        let stem = format!("{language}\u{0}{}", module_stem(&rel));
+        modules.push((module.clone(), rel.clone(), language));
         by_stem
             .entry(stem.clone())
             .or_default()
@@ -58,12 +69,25 @@ pub fn to_turtle(root: &Path, repo: &str) -> Result<String> {
                 module: module.clone(),
             });
             stem_by_sym.insert(iri.clone(), stem.clone());
-            by_name.entry(symbol.name.clone()).or_default().push(iri);
+            by_name
+                .entry(format!("{language}\u{0}{}", symbol.name))
+                .or_default()
+                .push(iri);
         }
         for call in &structure.calls {
-            raw_calls.push((call.caller.clone(), call.callee.clone()));
+            raw_calls.push((
+                format!("{language}\u{0}{}", call.caller),
+                format!("{language}\u{0}{}", call.callee),
+            ));
         }
-        raw_imports.push((module.clone(), structure.import_refs.clone()));
+        raw_imports.push((
+            module.clone(),
+            structure
+                .import_refs
+                .iter()
+                .map(|r| format!("{language}\u{0}{r}"))
+                .collect(),
+        ));
     }
 
     let mut call_edges: BTreeSet<(String, String)> = BTreeSet::new();
@@ -158,16 +182,31 @@ fn resolve(
     by_name: &HashMap<String, Vec<String>>,
     stem_by_sym: &HashMap<String, String>,
 ) -> Vec<String> {
-    let Some(candidates) = by_name.get(&mention.symbol) else {
+    // Docs are PROSE: a mention has no language, so it searches ACROSS the
+    // language-scoped keys (`{language}\0{name}`) that keep call/import
+    // resolution honest. A doc citing `reachable` may legitimately mean the
+    // Rust one or the Python one — recall over precision, as before.
+    let candidates: Vec<String> = by_name
+        .iter()
+        .filter(|(key, _)| {
+            key.rsplit_once('\u{0}')
+                .map_or(key.as_str(), |(_, name)| name)
+                == mention.symbol
+        })
+        .flat_map(|(_, iris)| iris.iter().cloned())
+        .collect();
+    if candidates.is_empty() {
         return Vec::new();
-    };
+    }
     if let Some(qualifier) = &mention.qualifier {
         let narrowed: Vec<String> = candidates
             .iter()
             .filter(|iri| {
-                stem_by_sym
-                    .get(*iri)
-                    .is_some_and(|stem| stem.eq_ignore_ascii_case(qualifier))
+                stem_by_sym.get(*iri).is_some_and(|stem| {
+                    stem.rsplit_once('\u{0}')
+                        .map_or(stem.as_str(), |(_, bare)| bare)
+                        .eq_ignore_ascii_case(qualifier)
+                })
             })
             .cloned()
             .collect();
@@ -175,7 +214,7 @@ fn resolve(
             return narrowed;
         }
     }
-    candidates.clone()
+    candidates
 }
 
 /// A `CodeSymbol` ready to emit.
@@ -204,7 +243,7 @@ struct SectionTriple {
 #[allow(clippy::too_many_arguments)]
 fn render(
     repo: &str,
-    modules: &[(String, String)],
+    modules: &[(String, String, &'static str)],
     symbols: &[SymbolTriple],
     call_edges: &BTreeSet<(String, String)>,
     import_edges: &BTreeSet<(String, String)>,
@@ -216,12 +255,13 @@ fn render(
     out.push_str("@prefix bobbin: <http://aegis.gastown.local/ontology/> .\n");
     out.push_str("@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\n");
 
-    for (iri, rel) in modules {
+    for (iri, rel, language) in modules {
         out.push_str(&format!(
             "<{iri}> a bobbin:CodeModule ;\n    bobbin:filePath \"{}\" ;\n    \
-             bobbin:repo \"{}\" ;\n    bobbin:language \"rust\" .\n\n",
+             bobbin:repo \"{}\" ;\n    bobbin:language \"{}\" .\n\n",
             esc(rel),
             esc(repo),
+            esc(language),
         ));
     }
 
@@ -293,7 +333,11 @@ fn module_stem(rel: &str) -> String {
     let stem = path
         .file_stem()
         .map_or_else(String::new, |s| s.to_string_lossy().into_owned());
-    if stem == "mod" {
+    // Directory-module conventions, one per ecosystem, same shape: the file
+    // that IS its directory. Rust's mod.rs, Python's __init__.py, JS/TS's
+    // index.*. Each takes the parent directory's name so `import pkg` and
+    // `use pkg` resolve to the module that defines pkg.
+    if stem == "mod" || stem == "__init__" || stem == "index" {
         return path
             .parent()
             .and_then(Path::file_name)
@@ -480,5 +524,71 @@ mod tests {
         );
         assert!(edges[0].contains("code/demo/graph.rs::run"));
         assert!(!edges[0].contains("serve.rs"));
+    }
+}
+
+#[cfg(test)]
+mod xkwu_tests {
+    //! Multi-language export (the aegis-81t2 class, found in this module): a
+    //! Python repo must promote its real structure, and cross-language name
+    //! collisions must never mint edges.
+    use super::*;
+
+    #[cfg(feature = "langs-extra")]
+    #[test]
+    fn a_python_repo_exports_real_structure_with_its_own_language() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.py"), "def leaf():\n    pass\n").unwrap();
+        std::fs::write(dir.path().join("b.py"), "def mid():\n    leaf()\n").unwrap();
+        let ttl = to_turtle(dir.path(), "pyrepo").unwrap();
+        assert!(ttl.contains("bobbin:language \"python\""), "{ttl}");
+        assert!(ttl.contains("a.py::leaf"), "{ttl}");
+        assert!(
+            ttl.contains("bobbin:calls"),
+            "a py call edge must resolve: {ttl}"
+        );
+    }
+
+    #[cfg(feature = "langs-extra")]
+    #[test]
+    fn cross_language_name_collisions_mint_no_edges() {
+        // `main` exists in both files; a global name map would draw
+        // rust-main -> py-main (or worse, both directions). Language-scoped
+        // resolution draws neither.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("x.rs"),
+            "fn helper() {}\nfn main() { helper(); }\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("y.py"), "def helper():\n    pass\n").unwrap();
+        let ttl = to_turtle(dir.path(), "mixed").unwrap();
+        // rust's call edge resolves within rust...
+        assert!(ttl.contains("x.rs::main"), "{ttl}");
+        // ...and no edge crosses into the python helper.
+        let py_helper_called = ttl
+            .lines()
+            .any(|l| l.contains("bobbin:calls") && l.contains("y.py"));
+        assert!(!py_helper_called, "a cross-language edge is a lie: {ttl}");
+    }
+
+    #[cfg(feature = "langs-extra")]
+    #[test]
+    fn python_init_takes_its_directory_name_like_mod_rs() {
+        assert_eq!(module_stem("pkg/__init__.py"), "pkg");
+        assert_eq!(module_stem("pkg/index.ts"), "pkg");
+        assert_eq!(module_stem("pkg/mod.rs"), "pkg");
+        assert_eq!(module_stem("pkg/other.py"), "other");
+    }
+
+    #[test]
+    fn a_rust_only_build_still_exports_rust() {
+        // The positive control for the default feature set: the walk change
+        // must not have cost the original language anything.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.rs"), "fn only() {}\n").unwrap();
+        let ttl = to_turtle(dir.path(), "r").unwrap();
+        assert!(ttl.contains("a.rs::only"), "{ttl}");
+        assert!(ttl.contains("bobbin:language \"rust\""), "{ttl}");
     }
 }
