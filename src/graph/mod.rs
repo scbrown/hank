@@ -32,7 +32,7 @@ pub use base::{Base, FileFacts};
 pub use blast::{reachable_over, Adjacency, Dir, NodeMeta, Reached};
 pub use community::{Community, CommunityMember};
 pub use overlay::{Overlay, OverlaySymbol, ParsedFile};
-pub use tenant::{OverlayStatus, RegistryStatus, SymRef, TenantRegistry, TenantView};
+pub use tenant::{OverlayStatus, RegistryStatus, SymRef, TenantRegistry, TenantView, ViewSymbol};
 
 /// A node in the call graph: one defined symbol.
 #[derive(Debug, Clone)]

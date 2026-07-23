@@ -37,7 +37,12 @@ same FR-12 BFS as every other graph). Isolation is structural: a view composes
 exactly one tenant's overlay, the base is immutable, and interned parses are
 shared by content hash (FR-15) without sharing any view state. The
 `tests/overlay_isolation_tests.rs` suite pins §6.3 absolute isolation,
-masking/revert/deletion, and the cost shape. Not yet wired: the resident
-daemon serving per-tenant views over HTTP/MCP (registry-in-daemon), and the
-FR-16 frontier recompute (hank #3) — until then an overlay-NEW symbol name
-(one with zero base definitions) cannot see its base callers.
+masking/revert/deletion, and the cost shape.
+
+The [resident daemon](../reference/daemon.md) wires this live: it holds the
+registry (base at the startup `HEAD`), `POST /edit` is the FR-30 feed (the
+post-edit hook calls it per save), query endpoints take `tenant=`, and
+`/status` reports the base commit and active overlays. Still open: the FR-16
+frontier recompute (hank #3) — until then an overlay-NEW symbol name (one
+with zero base definitions) cannot see its base callers — and FR-17/FR-18
+watch integration and overlay lifecycle (hank #5/#6).

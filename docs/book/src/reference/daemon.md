@@ -29,10 +29,12 @@ never answer for repo A.
   session gets a loud once-per-session notice. Down = allowed AND announced,
   never silently allowed, never blocked (see
   [Pre-Edit Policy Guard](policy-guard.md)).
-- **`hank hook post-edit`** extracts the edited file's symbols fresh (their
-  content is what just changed) and asks the resident graph for their external
-  callers via `/callers`. Daemon down = transient fallback with a stderr note —
-  silent to the model, because the advisory is advice, not enforcement.
+- **`hank hook post-edit`** runs the FR-30 cycle in one `POST /edit`: the
+  just-saved file is recorded in the session tenant's overlay (`--tenant`,
+  default `single-tenant`) and the advisory comes back from the fresh
+  composed view. Daemon down = transient fallback with a stderr note — silent
+  to the model, because the advisory is advice, not enforcement, and the file
+  on disk (not the overlay) is the system of record.
 - **MCP graph tools** (`hank_callers`, `hank_callees`, `hank_impact`,
   `hank_references`) answer from the resident graph when the request is not
   `path`-scoped; otherwise, and on any daemon failure, they fall back to the
@@ -49,14 +51,36 @@ replies omit them rather than faking `fresh`.
 | Route | Method | Query/body | Answer |
 |-------|--------|------------|--------|
 | `/health` | GET | — | bare `ok` (the liveness probe) |
-| `/status` | GET | — | root, node/edge counts, uptime, tiers |
-| `/callers` | GET | `symbol` | direct callers, from the resident graph |
-| `/callees` | GET | `symbol` | direct callees, from the resident graph |
-| `/impact` | GET | `symbol`, `hops` (default 5) | transitive blast radius |
-| `/references` | GET | `symbol` | definition sites, from the resident index |
-| `/symbols` | GET | `file` (root-relative) | that file's symbols, line order |
+| `/status` | GET | — | root, node/edge counts, uptime, tiers, `tenant_layer` (base commit + active overlays; `null` = layer absent) |
+| `/callers` | GET | `symbol`, `tenant?` | direct callers |
+| `/callees` | GET | `symbol`, `tenant?` | direct callees |
+| `/impact` | GET | `symbol`, `hops` (default 5), `tenant?` | transitive blast radius |
+| `/references` | GET | `symbol`, `tenant?` | definition sites |
+| `/symbols` | GET | `file` (root-relative), `tenant?` | that file's symbols, line order |
 | `/dataflow` | GET | `function`, `path?`, `var?`, `forward?`, `hops?` | intra-procedural data dependence |
 | `/measure` | POST | `{file, rel, anchors[], max_hops?}` | edit blast-radius sizing for the guard |
+| `/edit` | POST | `{tenant, rel, content?}` | FR-30 feed-and-advise: record the edit in the tenant's overlay, return which of the file's symbols have external callers (from the fresh view). Omitted `content` is read from disk, root-confined. |
+
+## The tenant layer (hank #2)
+
+When the root is a git repo, the daemon also holds a **tenant registry**: one
+shared read-only base built at the startup `HEAD`, plus a copy-on-write
+overlay per tenant, fed by `POST /edit` (the post-edit hook does this
+automatically when `use_daemon` is on). A query naming `tenant=` resolves
+against that tenant's `base + overlay` view; overlays are absolutely invisible
+to other tenants (§6.3).
+
+Two deliberate semantics to know:
+
+- **Tenant views compose over the COMMITTED base**, not the working tree
+  (FR-22 keeps overlay churn distinct from committed truth). An uncommitted
+  working-tree delta present at daemon startup is visible to the un-tenanted
+  surface (which snapshots the working tree) and absent from tenant views
+  until a tenant touches those files.
+- **Naming a tenant when the layer is absent** (root is not a repo — no commit
+  to anchor a base to) is an explicit **412**, never an empty answer.
+  `/status.tenant_layer` is `null` in that state, distinct from
+  present-with-no-overlays.
 
 Notes that keep the answers honest:
 

@@ -30,6 +30,39 @@ pub struct EngineStatus {
     pub uptime_secs: u64,
     /// Precision tiers this build actually serves.
     pub tier: Vec<String>,
+    /// The tenant layer (hank #2): base commit + active overlays. `None` means
+    /// the layer is ABSENT (the root is not a git repo, so there is no commit
+    /// to anchor a shared base to) — distinct from present-with-no-overlays.
+    pub tenant_layer: Option<crate::graph::RegistryStatus>,
+}
+
+/// One advised symbol in an [`EditReply`]: a symbol of the edited file that
+/// has callers elsewhere.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdvisedSymbol {
+    /// The edited file's symbol.
+    pub symbol: String,
+    /// How many callers outside the edited file.
+    pub external_callers: usize,
+}
+
+/// Reply for `POST /edit` — the FR-30 feed-and-advise cycle: the edit is
+/// recorded in the tenant's overlay, and the advisory is computed from the
+/// FRESH composed view.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EditReply {
+    /// The tenant whose overlay absorbed the edit.
+    pub tenant: String,
+    /// The touched file, root-relative.
+    pub file: String,
+    /// Symbols the overlay now holds for that file.
+    pub symbols: usize,
+    /// Symbols with callers OUTSIDE the edited file, with counts.
+    pub advised: Vec<AdvisedSymbol>,
+    /// Distinct files those external callers live in.
+    pub files: Vec<String>,
+    /// Provenance tier of these facts.
+    pub tier: String,
 }
 
 /// The provenance tier of every reachability fact the resident graph serves.

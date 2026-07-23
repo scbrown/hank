@@ -256,6 +256,113 @@ async fn measure_sizes_an_edit_and_confines_to_the_root() {
     assert_eq!(code, 400, "a file outside the root must be refused");
 }
 
+// A committed repo, so the engine grows its tenant layer (base@HEAD).
+fn committed_repo() -> tempfile::TempDir {
+    let dir = tempdir().unwrap();
+    let run = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?} failed");
+    };
+    run(&["init", "-q", "-b", "main"]);
+    run(&["config", "user.email", "t@t"]);
+    run(&["config", "user.name", "t"]);
+    std::fs::write(dir.path().join("leaf.rs"), "fn leaf() {}\n").unwrap();
+    std::fs::write(dir.path().join("mid.rs"), "fn mid() { leaf(); }\n").unwrap();
+    run(&["add", "-A"]);
+    run(&["commit", "-qm", "base"]);
+    dir
+}
+
+#[tokio::test]
+async fn edit_feeds_the_tenant_overlay_and_queries_scope_by_tenant() {
+    let dir = committed_repo();
+    let engine = ResidentEngine::build(dir.path(), None).unwrap();
+    let port = spawn(engine).await;
+
+    // Feed tenant a: mid.rs rewritten, `mid2` now calls leaf.
+    let (code, reply) = post_json(
+        port,
+        "/edit",
+        &serde_json::json!({
+            "tenant": "a", "rel": "mid.rs", "content": "fn mid2() { leaf(); }\n"
+        })
+        .to_string(),
+    )
+    .await;
+    assert_eq!(code, 200);
+    let reply = reply.unwrap();
+    assert_eq!(reply["symbols"].as_u64().unwrap(), 1);
+    assert_eq!(reply["tier"].as_str().unwrap(), "treesitter");
+
+    // Tenant a's view: mid2 calls leaf; mid is masked.
+    let a = get_json(port, "/callers?symbol=leaf&tenant=a").await;
+    let names: Vec<&str> = a["neighbors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["mid2"], "a sees its overlay truth");
+
+    // Tenant b — and the un-tenanted surface — are ISOLATED from it.
+    let b = get_json(port, "/callers?symbol=leaf&tenant=b").await;
+    let names: Vec<&str> = b["neighbors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["mid"], "b composes the bare base");
+    let legacy = get_json(port, "/callers?symbol=leaf").await;
+    let names: Vec<&str> = legacy["neighbors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["mid"], "the un-tenanted surface is unchanged");
+
+    // /status reports the layer: base commit + a's overlay, O(touched) sized.
+    let status = get_json(port, "/status").await;
+    let layer = &status["tenant_layer"];
+    assert_eq!(layer["base_commit"].as_str().unwrap().len(), 40);
+    assert_eq!(layer["active_overlays"][0]["tenant"].as_str().unwrap(), "a");
+    assert_eq!(layer["active_overlays"][0]["touched_files"], 1);
+}
+
+#[tokio::test]
+async fn a_tenant_query_without_a_tenant_layer_is_refused_not_empty() {
+    // A non-repo root has no commit to anchor a base to: naming a tenant must
+    // be an explicit 412, never an empty answer wearing a normal one. The
+    // un-tenanted surface keeps serving.
+    let dir = tiny_repo();
+    let engine = ResidentEngine::build(dir.path(), None).unwrap();
+    let port = spawn(engine).await;
+
+    let (code, _) = get_raw(port, "/callers?symbol=leaf&tenant=a").await;
+    assert_eq!(code, 412, "tenant named, layer absent ⇒ explicit refusal");
+    let (code, _) = post_json(
+        port,
+        "/edit",
+        &serde_json::json!({"tenant": "a", "rel": "leaf.rs", "content": ""}).to_string(),
+    )
+    .await;
+    assert_eq!(code, 412);
+
+    let status = get_json(port, "/status").await;
+    assert!(
+        status["tenant_layer"].is_null(),
+        "absent layer is null, not an empty registry"
+    );
+    let legacy = get_json(port, "/callers?symbol=leaf").await;
+    assert_eq!(legacy["found"].as_bool().unwrap(), true);
+}
+
 // Minimal HTTP GET without pulling a client dep into the crate: reuse the
 // probe's raw-socket approach and read the whole body as JSON.
 async fn get_json(port: u16, path: &str) -> serde_json::Value {

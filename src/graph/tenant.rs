@@ -174,11 +174,88 @@ pub struct TenantView<'a> {
     overlay: Option<&'a Overlay>,
 }
 
+/// One symbol as the composed view resolves it — the serve-path shape
+/// (definitions and per-file listings), with the kind the wire DTOs need.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewSymbol {
+    /// Symbol name.
+    pub name: String,
+    /// Symbol kind (lowercase form).
+    pub kind: String,
+    /// File, relative to the root.
+    pub file: String,
+    /// 1-based definition line.
+    pub start_line: usize,
+}
+
 impl TenantView<'_> {
     /// Whether `name` is defined anywhere in the composed view.
     #[must_use]
     pub fn has_symbol(&self, name: &str) -> bool {
         !self.seeds(name).is_empty()
+    }
+
+    /// The composed definition sites of `name` — overlay definitions plus
+    /// unmasked base ones, the same resolution the walk seeds from.
+    #[must_use]
+    pub fn definitions(&self, name: &str) -> Vec<ViewSymbol> {
+        self.defs_of_name(name, None)
+            .into_iter()
+            .map(|r| self.view_symbol(r))
+            .collect()
+    }
+
+    /// The symbols `rel` contributes to the composed view, in line order:
+    /// the overlay's if touched (masking), the base's otherwise.
+    #[must_use]
+    pub fn file_symbols(&self, rel: &str) -> Vec<ViewSymbol> {
+        if let Some(overlay) = self.overlay {
+            if overlay.is_touched(rel) {
+                let mut out: Vec<ViewSymbol> = (0..overlay.symbol_count() as u32)
+                    .filter(|&id| overlay.symbol(id).file == rel)
+                    .map(|id| self.view_symbol(SymRef::Overlay(id)))
+                    .collect();
+                out.sort_by_key(|s| s.start_line);
+                return out;
+            }
+        }
+        self.base
+            .graph()
+            .file_symbols(rel)
+            .into_iter()
+            .map(|n| ViewSymbol {
+                name: n.name.clone(),
+                kind: n.kind.clone(),
+                file: n.file.clone(),
+                start_line: n.start_line,
+            })
+            .collect()
+    }
+
+    fn view_symbol(&self, r: SymRef) -> ViewSymbol {
+        match r {
+            SymRef::Base(ix) => {
+                let n = &self.base.graph().graph[ix];
+                ViewSymbol {
+                    name: n.name.clone(),
+                    kind: n.kind.clone(),
+                    file: n.file.clone(),
+                    start_line: n.start_line,
+                }
+            }
+            SymRef::Overlay(id) => {
+                let s = self
+                    .overlay
+                    .expect("an overlay id implies an overlay")
+                    .symbol(id);
+                ViewSymbol {
+                    name: s.name.clone(),
+                    kind: s.kind.clone(),
+                    file: s.file.clone(),
+                    start_line: s.start_line,
+                }
+            }
+        }
     }
 
     fn touched(&self, rel: &str) -> bool {

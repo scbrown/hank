@@ -86,6 +86,7 @@ impl HankMcpServer {
             tiers: Tier::served(),
             quipu_enabled: config.quipu.enabled,
             branch_model: config.quipu.branch_model,
+            tenant_layer: super::resident::tenant_layer(self.config.as_deref(), &self.root),
         };
         json_result(&response)
     }

@@ -331,6 +331,11 @@ pub struct StatusResponse {
     pub quipu_enabled: bool,
     /// The configured branch model.
     pub branch_model: String,
+    /// The resident daemon's tenant layer (base commit + active overlays,
+    /// hank #2), when a usable daemon holds one. `None` when no daemon is
+    /// expected/usable OR its tenant layer is absent — the daemon's own
+    /// `/status` distinguishes those.
+    pub tenant_layer: Option<serde_json::Value>,
 }
 
 /// Request for `hank_verify` — a verdict on a proposed edit buffer (FR-23).
