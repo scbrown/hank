@@ -61,7 +61,7 @@ pub fn to_turtle(root: &Path, repo: &str) -> Result<String> {
             .or_default()
             .push(module.clone());
         for symbol in &structure.symbols {
-            let iri = format!("{module}::{}", symbol.name);
+            let iri = symbol_iri(&module, &symbol.scope, &symbol.name);
             symbols.push(SymbolTriple {
                 iri: iri.clone(),
                 name: symbol.name.clone(),
@@ -352,6 +352,49 @@ fn module_iri(repo: &str, rel: &str) -> String {
     format!("{ONTO}code/{repo}/{}", rel.replace('/', "%2F"))
 }
 
+/// Mint a `CodeSymbol` IRI: `{module}::{scope1}::{scope2}::{name}` — the scope
+/// chain is what keeps two same-named symbols in one file on distinct IRIs
+/// (aegis-1q14: without it, 42 same-kind collisions across bobbin/hank/quipu
+/// silently merged, unioning different symbols' call edges). Scope segments are
+/// raw source text (impl types can be `Foo<T>` or `dyn Trait`), so IRI-hostile
+/// characters are percent-encoded; `::` between segments is the one separator.
+fn symbol_iri(module: &str, scope: &[String], name: &str) -> String {
+    let mut iri = String::from(module);
+    for seg in scope {
+        iri.push_str("::");
+        iri.push_str(&iri_segment(seg));
+    }
+    iri.push_str("::");
+    iri.push_str(&iri_segment(name));
+    iri
+}
+
+/// Percent-encode the characters that are illegal or structural in an IRI
+/// reference (space and angle brackets from generic types, quotes, and `%`
+/// itself first so encoding is injective — two different raw segments can never
+/// encode to the same IRI text).
+fn iri_segment(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        match c {
+            '%' => out.push_str("%25"),
+            ' ' => out.push_str("%20"),
+            '<' => out.push_str("%3C"),
+            '>' => out.push_str("%3E"),
+            '"' => out.push_str("%22"),
+            '{' => out.push_str("%7B"),
+            '}' => out.push_str("%7D"),
+            '|' => out.push_str("%7C"),
+            '\\' => out.push_str("%5C"),
+            '^' => out.push_str("%5E"),
+            '`' => out.push_str("%60"),
+            '\n' | '\t' => {}
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Mint a `Document` IRI: `{ONTO}doc/{repo}/{path}` with `/` percent-encoded in
 /// the path segment (mirrors Quipu's `document_iri`; the section anchor is
 /// appended as `#{slug}` by the caller).
@@ -402,6 +445,38 @@ mod tests {
         std::fs::write(dir.path().join("a.rs"), "fn only() {}\n").unwrap();
         let ttl = to_turtle(dir.path(), "demo").unwrap();
         assert!(ttl.contains("a.rs::only"));
+    }
+
+    /// The aegis-1q14 acceptance at the export layer: two same-named symbols in
+    /// one file emit DISTINCT IRIs (before the scope chain they collapsed into
+    /// one node in the BTreeSet — invisible downstream by construction).
+    #[test]
+    fn same_named_symbols_in_one_file_get_distinct_iris() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("m.rs"),
+            "mod run;\nstruct Cli;\nimpl Cli { pub fn run(&self) {} }\n",
+        )
+        .unwrap();
+        let ttl = to_turtle(dir.path(), "demo").unwrap();
+        assert!(ttl.contains("m.rs::run"), "top-level mod keeps plain IRI");
+        assert!(
+            ttl.contains("m.rs::Cli::run"),
+            "impl method is scope-qualified:\n{ttl}"
+        );
+    }
+
+    /// Impl types can carry generics — IRI-hostile characters are encoded, and
+    /// injectively (`%` first), so distinct raw scopes stay distinct IRIs.
+    #[test]
+    fn scope_segments_are_iri_encoded_injectively() {
+        assert_eq!(iri_segment("Foo<T>"), "Foo%3CT%3E");
+        assert_eq!(iri_segment("A@Debug"), "A@Debug");
+        // Injectivity guard: a raw segment containing a literal "%3C" must not
+        // encode to the same text as one containing "<".
+        assert_ne!(iri_segment("x%3C"), iri_segment("x<"));
+        let iri = symbol_iri("m", &["Foo<T>".to_string()], "new");
+        assert_eq!(iri, "m::Foo%3CT%3E::new");
     }
 
     #[test]

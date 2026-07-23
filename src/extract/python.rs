@@ -15,6 +15,16 @@ pub(super) fn spec() -> GrammarSpec {
         is_call_kind: |kind| kind == "call",
         callee_name,
         collect_imports,
+        scope_name,
+    }
+}
+
+/// Classes and functions open named scopes (two same-named methods on two
+/// classes in one file must not share an IRI — aegis-1q14).
+fn scope_name(node: Node, bytes: &[u8]) -> Option<String> {
+    match node.kind() {
+        "class_definition" | "function_definition" => field_name(node, bytes),
+        _ => None,
     }
 }
 

@@ -15,7 +15,33 @@ pub(super) fn spec() -> GrammarSpec {
         is_call_kind: |kind| kind == "call_expression",
         callee_name,
         collect_imports,
+        scope_name,
     }
+}
+
+/// A method's receiver type is its scope: `func (a *A) Run()` and
+/// `func (b *B) Run()` in one file are different symbols (aegis-1q14).
+fn scope_name(node: Node, bytes: &[u8]) -> Option<String> {
+    if node.kind() != "method_declaration" {
+        return None;
+    }
+    let recv = node.child_by_field_name("receiver")?;
+    // receiver: parameter_list -> parameter_declaration -> type (possibly
+    // behind a pointer_type). Take the identifier text of the type.
+    let mut cursor = recv.walk();
+    for child in recv.children(&mut cursor) {
+        if child.kind() == "parameter_declaration" {
+            if let Some(ty) = child.child_by_field_name("type") {
+                let inner = if ty.kind() == "pointer_type" {
+                    ty.named_child(0).unwrap_or(ty)
+                } else {
+                    ty
+                };
+                return inner.utf8_text(bytes).ok().map(str::to_string);
+            }
+        }
+    }
+    None
 }
 
 /// Map a Go node to a [`SymbolKind`], if it names a symbol.

@@ -20,6 +20,16 @@ pub(super) fn spec() -> GrammarSpec {
         is_call_kind: |kind| kind == "call_expression",
         callee_name,
         collect_imports,
+        scope_name,
+    }
+}
+
+/// Namespaces and class/struct bodies open named scopes (two classes' same-named
+/// member functions in one file must not share an IRI — aegis-1q14).
+fn scope_name(node: Node, bytes: &[u8]) -> Option<String> {
+    match node.kind() {
+        "namespace_definition" | "class_specifier" | "struct_specifier" => field_name(node, bytes),
+        _ => None,
     }
 }
 

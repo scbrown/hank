@@ -157,6 +157,13 @@ pub enum EdgeKind {
 pub struct Symbol {
     /// The symbol's name.
     pub name: String,
+    /// The chain of named enclosing scopes (module, impl, trait, class,
+    /// function — per language), outermost first; empty for a top-level symbol.
+    /// This is what makes the promoted IRI unique when one file defines two
+    /// same-named symbols in different scopes (aegis-1q14: 42 of 43 measured
+    /// collisions silently merged into one node before this existed).
+    #[serde(default)]
+    pub scope: Vec<String>,
     /// What kind of symbol it is.
     pub kind: SymbolKind,
     /// 1-based line where the symbol begins.
