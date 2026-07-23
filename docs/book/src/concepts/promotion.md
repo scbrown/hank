@@ -29,6 +29,14 @@ than pretending. It emits the Turtle, SHACL-validates in-process against
 `shapes/`, and writes to `/knot` **only if it conforms** — a rejected promotion
 exits non-zero so a script can't read it as landed.
 
+Large projections are **chunked**: Quipu's request body limit is ~2 MiB, so a
+projection over the line is split on entity-block boundaries and posted as
+multiple `/knot` writes (the output says so: `... in 3 chunks`). Validation is
+still whole-graph and up front; a chunked write is not atomic across chunks,
+but IRIs are deterministic and `/knot` supersedes, so re-running a failed
+promotion converges instead of duplicating — the failure message names exactly
+how many chunks landed.
+
 Code and docs are one referential graph (spec §5.10): code leans real-time (the
 live graph + edit hook), docs lean asynchronous (this export). Once in Quipu,
 doc rot becomes a SPARQL query — "every `Document` referencing a `CodeSymbol`
