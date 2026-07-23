@@ -280,12 +280,18 @@ pub(crate) fn dataflow(
 
 /// `hank export` — emit the referential structure as Turtle.
 pub(crate) fn export(path: &Path, repo: Option<&str>) -> anyhow::Result<()> {
+    // Identity chain: explicit --repo, else the origin remote's repo name, else
+    // the directory basename. The dir-name fallback survives ONLY here — plain
+    // `export` prints locally and writes nothing — while the promote paths refuse
+    // instead: a guessed identity in a WRITE fragments the shared graph.
     let repo = repo.map_or_else(
         || {
-            path.canonicalize()
-                .ok()
-                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-                .unwrap_or_else(|| "repo".to_string())
+            crate::git::origin_repo_name(path).unwrap_or_else(|| {
+                path.canonicalize()
+                    .ok()
+                    .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                    .unwrap_or_else(|| "repo".to_string())
+            })
         },
         str::to_string,
     );

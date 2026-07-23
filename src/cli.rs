@@ -135,7 +135,9 @@ enum Commands {
         /// Directory to export (defaults to current dir).
         #[arg(default_value = ".")]
         path: PathBuf,
-        /// Repository name to attribute entities to (defaults to the dir name).
+        /// Repository name to attribute entities to. Defaults to the `origin`
+        /// remote's repo name, else the dir name (print-only); a promotion via
+        /// `--to` refuses the dir-name guess and wants `--repo` or an origin.
         #[arg(long)]
         repo: Option<String>,
         /// Output format.
@@ -181,6 +183,12 @@ enum Commands {
         /// for a real promotion; without it, promotion is unwired and refuses.
         #[arg(long)]
         to: Option<String>,
+        /// Repository name to attribute promoted entities to. Defaults to the
+        /// `origin` remote's repo name; with no origin, promotion refuses rather
+        /// than deriving identity from the directory name (a worktree's dir name
+        /// mints wrong IRIs and fragments the graph).
+        #[arg(long)]
+        repo: Option<String>,
         /// Directory to promote (defaults to current dir).
         #[arg(default_value = ".")]
         path: PathBuf,
@@ -305,7 +313,7 @@ impl Cli {
                     // from `promote`. It is a write, so honour the guard first.
                     Some(_) => {
                         self.load_config(path)?.write_guard("promotion")?;
-                        self.promote(path, "HEAD", to.as_deref())
+                        self.promote(path, "HEAD", to.as_deref(), repo.as_deref())
                     }
                     None => cli_cmds::export(path, repo.as_deref()),
                 }
@@ -329,12 +337,17 @@ impl Cli {
             Commands::Verify { file, buffer } => {
                 cli_cmds::verify(self.json, self.quiet, file, buffer)
             }
-            Commands::Promote { commit, to, path } => {
+            Commands::Promote {
+                commit,
+                to,
+                repo,
+                path,
+            } => {
                 // THE WRITE GUARD, made real (aegis-ltjo). Promotion is the write
                 // hank performs, so `serve.read_only` must refuse it — BEFORE any
                 // work, so the guard holds regardless of feature.
                 self.load_config(path)?.write_guard("promotion")?;
-                self.promote(path, commit, to.as_deref())
+                self.promote(path, commit, to.as_deref(), repo.as_deref())
             }
         }
     }
@@ -686,7 +699,13 @@ impl Cli {
     /// in-process, and write it iff it conforms (FR-19/20/21).
     #[cfg(feature = "quipu")]
     #[allow(clippy::unused_self)] // method form for call-site symmetry with the stub arm
-    fn promote(&self, path: &Path, commit: &str, to: Option<&str>) -> anyhow::Result<()> {
+    fn promote(
+        &self,
+        path: &Path,
+        commit: &str,
+        to: Option<&str>,
+        repo: Option<&str>,
+    ) -> anyhow::Result<()> {
         // Arbitrary-commit checkout is not wired yet: `export::to_turtle` reads the
         // working tree, so a non-HEAD `--commit` would promote the WRONG facts and
         // report success. Refuse loudly rather than promote a lie (#15 follow-up).
@@ -708,11 +727,22 @@ impl Cli {
             ),
         };
         let endpoint = endpoint.as_str();
-        let repo = path
-            .canonicalize()
-            .ok()
-            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-            .unwrap_or_else(|| "repo".to_string());
+        // Repo identity is DATA IDENTITY: it is a segment of every promoted IRI.
+        // Explicit --repo wins; otherwise the origin remote names the repository.
+        // With neither, REFUSE — the old fallback (directory basename) minted
+        // `code/<worktree-dir>/…` islands from agent worktrees and CI workspaces,
+        // structurally fragmenting one repo into unmergeable parallel graphs.
+        let repo = match repo {
+            Some(r) => r.to_string(),
+            None => crate::git::origin_repo_name(path).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "cannot determine repository identity: no `origin` remote at {}. \
+                     Pass --repo <name>. Refusing rather than deriving identity from \
+                     the directory name, which fragments the graph.",
+                    path.display()
+                )
+            })?,
+        };
         let turtle = crate::export::to_turtle(path, &repo)?;
         let outcome = crate::promote::promote(endpoint, &turtle)?;
         let mut out = std::io::stdout();
@@ -728,7 +758,13 @@ impl Cli {
     /// Without the `quipu` feature, promotion is unbuilt — say so honestly.
     #[cfg(not(feature = "quipu"))]
     #[allow(clippy::unused_self)] // method form for call-site symmetry with the quipu arm
-    fn promote(&self, _path: &Path, _commit: &str, _to: Option<&str>) -> anyhow::Result<()> {
+    fn promote(
+        &self,
+        _path: &Path,
+        _commit: &str,
+        _to: Option<&str>,
+        _repo: Option<&str>,
+    ) -> anyhow::Result<()> {
         self.planned(
             "promote",
             4,

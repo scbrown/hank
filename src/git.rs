@@ -106,6 +106,37 @@ pub fn read_blob_at(root: &Path, reference: &str, path: &Path) -> Option<String>
     git(root, &["show", &spec])
 }
 
+/// The repository name from the `origin` remote's URL basename, or `None` when
+/// there is no origin (or this is not a repo).
+///
+/// WHY THIS EXISTS: repo identity is part of every promoted IRI
+/// (`…/code/<repo>/<file>::<symbol>`), and it used to be derived from the
+/// checkout's DIRECTORY name. A worktree named after an agent
+/// (`hank-wt/gennaro`) then mints `code/gennaro/…`, a CI workspace mints
+/// `code/workspace/…`, and the same repository fragments into parallel islands
+/// that no entity resolution can rejoin — the IRIs are structurally different,
+/// not fuzzily similar. The origin URL names the repository itself and is the
+/// same from every checkout of it.
+#[must_use]
+pub fn origin_repo_name(root: &Path) -> Option<String> {
+    git(root, &["remote", "get-url", "origin"]).and_then(|s| repo_name_from_url(s.trim()))
+}
+
+/// The last path segment of a git remote URL, with a trailing `/` and a `.git`
+/// suffix stripped. Handles https, `ssh://`, scp-like `host:path`, and plain
+/// filesystem paths.
+fn repo_name_from_url(url: &str) -> Option<String> {
+    let trimmed = url.trim_end_matches('/');
+    // Last '/' segment covers https, ssh://, scp-like host:a/b, and file paths.
+    // An scp-like URL with no '/' at all (`host:repo.git`) splits on ':' instead.
+    let base = match trimmed.rsplit('/').next() {
+        Some(seg) if seg != trimmed => seg,
+        _ => trimmed.rsplit(':').next().unwrap_or(trimmed),
+    };
+    let name = base.strip_suffix(".git").unwrap_or(base);
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,5 +253,50 @@ mod tests {
             read_blob_at(dir.path(), "HEAD", Path::new("a.txt")).as_deref(),
             Some("changed\n")
         );
+    }
+
+    #[test]
+    fn repo_name_from_every_remote_url_shape() {
+        // The four shapes git remotes actually take, plus the traps: trailing
+        // slash, no `.git` suffix, and an scp-like URL with no '/' at all.
+        for (url, want) in [
+            ("https://github.com/scbrown/hank.git", "hank"),
+            ("https://example.com/group/sub/proj", "proj"),
+            ("git@github.com:scbrown/hank.git", "hank"),
+            ("ssh://git.example/owner/thing.git", "thing"),
+            ("ssh://git.example/owner/thing/", "thing"),
+            ("host:solo.git", "solo"),
+            ("/home/someone/checkouts/hank", "hank"),
+        ] {
+            assert_eq!(
+                repo_name_from_url(url).as_deref(),
+                Some(want),
+                "url: {url}"
+            );
+        }
+        // Degenerate inputs yield None, never an empty identity.
+        assert_eq!(repo_name_from_url(""), None);
+        assert_eq!(repo_name_from_url(".git"), None);
+    }
+
+    #[test]
+    fn origin_repo_name_reads_the_remote_not_the_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        if !init_repo(dir.path()) {
+            return; // git unavailable; integration tests cover the rest
+        }
+        // No origin yet: identity is unknowable, not guessed from the dir name.
+        assert_eq!(origin_repo_name(dir.path()), None);
+        Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "https://example.com/owner/realname.git",
+            ])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert_eq!(origin_repo_name(dir.path()).as_deref(), Some("realname"));
     }
 }

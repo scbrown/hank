@@ -123,10 +123,39 @@ pub fn write_knot(endpoint: &str, turtle: &str) -> Result<KnotResult> {
     let url = format!("{}/knot", endpoint.trim_end_matches('/'));
     let body = serde_json::json!({ "turtle": turtle }).to_string();
 
-    let resp = ureq::post(&url)
-        .set("Content-Type", "application/json")
-        .send_string(&body)
-        .map_err(|e| Error::Promote(format!("POST {url} failed: {e}")))?;
+    // Quipu is known to flap (transient 503 "no available server", recovering in
+    // seconds). Ride through TRANSIENT failures — 5xx and transport errors — with
+    // a short backoff; a 4xx is a real answer and fails immediately. The
+    // all-or-nothing guarantee is unaffected: every attempt is the same full
+    // idempotent write, and exhausting retries still fails loud, never partial.
+    const ATTEMPTS: u32 = 3;
+    let mut resp = None;
+    let mut last_err = String::new();
+    for attempt in 1..=ATTEMPTS {
+        match ureq::post(&url)
+            .set("Content-Type", "application/json")
+            .send_string(&body)
+        {
+            Ok(r) => {
+                resp = Some(r);
+                break;
+            }
+            Err(ureq::Error::Status(code, _)) if code < 500 => {
+                return Err(Error::Promote(format!("POST {url} failed: status {code}")));
+            }
+            Err(e) => {
+                last_err = e.to_string();
+                if attempt < ATTEMPTS {
+                    std::thread::sleep(std::time::Duration::from_secs(2 * u64::from(attempt)));
+                }
+            }
+        }
+    }
+    let resp = resp.ok_or_else(|| {
+        Error::Promote(format!(
+            "POST {url} failed after {ATTEMPTS} attempts (transient errors retried): {last_err}"
+        ))
+    })?;
 
     let text = resp
         .into_string()

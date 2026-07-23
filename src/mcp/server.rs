@@ -380,11 +380,21 @@ impl HankMcpServer {
                 .path
                 .as_ref()
                 .map_or_else(|| self.root.clone(), |p| self.root.join(p));
-            let repo = base
-                .canonicalize()
-                .ok()
-                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-                .unwrap_or_else(|| "repo".to_string());
+            // Repo identity is a segment of every promoted IRI. Request value wins;
+            // otherwise the origin remote names the repository. With neither,
+            // REFUSE — the old dir-basename fallback minted `code/<worktree-dir>/…`
+            // islands (an agent worktree promoted an entire graph as `code/gennaro`).
+            let repo = match req.repo.as_deref() {
+                Some(r) => r.to_string(),
+                None => crate::git::origin_repo_name(&base).ok_or_else(|| {
+                    internal(crate::errors::Error::Promote(format!(
+                        "cannot determine repository identity: no `origin` remote at {}. \
+                         Pass `repo` in the request. Refusing rather than deriving \
+                         identity from the directory name, which fragments the graph.",
+                        base.display()
+                    )))
+                })?,
+            };
             let turtle = crate::export::to_turtle(&base, &repo).map_err(internal)?;
 
             let response = match crate::promote::promote(&endpoint, &turtle).map_err(internal)? {

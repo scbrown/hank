@@ -389,6 +389,14 @@ pub struct PromoteRequest {
     /// deployment's configured `[hank.quipu] endpoint`.
     #[schemars(description = "Quipu base URL override; omit to use the configured endpoint")]
     pub endpoint: Option<String>,
+
+    /// Repository name to attribute promoted entities to. Omit to use the
+    /// `origin` remote's repo name; with no origin either, the promotion refuses
+    /// rather than deriving identity from the directory name.
+    #[schemars(
+        description = "Repository name for promoted IRIs; omit to derive from the origin remote"
+    )]
+    pub repo: Option<String>,
 }
 
 /// Response for `hank_promote`. Constructed only by the `quipu`-gated tool body.

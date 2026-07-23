@@ -683,3 +683,70 @@ fn export_to_routes_through_promotion_not_print() {
         assert.success();
     }
 }
+
+/// Repo identity in promoted IRIs comes from `--repo` or the `origin` remote —
+/// NEVER the directory name. An agent worktree named `gennaro` once promoted an
+/// entire real graph as `code/gennaro/…`: structurally fragmented islands no
+/// entity resolution can rejoin, because the IRIs differ, not the labels. So a
+/// promotion with neither `--repo` nor an origin REFUSES, naming the flag.
+#[test]
+fn promote_refuses_dir_name_identity_and_accepts_origin() {
+    if !cfg!(feature = "quipu") {
+        return; // stub build: promotion is a phase notice, nothing to pin
+    }
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("x.rs"), "pub fn x() -> u32 { 1 }\n").unwrap();
+    Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    // No origin, no --repo: refused BEFORE any network I/O, naming the remedy.
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["promote", "--to", "http://127.0.0.1:1"])
+        .current_dir(dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--repo"))
+        .stderr(predicate::str::contains("repository identity"));
+
+    // A local one-shot responder that answers 400 to whatever arrives: reaching
+    // it proves identity resolution SUCCEEDED (the failure moved past the repo
+    // check to the write), and a 4xx must fail immediately — no retry loop.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        if let Ok((mut sock, _)) = listener.accept() {
+            use std::io::{Read, Write};
+            let mut buf = [0u8; 4096];
+            let _ = sock.read(&mut buf);
+            let _ = sock.write_all(b"HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\n\r\n");
+        }
+    });
+
+    // With an origin remote, identity derives from its URL basename.
+    Command::new("git")
+        .args([
+            "remote",
+            "add",
+            "origin",
+            "https://example.com/owner/realname.git",
+        ])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["promote", "--to", &format!("http://{addr}")])
+        .current_dir(dir.path())
+        .assert()
+        .failure()
+        // The failure is the endpoint's 400 — NOT the identity refusal, which
+        // proves `origin` satisfied it; and it reports the status directly,
+        // which proves a 4xx did not enter the transient-retry loop.
+        .stderr(predicate::str::contains("repository identity").not())
+        .stderr(predicate::str::contains("status 400"));
+    server.join().unwrap();
+}
