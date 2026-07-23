@@ -118,6 +118,23 @@ fn parse_report(report: &str) -> Validation {
     }
 }
 
+/// The bearer token for Quipu write endpoints, if the environment carries one.
+///
+/// Quipu gates writes behind `Authorization: Bearer <token>` once its
+/// `[quipu.server] auth_token` is set; reads stay open. `QUIPU_AUTH_TOKEN` is
+/// the client-side half: set it and every promotion sends the bearer, leave it
+/// unset against an open server and nothing changes. An empty value counts as
+/// unset — `Bearer ` (no token) would be sent as a real-but-wrong credential
+/// and turn a misconfigured env into a confusing 401.
+fn quipu_auth_token() -> Option<String> {
+    normalize_token(std::env::var("QUIPU_AUTH_TOKEN").ok())
+}
+
+/// The pure half of [`quipu_auth_token`]: empty-or-absent collapses to `None`.
+fn normalize_token(raw: Option<String>) -> Option<String> {
+    raw.filter(|t| !t.is_empty())
+}
+
 /// Post validated Turtle to Quipu's `/knot`. Returns the number of triples the
 /// transaction reports as present for these facts — the count that makes
 /// idempotence checkable (a re-promotion returns the same count, not a larger one).
@@ -127,6 +144,7 @@ fn parse_report(report: &str) -> Validation {
 /// graph is how facts land in the wrong one.
 pub fn write_knot(endpoint: &str, turtle: &str, source: &str) -> Result<KnotResult> {
     let url = format!("{}/knot", endpoint.trim_end_matches('/'));
+    let auth = quipu_auth_token();
     // Provenance on every write (promotion tail item 4): quipu records actor +
     // source per transaction; an anonymous writer is unauditable, and hank was
     // the only anonymous one left.
@@ -142,10 +160,11 @@ pub fn write_knot(endpoint: &str, turtle: &str, source: &str) -> Result<KnotResu
     let mut resp = None;
     let mut last_err = String::new();
     for attempt in 1..=ATTEMPTS {
-        match ureq::post(&url)
-            .set("Content-Type", "application/json")
-            .send_string(&body)
-        {
+        let mut req = ureq::post(&url).set("Content-Type", "application/json");
+        if let Some(token) = &auth {
+            req = req.set("Authorization", &format!("Bearer {token}"));
+        }
+        match req.send_string(&body) {
             Ok(r) => {
                 resp = Some(r);
                 break;
@@ -392,6 +411,18 @@ mod tests {
     use super::*;
 
     const SHAPES: &str = CODE_EDGE_SHAPES;
+
+    #[test]
+    fn empty_bearer_token_is_unset_not_a_credential() {
+        // An empty env value must behave like no token at all — sending
+        // `Bearer ` would present a wrong credential and 401 confusingly.
+        assert_eq!(normalize_token(None), None);
+        assert_eq!(normalize_token(Some(String::new())), None);
+        assert_eq!(
+            normalize_token(Some("sekrit".into())),
+            Some("sekrit".to_string())
+        );
+    }
 
     // A promotion whose shape is correct: an IRI-valued `calls`, a known tier.
     // The conforming fixture mirrors what the emitter ACTUALLY produces — a
