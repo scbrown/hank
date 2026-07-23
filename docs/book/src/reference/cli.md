@@ -6,6 +6,7 @@ USAGE:
 
 COMMANDS:
     serve       Run the MCP server (stdio; --http for streamable-HTTP)
+    daemon      Run the resident-graph daemon (FR-31; see Resident Daemon)
     analyze     Build the base graph for a path and print a summary
     refs        Find the definition sites of a symbol by name
     callers     Direct callers and callees of a symbol

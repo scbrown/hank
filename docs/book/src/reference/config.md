@@ -37,6 +37,10 @@ mcp_http_port = 3040
 # distinguishable error. The served MCP/HTTP surface is read-only regardless
 # today; this guards the write path and any future served write.
 read_only = false
+# When true, the hook and MCP graph tools consult the resident daemon at
+# bind_address:mcp_http_port (see Resident Daemon) and fall back to the
+# transient build when it is unusable. The guard's fallback is LOUD.
+use_daemon = false
 
 # (Phase 4) Quipu promotion. `promote_on` and `shapes_path` are not yet read.
 [hank.quipu]

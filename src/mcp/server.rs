@@ -124,6 +124,17 @@ impl HankMcpServer {
         &self,
         Parameters(req): Parameters<ReferencesRequest>,
     ) -> Result<CallToolResult, McpError> {
+        // Stage 4: same cutover shape as the stage-3c graph tools — resident
+        // daemon when usable and unscoped, transient fallback otherwise. The
+        // saving is largest here: the transient path below re-extracts EVERY
+        // file per query.
+        if req.path.is_none() {
+            if let Some(response) =
+                super::resident::references(self.config.as_deref(), &self.root, &req.symbol)
+            {
+                return json_result(&response);
+            }
+        }
         let base = req
             .path
             .as_ref()

@@ -28,17 +28,21 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use serde::{Deserialize, Serialize};
-
 use crate::config::HankConfig;
-use crate::graph::{CodeGraph, Dir, Reached};
+use crate::graph::{CodeGraph, Dir};
 use crate::hook::Sizing;
 use crate::policy::PolicyConfig;
-use crate::types::Tier;
 
 pub mod client;
 #[cfg(feature = "mcp")]
 pub(crate) mod http;
+pub mod wire;
+
+use wire::{def_item, graph_tier, reached_item};
+pub use wire::{
+    DefItem, Definitions, EngineStatus, FileSymbolItem, FileSymbols, Impact, MeasureReply,
+    Neighbors, ReachedItem,
+};
 
 /// The base graph plus its policy snapshot, built once and held for the process
 /// lifetime. Cheap to clone (`Arc`), so the HTTP layer shares one instance.
@@ -138,6 +142,42 @@ impl ResidentEngine {
         }
     }
 
+    /// Definition sites of `symbol`, from the resident node index — the answer
+    /// `hank_references` walks every file to compute, with no re-extraction.
+    #[must_use]
+    pub fn references(&self, symbol: &str) -> Definitions {
+        let defs = self.graph().definitions(symbol);
+        Definitions {
+            symbol: symbol.to_string(),
+            found: !defs.is_empty(),
+            count: defs.len(),
+            definitions: defs.into_iter().map(def_item).collect(),
+            tier: graph_tier(),
+        }
+    }
+
+    /// The symbols `rel` contributes to the resident graph, in line order. See
+    /// [`FileSymbols`] for the `known` semantics (no-symbols vs no-such-file are
+    /// one state here) and the snapshot-freshness caveat.
+    #[must_use]
+    pub fn symbols(&self, rel: &str) -> FileSymbols {
+        let symbols = self.graph().file_symbols(rel);
+        FileSymbols {
+            file: rel.to_string(),
+            known: !symbols.is_empty(),
+            count: symbols.len(),
+            symbols: symbols
+                .into_iter()
+                .map(|n| FileSymbolItem {
+                    name: n.name.clone(),
+                    kind: n.kind.clone(),
+                    start_line: n.start_line,
+                })
+                .collect(),
+            tier: graph_tier(),
+        }
+    }
+
     /// Size an edit against the RESIDENT graph — the exact question the pre-edit
     /// guard asks, answered without the per-invocation `CodeGraph::build`. The
     /// edited file is still read fresh (its content is what changed), so the answer
@@ -168,142 +208,6 @@ impl ResidentEngine {
             edges: self.inner.edges,
             uptime_secs,
             tier: crate::types::Tier::served(),
-        }
-    }
-}
-
-/// The status payload served at `/status` and returned by a successful probe.
-/// `status: "ok"` is a constant liveness marker a client greps for; the counts
-/// let an operator see the daemon is holding a real graph, not an empty one.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct EngineStatus {
-    /// Constant `"ok"` — presence of a parseable status body with this field is
-    /// the liveness signal.
-    pub status: &'static str,
-    /// The analysis root the resident graph was built from.
-    pub root: String,
-    /// Nodes (symbols) in the resident graph.
-    pub nodes: usize,
-    /// Edges (relations) in the resident graph.
-    pub edges: usize,
-    /// Seconds since the graph was built.
-    pub uptime_secs: u64,
-    /// Precision tiers this build actually serves.
-    pub tier: Vec<String>,
-}
-
-/// The provenance tier of every reachability fact the resident graph serves.
-/// One source of truth for the string, mirroring `mcp::server::graph_tier`; the
-/// place to propagate a real per-node tier from when the LSP/CPG tiers land.
-fn graph_tier() -> String {
-    Tier::TreeSitter.as_str().to_string()
-}
-
-/// One reached symbol in a neighbors/impact reply. Owned + `Serialize` so the
-/// daemon layer does not depend on the `mcp` feature's response types, and
-/// `Deserialize` so a thin client (the MCP cutover, stage 3c) parses the same
-/// type off the wire that the daemon serialized — no shadow DTO to drift.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ReachedItem {
-    /// Symbol name.
-    pub name: String,
-    /// File, relative to the analysis root.
-    pub file: String,
-    /// 1-based definition line.
-    pub start_line: usize,
-    /// Hop distance from the seed (1 = direct).
-    pub distance: u32,
-    /// Relationship to the seed (`calls` or `called_by`). Owned (not
-    /// `&'static str`) so the type round-trips through a client's parse.
-    pub via: String,
-}
-
-fn reached_item(r: &Reached) -> ReachedItem {
-    ReachedItem {
-        name: r.name.clone(),
-        file: r.file.clone(),
-        start_line: r.start_line,
-        distance: r.distance,
-        via: r.via.to_string(),
-    }
-}
-
-/// Reply for `/callers` and `/callees`. `found` is separate from an empty
-/// `neighbors` on purpose: "the symbol is not in the graph" and "the symbol has
-/// no callers" are different answers, and collapsing them is the fact-vs-absence
-/// bug this project keeps paying for.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Neighbors {
-    /// The queried symbol.
-    pub symbol: String,
-    /// Whether the symbol exists in the resident graph at all.
-    pub found: bool,
-    /// Direct neighbors in the requested direction.
-    pub neighbors: Vec<ReachedItem>,
-    /// Provenance tier of these facts.
-    pub tier: String,
-}
-
-/// Reply for `/impact` — the transitive blast radius of changing a symbol.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Impact {
-    /// The queried symbol.
-    pub symbol: String,
-    /// Whether the symbol exists in the resident graph at all.
-    pub found: bool,
-    /// Hops followed.
-    pub hops: u32,
-    /// Number of transitively affected symbols.
-    pub count: usize,
-    /// The affected symbols (callers).
-    pub reachable: Vec<ReachedItem>,
-    /// Distinct files in the impact set.
-    pub files: Vec<String>,
-    /// Provenance tier of these facts.
-    pub tier: String,
-}
-
-/// The wire form of a [`Sizing`] — what `/measure` returns and a thin-client hook
-/// parses. `measured` is separate from a zero radius on purpose: an UNMEASURED edit
-/// (no grammar, unreadable, deadline) is NOT a radius of zero, and the client must
-/// treat it as "not evaluated", never "within limits" (the fail-open/loud contract).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MeasureReply {
-    /// Whether a blast radius was actually computed.
-    pub measured: bool,
-    /// Symbols transitively affected (0 when not measured).
-    pub symbols: usize,
-    /// Files transitively affected (0 when not measured).
-    pub files: usize,
-    /// The `Sizing` variant tag: `measured`, `deadline`, `no-grammar`, …. Lets the
-    /// client key its once-per-session loud notice by kind, exactly as the in-process
-    /// guard does.
-    pub kind: String,
-    /// The operator-facing reason it was not measured; `None` when measured.
-    pub reason: Option<String>,
-}
-
-impl MeasureReply {
-    /// Map a `Sizing` to its wire form. A measured radius carries its counts; every
-    /// unmeasured variant carries its kind tag and reason and a zero radius that the
-    /// `measured: false` flag forbids reading as "within limits".
-    #[must_use]
-    pub fn from_sizing(sizing: &Sizing) -> Self {
-        match sizing {
-            Sizing::Measured(radius) => Self {
-                measured: true,
-                symbols: radius.symbols,
-                files: radius.files,
-                kind: "measured".to_string(),
-                reason: None,
-            },
-            other => Self {
-                measured: false,
-                symbols: 0,
-                files: 0,
-                kind: other.kind_tag().to_string(),
-                reason: other.unmeasured_reason(),
-            },
         }
     }
 }

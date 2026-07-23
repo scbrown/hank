@@ -19,7 +19,7 @@ use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
-use super::{Impact, MeasureReply, Neighbors};
+use super::{Definitions, Impact, MeasureReply, Neighbors};
 use crate::graph::Dir;
 
 /// Whether a resident daemon answered a liveness probe.
@@ -290,6 +290,25 @@ pub fn fetch_impact(
     )?;
     serde_json::from_str(&body)
         .map_err(|e| format!("daemon at {host}:{port} sent an unparseable impact reply ({e})"))
+}
+
+/// Definition sites of `symbol` from the RESIDENT node index
+/// (`GET /references`). Same contract as [`fetch_neighbors`]: `Err` means fall
+/// back to the transient walk, never "no definitions".
+pub fn fetch_references(
+    host: &str,
+    port: u16,
+    symbol: &str,
+    timeout: Duration,
+) -> Result<Definitions, String> {
+    let body = http_get(
+        host,
+        port,
+        &format!("/references?symbol={}", urlencode(symbol)),
+        timeout,
+    )?;
+    serde_json::from_str(&body)
+        .map_err(|e| format!("daemon at {host}:{port} sent an unparseable references reply ({e})"))
 }
 
 #[cfg(test)]

@@ -9,11 +9,10 @@
 //! - stage 3a: `/measure` (POST) — the pre-edit guard's exact blast-radius
 //!   question, sized against the resident graph. This is what the hook becomes a
 //!   thin client of; the client + hook cutover (with loud-when-absent) is stage 3b.
-//!
-//! Still deferred: `/symbols` and `/references` (they re-extract from files rather
-//! than reading the resident graph, so they are not the daemon's value-add) and
-//! `/dataflow` (a separate subsystem, not the `CodeGraph`). Kept out of stage 2 to
-//! keep it about the resident graph; noted here rather than silently omitted.
+//! - stage 4: the rest of the FR-27 query surface — `/references` and `/symbols`
+//!   from the resident node index, and `/dataflow`, which is NOT resident (no
+//!   resident dataflow model exists yet, hank #22) but is served per-request so
+//!   the HTTP API is complete rather than silently partial.
 
 use std::path::PathBuf;
 
@@ -23,7 +22,10 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 
-use super::{EngineStatus, Impact, MeasureReply, Neighbors, ResidentEngine};
+use super::wire::{graph_tier, DataflowReply, DepEdgeItem, FlowStepItem};
+use super::ResidentEngine;
+use super::{Definitions, EngineStatus, FileSymbols, Impact, MeasureReply, Neighbors};
+use crate::dataflow::{Dataflow, FlowDir};
 use crate::graph::Dir;
 
 /// Build the daemon router over a resident engine.
@@ -34,6 +36,9 @@ pub fn router(engine: ResidentEngine) -> Router {
         .route("/callers", get(callers))
         .route("/callees", get(callees))
         .route("/impact", get(impact))
+        .route("/references", get(references))
+        .route("/symbols", get(symbols))
+        .route("/dataflow", get(dataflow))
         .route("/measure", post(measure))
         .with_state(engine)
 }
@@ -85,6 +90,111 @@ async fn impact(
     Query(q): Query<ImpactQuery>,
 ) -> Json<Impact> {
     Json(engine.impact(&q.symbol, q.hops.unwrap_or(5)))
+}
+
+/// Definition sites of a symbol by name, from the resident node index — the
+/// `hank_references` answer with no per-call re-extraction.
+async fn references(
+    State(engine): State<ResidentEngine>,
+    Query(q): Query<SymbolQuery>,
+) -> Json<Definitions> {
+    Json(engine.references(&q.symbol))
+}
+
+/// `?file=REL` for `/symbols`.
+#[derive(Debug, Deserialize)]
+struct FileQuery {
+    file: String,
+}
+
+/// The symbols one file contributes to the resident graph, at its build
+/// snapshot. See [`FileSymbols`] for the `known` semantics.
+async fn symbols(
+    State(engine): State<ResidentEngine>,
+    Query(q): Query<FileQuery>,
+) -> Json<FileSymbols> {
+    Json(engine.symbols(&q.file))
+}
+
+/// Query for `/dataflow`, mirroring the `hank_dataflow` request.
+#[derive(Debug, Deserialize)]
+struct DataflowQuery {
+    /// The function to analyze.
+    function: String,
+    /// Subtree to build over, relative to the root; omit for the whole root.
+    path: Option<String>,
+    /// Variable to trace; omit to return all dependence edges.
+    var: Option<String>,
+    /// Trace what the variable flows into (default: what it depends on).
+    forward: Option<bool>,
+    /// Maximum hops to follow (default 5).
+    hops: Option<u32>,
+}
+
+/// Intra-procedural data dependence, mirroring `hank_dataflow`. NOT resident —
+/// built per request (see the module doc) — and CONFINED TO THE ROOT like
+/// `/measure`: a `path` resolving outside the resident root is refused (400),
+/// so the localhost daemon cannot be pointed at arbitrary trees.
+async fn dataflow(
+    State(engine): State<ResidentEngine>,
+    Query(q): Query<DataflowQuery>,
+) -> Result<Json<DataflowReply>, StatusCode> {
+    let root = engine.root();
+    let base = match &q.path {
+        Some(p) => {
+            let joined = root.join(p);
+            // Canonicalize BOTH sides so `..` cannot escape the root.
+            let (Ok(canon), Ok(canon_root)) = (joined.canonicalize(), root.canonicalize()) else {
+                return Err(StatusCode::BAD_REQUEST);
+            };
+            if !canon.starts_with(&canon_root) {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            canon
+        }
+        None => root.to_path_buf(),
+    };
+    let flow = Dataflow::build(&base).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let found = flow.has_function(&q.function);
+    let (direction, steps, edges) = match &q.var {
+        Some(var) => {
+            let dir = if q.forward.unwrap_or(false) {
+                FlowDir::FlowsInto
+            } else {
+                FlowDir::DependsOn
+            };
+            let steps = flow
+                .flow(&q.function, var, dir, q.hops.unwrap_or(5))
+                .into_iter()
+                .map(|s| FlowStepItem {
+                    name: s.name,
+                    distance: s.distance,
+                })
+                .collect();
+            (Some(dir.as_str().to_string()), steps, Vec::new())
+        }
+        None => {
+            let edges = flow
+                .edges(&q.function)
+                .iter()
+                .map(|e| DepEdgeItem {
+                    dependent: e.dependent.clone(),
+                    depends_on: e.depends_on.clone(),
+                    line: e.line,
+                })
+                .collect();
+            (None, Vec::new(), edges)
+        }
+    };
+    Ok(Json(DataflowReply {
+        function: q.function,
+        found,
+        direction,
+        var: q.var,
+        flow: steps,
+        edges,
+        tier: graph_tier(),
+    }))
 }
 
 /// The pre-edit guard's exact question, as a POST body: size editing `file` (whose
@@ -141,230 +251,5 @@ pub async fn serve(engine: ResidentEngine, host: &str, port: u16) -> anyhow::Res
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::daemon::client::{probe, Reachability};
-    use std::time::Duration;
-    use tempfile::tempdir;
-
-    // Build a tiny real repo so the resident graph is non-empty.
-    fn tiny_repo() -> tempfile::TempDir {
-        let dir = tempdir().unwrap();
-        std::fs::write(dir.path().join("leaf.rs"), "fn leaf() {}\n").unwrap();
-        std::fs::write(dir.path().join("caller.rs"), "fn caller() { leaf(); }\n").unwrap();
-        dir
-    }
-
-    #[tokio::test]
-    async fn a_running_daemon_answers_the_probe_UP_and_serves_real_counts() {
-        let dir = tiny_repo();
-        let engine = ResidentEngine::build(dir.path(), None).unwrap();
-        let served = engine.status();
-        assert!(served.nodes > 0, "the resident graph must be non-empty");
-
-        // Bind an ephemeral port and serve in the background.
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        tokio::spawn(async move {
-            let _ = axum::serve(listener, router(engine)).await;
-        });
-        // Let the listener accept.
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        // The client seam sees it as UP.
-        let host = "127.0.0.1".to_string();
-        let r = tokio::task::spawn_blocking(move || probe(&host, port, Duration::from_millis(500)))
-            .await
-            .unwrap();
-        assert_eq!(r, Reachability::Up, "a live daemon must probe UP");
-
-        // And /status reports the same real counts the engine holds.
-        let body = get_json(port, "/status").await;
-        assert_eq!(body["nodes"].as_u64().unwrap() as usize, served.nodes);
-        assert_eq!(body["edges"].as_u64().unwrap() as usize, served.edges);
-        assert_eq!(body["status"].as_str().unwrap(), "ok");
-    }
-
-    #[tokio::test]
-    async fn a_DEAD_daemon_probes_DOWN_never_up() {
-        // No server bound. The seam must say Down, loudly, with a reason — this is
-        // the "killing it is the cheapest bypass" case the whole seam exists for.
-        let r = tokio::task::spawn_blocking(|| probe("127.0.0.1", 1, Duration::from_millis(200)))
-            .await
-            .unwrap();
-        assert!(!r.is_up());
-        assert!(r.down_reason().unwrap().contains("no daemon"));
-    }
-
-    #[tokio::test]
-    async fn the_query_endpoints_answer_from_the_resident_graph() {
-        let dir = tiny_repo();
-        let engine = ResidentEngine::build(dir.path(), None).unwrap();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        tokio::spawn(async move {
-            let _ = axum::serve(listener, router(engine)).await;
-        });
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        // /callers?symbol=leaf — `caller` calls `leaf`.
-        let callers = get_json(port, "/callers?symbol=leaf").await;
-        assert_eq!(callers["found"].as_bool().unwrap(), true);
-        let names: Vec<&str> = callers["neighbors"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|n| n["name"].as_str().unwrap())
-            .collect();
-        assert!(names.contains(&"caller"), "got {names:?}");
-        assert_eq!(callers["tier"].as_str().unwrap(), "treesitter");
-
-        // /impact?symbol=leaf — the transitive blast radius.
-        let impact = get_json(port, "/impact?symbol=leaf&hops=5").await;
-        assert_eq!(impact["found"].as_bool().unwrap(), true);
-        assert!(impact["count"].as_u64().unwrap() >= 1);
-
-        // An unknown symbol is found=false, not an error.
-        let missing = get_json(port, "/callers?symbol=nope").await;
-        assert_eq!(missing["found"].as_bool().unwrap(), false);
-    }
-
-    #[tokio::test]
-    async fn fetch_measure_client_gets_a_reply_from_a_LIVE_daemon() {
-        // The "daemon expected AND up" quadrant of the hook cutover, at the client
-        // level: fetch_measure against a real daemon returns a measured reply.
-        use crate::daemon::client::fetch_measure;
-        let dir = tiny_repo(); // leaf.rs <- caller.rs
-        let engine = ResidentEngine::build(dir.path(), None).unwrap();
-        let leaf = dir.path().join("leaf.rs").to_string_lossy().to_string();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        tokio::spawn(async move {
-            let _ = axum::serve(listener, router(engine)).await;
-        });
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        let reply = tokio::task::spawn_blocking(move || {
-            fetch_measure(
-                "127.0.0.1",
-                port,
-                &leaf,
-                "leaf.rs",
-                &["fn leaf".to_string()],
-                5,
-                Duration::from_millis(500),
-            )
-        })
-        .await
-        .unwrap();
-        let reply = reply.expect("a live daemon must answer fetch_measure");
-        assert!(reply.measured);
-        assert!(reply.symbols >= 1);
-
-        // And against a CLOSED port it is an Err with a reason — never a silent ok.
-        let err = tokio::task::spawn_blocking(|| {
-            fetch_measure(
-                "127.0.0.1",
-                1,
-                "/x",
-                "x",
-                &[],
-                5,
-                Duration::from_millis(200),
-            )
-        })
-        .await
-        .unwrap();
-        assert!(
-            err.is_err(),
-            "a closed port must be an Err, never a silent reply"
-        );
-    }
-
-    #[tokio::test]
-    async fn measure_sizes_an_edit_and_confines_to_the_root() {
-        let dir = tiny_repo(); // leaf.rs <- caller.rs
-        let engine = ResidentEngine::build(dir.path(), None).unwrap();
-        let leaf = dir.path().join("leaf.rs").to_string_lossy().to_string();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        tokio::spawn(async move {
-            let _ = axum::serve(listener, router(engine)).await;
-        });
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        // Editing leaf reaches caller — measured, radius >= 1.
-        let (code, body) = post_json(
-            port,
-            "/measure",
-            &serde_json::json!({ "file": leaf, "rel": "leaf.rs", "anchors": ["fn leaf"] })
-                .to_string(),
-        )
-        .await;
-        assert_eq!(code, 200);
-        let body = body.unwrap();
-        assert_eq!(body["measured"].as_bool().unwrap(), true);
-        assert!(body["symbols"].as_u64().unwrap() >= 1);
-
-        // A path OUTSIDE the root is refused, not read — the localhost daemon must
-        // not be an arbitrary-file reader.
-        let (code, _) = post_json(
-            port,
-            "/measure",
-            &serde_json::json!({ "file": "/etc/passwd", "rel": "x" }).to_string(),
-        )
-        .await;
-        assert_eq!(code, 400, "a file outside the root must be refused");
-    }
-
-    // Minimal HTTP GET without pulling a client dep into the crate: reuse the
-    // probe's raw-socket approach and read the whole body as JSON.
-    async fn get_json(port: u16, path: &str) -> serde_json::Value {
-        let path = path.to_string();
-        tokio::task::spawn_blocking(move || {
-            use std::io::{Read, Write};
-            let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-            let req =
-                format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
-            s.write_all(req.as_bytes()).unwrap();
-            let mut raw = String::new();
-            s.read_to_string(&mut raw).unwrap();
-            let body = raw.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
-            serde_json::from_str(&body).unwrap()
-        })
-        .await
-        .unwrap()
-    }
-
-    // POST a JSON body; return (status_code, parsed_body_if_2xx).
-    async fn post_json(port: u16, path: &str, body: &str) -> (u16, Option<serde_json::Value>) {
-        let path = path.to_string();
-        let body = body.to_string();
-        tokio::task::spawn_blocking(move || {
-            use std::io::{Read, Write};
-            let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-            let req = format!(
-                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
-                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            s.write_all(req.as_bytes()).unwrap();
-            let mut raw = String::new();
-            s.read_to_string(&mut raw).unwrap();
-            let status: u16 = raw
-                .split_whitespace()
-                .nth(1)
-                .and_then(|c| c.parse().ok())
-                .unwrap_or(0);
-            let payload = raw.split("\r\n\r\n").nth(1).unwrap_or("");
-            let parsed = if (200..300).contains(&status) {
-                serde_json::from_str(payload).ok()
-            } else {
-                None
-            };
-            (status, parsed)
-        })
-        .await
-        .unwrap()
-    }
-}
+#[path = "http_test.rs"]
+mod http_test;
