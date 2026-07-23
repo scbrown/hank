@@ -204,6 +204,13 @@ hank promote --commit HEAD --to http://quipu.svc .  # SHACL-validate + write it
 than pretending. It emits the Turtle, SHACL-validates in-process against
 <code>shapes/</code>, and writes to <code>/knot</code> <strong>only if it conforms</strong> — a rejected promotion
 exits non-zero so a script can't read it as landed.</p>
+<p>Large projections are <strong>chunked</strong>: Quipu's request body limit is ~2 MiB, so a
+projection over the line is split on entity-block boundaries and posted as
+multiple <code>/knot</code> writes (the output says so: <code>... in 3 chunks</code>). Validation is
+still whole-graph and up front; a chunked write is not atomic across chunks,
+but IRIs are deterministic and <code>/knot</code> supersedes, so re-running a failed
+promotion converges instead of duplicating — the failure message names exactly
+how many chunks landed.</p>
 <p>Code and docs are one referential graph (spec §5.10): code leans real-time (the
 live graph + edit hook), docs lean asynchronous (this export). Once in Quipu,
 doc rot becomes a SPARQL query — "every <code>Document</code> referencing a <code>CodeSymbol</code>
