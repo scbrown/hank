@@ -120,3 +120,42 @@ bobbin:SectionReferencesShape a sh:NodeShape ;
         # NO minCount: a Section that references nothing is legitimate prose,
         # not a violation. Requiring one here would refuse most documentation.
     ] .
+
+# ── Node shapes — SYNCED from quipu shapes/code-entities.ttl (2026-07-23) ────
+#
+# WHY THESE ARE HERE: quipu's persistent registry loads code-entities.ttl and
+# REFUSES promotions that violate it (first live case: a symbol IRI collision
+# put two symbolKind values on one node; quipu refused, hank's in-process pass
+# had accepted — the first live rudof<->quipu shape drift). hank must refuse
+# BEFORE the network, so the node constraints ride in the same compiled set the
+# promoter validates against. Keep byte-parity of the CONSTRAINTS with quipu's
+# copy; an automated hank<->quipu shapes-agreement test is the planned follow-up.
+
+bobbin:CodeModuleShape a sh:NodeShape ;
+    sh:targetClass bobbin:CodeModule ;
+    sh:property [ sh:path bobbin:filePath ; sh:datatype xsd:string ; sh:minCount 1 ; sh:maxCount 1 ] ;
+    sh:property [ sh:path bobbin:repo ; sh:datatype xsd:string ; sh:minCount 1 ; sh:maxCount 1 ] ;
+    sh:property [ sh:path bobbin:language ; sh:datatype xsd:string ; sh:minCount 1 ; sh:maxCount 1 ] .
+
+bobbin:CodeSymbolShape a sh:NodeShape ;
+    sh:targetClass bobbin:CodeSymbol ;
+    sh:property [ sh:path bobbin:name ; sh:datatype xsd:string ; sh:minCount 1 ; sh:maxCount 1 ] ;
+    sh:property [
+        # maxCount 1 is the collision detector: two same-named symbols in one
+        # file merge onto one IRI and carry BOTH kinds — refuse loudly here
+        # rather than silently union two functions' call graphs.
+        sh:path bobbin:symbolKind ; sh:datatype xsd:string ; sh:maxCount 1 ;
+        sh:in ( "function" "method" "class" "interface" "enum" "struct"
+                "variable" "constant" "module" "property" "field"
+                "constructor" "type_alias" ) ;
+    ] ;
+    sh:property [ sh:path bobbin:definedIn ; sh:class bobbin:CodeModule ; sh:minCount 1 ; sh:maxCount 1 ] .
+
+bobbin:DocumentShape a sh:NodeShape ;
+    sh:targetClass bobbin:Document ;
+    sh:property [ sh:path bobbin:filePath ; sh:datatype xsd:string ; sh:minCount 1 ; sh:maxCount 1 ] .
+
+bobbin:SectionShape a sh:NodeShape ;
+    sh:targetClass bobbin:Section ;
+    sh:property [ sh:path bobbin:heading ; sh:datatype xsd:string ; sh:minCount 1 ; sh:maxCount 1 ] ;
+    sh:property [ sh:path bobbin:headingDepth ; sh:datatype xsd:integer ; sh:minCount 1 ; sh:maxCount 1 ] .

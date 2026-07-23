@@ -2,3 +2,14 @@
 bobbin:bad_sym a bobbin:CodeSymbol ;
   bobbin:calls "not-an-iri" ;
   bobbin:hasTier "vibes" .
+
+# VIOLATION (node shapes, symbol-IRI collision): one symbol node carrying TWO
+# symbolKind values — the live bobbin src/cli/mod.rs::run case. Must be refused
+# by CodeSymbolShape's maxCount 1.
+ex:collided_mod a bobbin:CodeModule ;
+    bobbin:filePath "src/collided.rs" ; bobbin:repo "fixture" ; bobbin:language "rust" .
+ex:collided_sym a bobbin:CodeSymbol ;
+    bobbin:name "run" ;
+    bobbin:symbolKind "function" ;
+    bobbin:symbolKind "module" ;
+    bobbin:definedIn ex:collided_mod .
