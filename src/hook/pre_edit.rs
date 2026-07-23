@@ -89,11 +89,15 @@ pub fn guard(
         return outcome;
     }
 
-    // Governed structural policies projected from quipu (Phase 4), evaluated where
-    // the evidence is hot. Opt-in (quipu.enabled + endpoint), and behind the
-    // `quipu` feature so a default build carries none of it.
+    // Governed policies projected from quipu (Phase 4), evaluated where the
+    // evidence is hot — BOTH planes, one registry refresh, one verdict:
+    // language-independent text rules (aegis-mqnl's catalogue: the plane the
+    // measured leaks needed, since they were in .md/.yml files no grammar
+    // covers) and language-gated structural rules. Opt-in (quipu.enabled +
+    // endpoint), and behind the `quipu` feature so a default build carries
+    // none of it.
     #[cfg(feature = "quipu")]
-    if let Some(outcome) = projected_check(&config, &input, &rel) {
+    if let Some(outcome) = governed_check(&config, &input, &root, &rel) {
         return outcome;
     }
 
@@ -339,27 +343,45 @@ fn rule_verdict_message(
     format!("{body}\n({note})")
 }
 
-/// Evaluate governed structural policies projected from quipu (Phase 4).
+/// Evaluate the governed policies projected from quipu (Phase 4) — both
+/// planes, one registry refresh, ONE verdict per edit.
 ///
-/// Opt-in: only runs when `quipu.enabled` and a `quipu.endpoint` are set. Fetches
-/// the `boundary:"action"` structural policies over HTTP, evaluates them like any
-/// rule, and maps the governed `effect` to a decision — a `deny` policy blocks
-/// under [`Mode::Enforce`], `warn` advises, and [`Mode::Advise`] never blocks
-/// (the local advise-first ceiling still applies). A projection that cannot be
-/// fetched fails OPEN loudly: governed policy that could not be projected must be
-/// visible, never a silent pass.
+/// TEXT plane first (aegis-mqnl's `InternalIdentifierPattern` catalogue):
+/// deliberately NOT extension- or language-gated — that gate is the reason the
+/// first governed rule never ran, since the identifiers it exists to stop
+/// leaked through `.md`/`.yml` files no grammar covers. A block-tier text rule
+/// blocks only when the REPO IS PUBLIC, and publicness is asked of the graph
+/// itself (the governed policy's own `/policy/check`, three-valued): a repo
+/// the graph does not know gets a warning THAT SAYS SO — never a block on a
+/// guess, never silence (mqnl's design constraint, verbatim).
+///
+/// STRUCTURAL plane second (`boundary:"action"` Selector/Predicate policies),
+/// language-gated as before; a governed `deny` effect blocks under
+/// [`Mode::Enforce`].
+///
+/// Violations from both planes merge into one message; the edit blocks if ANY
+/// violation blocks under the active mode. [`Mode::Advise`] never blocks (the
+/// local advise-first ceiling), and a projection that cannot be fetched fails
+/// OPEN loudly — governed policy that could not be projected must be visible,
+/// never a silent pass.
 ///
 /// The verdict declares the projection's [`Freshness`] — a successful sync is
 /// `Fresh`. NB: this fetches per edit; the resident/async cache that makes it
-/// cheap (FR-31) is the daemon-side form of `H-PROJECTION`.
+/// cheap (FR-31) is the daemon-side form of `H-PROJECTION` / the hac0 signed
+/// cache, and that seam is deliberately untouched here.
 #[cfg(feature = "quipu")]
-fn projected_check(config: &HankConfig, input: &HookInput, rel: &str) -> Option<Outcome> {
+fn governed_check(
+    config: &HankConfig,
+    input: &HookInput,
+    root: &Path,
+    rel: &str,
+) -> Option<Outcome> {
+    use crate::project::RepoExposure;
+
     if config.policy.mode == Mode::Off || !config.quipu.enabled || config.quipu.endpoint.is_empty()
     {
         return None;
     }
-    let ext = Path::new(rel).extension().and_then(OsStr::to_str)?;
-    let language = language_for_extension(ext)?;
     let introduced = introduced_text(input)?;
 
     let mut registry = crate::project::ProjectionRegistry::new(&config.quipu.endpoint);
@@ -371,10 +393,12 @@ fn projected_check(config: &HankConfig, input: &HookInput, rel: &str) -> Option<
         ));
     }
 
-    // A projected rule set that does not compile is a broken sync; fail open loudly.
+    // A projected rule set that does not compile is a broken sync; fail open
+    // loudly — both planes, same discipline.
     let rules: Vec<crate::rules::Rule> =
         registry.policies().iter().map(|p| p.rule.clone()).collect();
-    let errors = crate::rules::errors(&rules);
+    let mut errors = crate::rules::errors(&rules);
+    errors.extend(crate::textrules::errors(registry.text_rules()));
     if !errors.is_empty() {
         let detail: Vec<String> = errors
             .iter()
@@ -387,18 +411,47 @@ fn projected_check(config: &HankConfig, input: &HookInput, rel: &str) -> Option<
         ));
     }
 
-    let violations =
-        crate::project::evaluate_projected(registry.policies(), &introduced, language, rel);
-    if violations.is_empty() {
+    let mut messages: Vec<String> = Vec::new();
+    let mut any_blocking = false;
+
+    // --- TEXT plane: every file, no grammar required ------------------------
+    let text_violations = crate::textrules::evaluate(registry.text_rules(), &introduced, rel);
+    if !text_violations.is_empty() {
+        // Exposure is resolved ONCE per edit, from the graph, via the governed
+        // policy itself — so hank and every other consumer of rule #1 share one
+        // definition of "public". Any failure to ask IS the Unknown answer.
+        let exposure = match crate::git::origin_repo_name(root) {
+            Some(repo) => crate::project::fetch_repo_exposure(&config.quipu.endpoint, &repo),
+            None => RepoExposure::Unknown(
+                "this tree has no `origin` remote, so its exposure cannot be resolved".into(),
+            ),
+        };
+        let (text_messages, text_blocks) = text_plane(&text_violations, &exposure);
+        messages.extend(text_messages);
+        any_blocking |= text_blocks;
+    }
+
+    // --- STRUCTURAL plane: language-gated, as before ------------------------
+    if let Some(language) = Path::new(rel)
+        .extension()
+        .and_then(OsStr::to_str)
+        .and_then(language_for_extension)
+    {
+        let violations =
+            crate::project::evaluate_projected(registry.policies(), &introduced, language, rel);
+        for v in &violations {
+            if v.blocking {
+                any_blocking = true;
+            }
+            messages.push(v.message.clone());
+        }
+    }
+
+    if messages.is_empty() {
         return None;
     }
-    let blocks = config.policy.mode == Mode::Enforce && violations.iter().any(|v| v.blocking);
-    let body = violations
-        .iter()
-        .map(|v| v.message.clone())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let message = rule_verdict_message_from(&body, registry.freshness());
+    let blocks = config.policy.mode == Mode::Enforce && any_blocking;
+    let message = rule_verdict_message_from(&messages.join("\n"), registry.freshness());
     if blocks {
         Some(Outcome::Deny(message))
     } else {
@@ -406,6 +459,55 @@ fn projected_check(config: &HankConfig, input: &HookInput, rel: &str) -> Option<
             "hank (governed, not blocking): {message}"
         )))
     }
+}
+
+/// The text plane's decision, PURE: which messages, and whether anything
+/// blocks, given the violations and the repo's exposure. Separated from
+/// [`governed_check`] so the tier x exposure matrix — the part of this whole
+/// circuit that must never be wrong in the blocking direction — is testable
+/// without a network.
+///
+/// The matrix (mqnl's seam, verbatim):
+///   block tier + Public   -> BLOCKS (this is the leak the rule exists for)
+///   block tier + Internal -> warning, downgraded and saying why
+///   block tier + Unknown  -> warning that SAYS the repo is unknown — never
+///                            block on a guess, never be silent on ignorance
+///   warn tier  + anything -> warning
+#[cfg(feature = "quipu")]
+fn text_plane(
+    violations: &[crate::textrules::TextViolation],
+    exposure: &crate::project::RepoExposure,
+) -> (Vec<String>, bool) {
+    use crate::project::RepoExposure;
+    use crate::textrules::TextTier;
+
+    let mut messages: Vec<String> = Vec::new();
+    let mut any_blocking = false;
+    for v in violations {
+        if v.tier == TextTier::Block && *exposure == RepoExposure::Public {
+            any_blocking = true;
+        }
+        messages.push(v.message.clone());
+    }
+    match exposure {
+        RepoExposure::Public => messages.push(
+            "[exposure: this repo has a PUBLIC remote (per the graph), so \
+             block-tier rules block]"
+                .to_string(),
+        ),
+        RepoExposure::Internal => messages.push(
+            "[exposure: downgraded to a warning — the graph knows this repo and \
+             it has no public remote, so the token leaks nowhere; the same edit \
+             would BLOCK in a public repo]"
+                .to_string(),
+        ),
+        RepoExposure::Unknown(reason) => messages.push(format!(
+            "[exposure: warning, NOT blocking — the repo's exposure is unknown \
+             ({reason}), and a governed rule never blocks on a guess. Add this \
+             repo's `repo_<name>` entity and remote facts to quipu to pin it.]"
+        )),
+    }
+    (messages, any_blocking)
 }
 
 /// Attach the FR-3 freshness declaration to an already-joined verdict body.
@@ -1074,5 +1176,74 @@ mod tests {
             panic!("an unmeasurable file must stay UNMEASURED-loud");
         };
         assert!(msg.contains("NOT EVALUATED"), "{msg}");
+    }
+    // --- the governed TEXT plane's blocking matrix (aegis-m9ln / aegis-mqnl) ---
+    //
+    // The pure half of governed_check: which tier x exposure combinations
+    // BLOCK. This is the part of the circuit that must never be wrong in the
+    // blocking direction, so it is tested without a network. The projection
+    // and evaluation halves have their own suites (project.rs, textrules.rs).
+
+    #[cfg(feature = "quipu")]
+    fn text_violation(tier: crate::textrules::TextTier) -> crate::textrules::TextViolation {
+        crate::textrules::TextViolation {
+            rule: "pattern_internal-lan-host".into(),
+            tier,
+            message: "governed text rule `pattern_internal-lan-host`: the edit \
+                      introduces `dolt.lan` (hostname) — internal .lan hostname."
+                .into(),
+        }
+    }
+
+    #[cfg(feature = "quipu")]
+    #[test]
+    fn a_block_tier_hit_in_a_public_repo_blocks() {
+        use crate::project::RepoExposure;
+        let (messages, blocks) = text_plane(
+            &[text_violation(crate::textrules::TextTier::Block)],
+            &RepoExposure::Public,
+        );
+        assert!(blocks, "this is the exact leak the rule exists to stop");
+        assert!(messages.iter().any(|m| m.contains("PUBLIC remote")));
+    }
+
+    #[cfg(feature = "quipu")]
+    #[test]
+    fn a_block_tier_hit_in_an_internal_repo_downgrades_and_says_why() {
+        use crate::project::RepoExposure;
+        let (messages, blocks) = text_plane(
+            &[text_violation(crate::textrules::TextTier::Block)],
+            &RepoExposure::Internal,
+        );
+        assert!(!blocks, "internal-only exposure must not block");
+        assert!(messages.iter().any(|m| m.contains("downgraded")));
+        assert!(messages.iter().any(|m| m.contains("would BLOCK in a public repo")));
+    }
+
+    #[cfg(feature = "quipu")]
+    #[test]
+    fn an_unknown_repo_never_blocks_and_says_it_is_unknown() {
+        // mqnl's constraint verbatim: warn AND SAY SO — never block on a guess.
+        use crate::project::RepoExposure;
+        let (messages, blocks) = text_plane(
+            &[text_violation(crate::textrules::TextTier::Block)],
+            &RepoExposure::Unknown("repo `hank` is not in the graph".into()),
+        );
+        assert!(!blocks);
+        assert!(messages.iter().any(|m| m.contains("never blocks on a guess")));
+        assert!(messages.iter().any(|m| m.contains("not in the graph")));
+        // The remedy is named: exposure is DATA, so the fix is a graph write.
+        assert!(messages.iter().any(|m| m.contains("repo_<name>")));
+    }
+
+    #[cfg(feature = "quipu")]
+    #[test]
+    fn a_warn_tier_hit_never_blocks_even_in_a_public_repo() {
+        use crate::project::RepoExposure;
+        let (_, blocks) = text_plane(
+            &[text_violation(crate::textrules::TextTier::Warn)],
+            &RepoExposure::Public,
+        );
+        assert!(!blocks, "warn tier is advisory everywhere — per-pattern tier is data");
     }
 }
