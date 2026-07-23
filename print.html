@@ -511,8 +511,14 @@ SELECT ?affected WHERE { ?t bobbin:name "hbiw_beta" . ?affected bobbin:calls+ ?t
 <p>Code entities do <strong>not</strong> suffer the alias-fragmentation that afflicts the
 human-named infrastructure graph (a blast-radius query over fragmented nodes
 returns a confident <em>subset</em>, worse than nothing): Hank mints one deterministic
-IRI per symbol (<code>…/code/&lt;repo&gt;/&lt;file&gt;::&lt;symbol&gt;</code>), so re-promotion updates the
-same node rather than minting a synonym, and the <code>calls+</code> closure is complete.</p>
+IRI per symbol (<code>…/code/&lt;repo&gt;/&lt;file&gt;::&lt;scope…&gt;::&lt;symbol&gt;</code>), so re-promotion
+updates the same node rather than minting a synonym, and the <code>calls+</code> closure
+is complete. The scope chain — enclosing module/impl/trait/class/function
+names, with a trait impl written <code>Type@Trait</code> — is what keeps two same-named
+symbols in one file on distinct IRIs (without it, 42 same-name collisions
+across three real repos silently merged into single nodes, unioning different
+symbols' call edges). It is sibling-independent: adding a second <code>run</code>
+elsewhere in the file never renames the first.</p>
 <h2 id="branches-as-named-graphs"><a class="header" href="#branches-as-named-graphs">Branches as named graphs</a></h2>
 <p>Each branch's committed facts belong in an RDF <strong>named graph</strong>, bitemporally
 versioned within. Quipu is a triple store today, so this is tracked as an
