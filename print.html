@@ -368,10 +368,13 @@ moment Hank is unavailable. Read
 <a href="getting-started/../reference/policy-guard.html">the full contract</a> before wiring it into a fleet
 — particularly the rules that allow is <em>silence</em> and that Hank never exits <code>2</code>.</p>
 <h2 id="performance-note"><a class="header" href="#performance-note">Performance note</a></h2>
-<p>This prototype builds the call graph transiently on each invocation. Once the
-Phase-3 resident per-tenant overlay lands, the hook becomes a thin client of the
-<code>hank serve</code> daemon and meets the sub-100ms budget a synchronous guard needs.
-See <a href="getting-started/../design/specification.html">the specification</a> §5.9 (FR-30/FR-31).</p>
+<p>By default the hooks build the call graph transiently on each invocation. With
+a running <a href="getting-started/../reference/daemon.html">resident daemon</a> and <code>[hank.serve] use_daemon = true</code>, both hooks become thin clients of the resident graph — no
+per-invocation build, which is what meets the sub-100ms budget a synchronous
+guard needs. The daemon being down degrades differently per hook: the pre-edit
+guard fails open <strong>loudly</strong>, the post-edit advisory falls back silently (it is
+advice, not enforcement). See
+<a href="getting-started/../design/specification.html">the specification</a> §5.9 (FR-30/FR-31).</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="architecture"><a class="header" href="#architecture">Architecture</a></h1>
 <p>Hank is a peer of Bobbin and Quipu, not a feature of either. It quarantines the
 heavy language toolchains (tree-sitter grammars, LSP servers, any CPG/dataflow
@@ -757,7 +760,9 @@ hank daemon --port 4050  # override the port
 </code></pre>
 <p>The daemon binds <code>[hank.serve] bind_address:mcp_http_port</code> (default
 <code>127.0.0.1:3040</code>). It refuses to start if the graph cannot be built — it never
-serves a graph it does not hold.</p>
+serves a graph it does not hold. SIGINT/SIGTERM drain in-flight requests and
+exit 0: a supervisor's <code>stop</code> is a clean stop, and the shutdown is announced on
+stderr, not silent.</p>
 <h2 id="who-uses-it"><a class="header" href="#who-uses-it">Who uses it</a></h2>
 <p>Clients consult the daemon only when <code>[hank.serve] use_daemon = true</code> (default
 <code>false</code>), and even then only after verifying via <code>/status</code> that the daemon
@@ -769,6 +774,10 @@ down, the guard <strong>fails open and says so</strong> — the edit proceeds an
 session gets a loud once-per-session notice. Down = allowed AND announced,
 never silently allowed, never blocked (see
 <a href="reference/policy-guard.html">Pre-Edit Policy Guard</a>).</li>
+<li><strong><code>hank hook post-edit</code></strong> extracts the edited file's symbols fresh (their
+content is what just changed) and asks the resident graph for their external
+callers via <code>/callers</code>. Daemon down = transient fallback with a stderr note —
+silent to the model, because the advisory is advice, not enforcement.</li>
 <li><strong>MCP graph tools</strong> (<code>hank_callers</code>, <code>hank_callees</code>, <code>hank_impact</code>,
 <code>hank_references</code>) answer from the resident graph when the request is not
 <code>path</code>-scoped; otherwise, and on any daemon failure, they fall back to the

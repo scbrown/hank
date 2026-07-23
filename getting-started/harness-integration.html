@@ -245,10 +245,13 @@ moment Hank is unavailable. Read
 <a href="../reference/policy-guard.html">the full contract</a> before wiring it into a fleet
 — particularly the rules that allow is <em>silence</em> and that Hank never exits <code>2</code>.</p>
 <h2 id="performance-note"><a class="header" href="#performance-note">Performance note</a></h2>
-<p>This prototype builds the call graph transiently on each invocation. Once the
-Phase-3 resident per-tenant overlay lands, the hook becomes a thin client of the
-<code>hank serve</code> daemon and meets the sub-100ms budget a synchronous guard needs.
-See <a href="../design/specification.html">the specification</a> §5.9 (FR-30/FR-31).</p>
+<p>By default the hooks build the call graph transiently on each invocation. With
+a running <a href="../reference/daemon.html">resident daemon</a> and <code>[hank.serve] use_daemon = true</code>, both hooks become thin clients of the resident graph — no
+per-invocation build, which is what meets the sub-100ms budget a synchronous
+guard needs. The daemon being down degrades differently per hook: the pre-edit
+guard fails open <strong>loudly</strong>, the post-edit advisory falls back silently (it is
+advice, not enforcement). See
+<a href="../design/specification.html">the specification</a> §5.9 (FR-30/FR-31).</p>
 
                     </main>
 
