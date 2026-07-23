@@ -235,12 +235,16 @@ pub struct KnotResult {
 /// headroom for that inflation plus the JSON envelope.
 const CHUNK_LIMIT: usize = 1_500_000;
 
-/// Split a Turtle document into chunks of whole entity blocks, each chunk
-/// carrying the prefix header. `to_turtle` separates entity blocks with blank
-/// lines and never emits blank nodes, so a block boundary is a safe split point.
+/// Split a Turtle document into chunks of whole statements, each chunk carrying
+/// the prefix header. `to_turtle` separates entity blocks with blank lines and
+/// never emits blank nodes, so a blank line is always a safe split point — but
+/// the call/reference EDGE sections are contiguous single-line statements with
+/// no blank lines between them (bobbin's edge section alone is ~6.9 MB), so an
+/// oversized block is split further at statement boundaries: a line ending in
+/// `.` completes a Turtle statement in this exporter's output.
 ///
-/// Errors if a single block exceeds `limit` — that cannot be split without
-/// breaking a statement, and silently posting it would just 413 downstream.
+/// Errors only if a single STATEMENT exceeds `limit` — that genuinely cannot be
+/// split, and silently posting it would just 413 downstream.
 fn chunk_turtle(turtle: &str, limit: usize) -> Result<Vec<String>> {
     if turtle.len() <= limit {
         return Ok(vec![turtle.to_string()]);
@@ -250,22 +254,47 @@ fn chunk_turtle(turtle: &str, limit: usize) -> Result<Vec<String>> {
     let header = blocks.next().unwrap_or_default();
     let mut chunks = Vec::new();
     let mut cur = String::from(header);
+
+    // Append one statement-complete piece, starting a new chunk when full.
+    let mut push_piece = |cur: &mut String, chunks: &mut Vec<String>, piece: &str| -> Result<()> {
+        if header.len() + 2 + piece.len() > limit {
+            return Err(Error::Promote(format!(
+                "a single Turtle statement is {} bytes, over the {limit} byte chunk limit — cannot split below statement granularity",
+                piece.len()
+            )));
+        }
+        if cur.len() + 2 + piece.len() > limit {
+            chunks.push(std::mem::replace(cur, String::from(header)));
+        }
+        cur.push_str("\n\n");
+        cur.push_str(piece);
+        Ok(())
+    };
+
     for block in blocks {
         if block.trim().is_empty() {
             continue;
         }
-        if header.len() + 2 + block.len() > limit {
-            return Err(Error::Promote(format!(
-                "a single entity block is {} bytes, over the {} byte chunk limit — cannot split below statement granularity",
-                block.len(),
-                limit
-            )));
+        if header.len() + 2 + block.len() <= limit {
+            push_piece(&mut cur, &mut chunks, block)?;
+            continue;
         }
-        if cur.len() + 2 + block.len() > limit {
-            chunks.push(std::mem::replace(&mut cur, String::from(header)));
+        // Oversized block: regroup its lines into statement-complete pieces
+        // (a line ending in `.` closes a statement in to_turtle's output).
+        let mut piece = String::new();
+        for line in block.lines() {
+            if !piece.is_empty() {
+                piece.push('\n');
+            }
+            piece.push_str(line);
+            if line.trim_end().ends_with('.') && header.len() + 2 + piece.len() > limit / 2 {
+                push_piece(&mut cur, &mut chunks, &piece)?;
+                piece.clear();
+            }
         }
-        cur.push_str("\n\n");
-        cur.push_str(block);
+        if !piece.trim().is_empty() {
+            push_piece(&mut cur, &mut chunks, &piece)?;
+        }
     }
     if cur.len() > header.len() {
         chunks.push(cur);
@@ -469,6 +498,36 @@ bobbin:code_bad a bobbin:CodeSymbol ;
             .collect();
         let original: Vec<&str> = t.split("\n\n").skip(1).collect();
         assert_eq!(stitched, original, "blocks lost, duplicated, or reordered");
+    }
+
+    /// The edge sections have NO blank lines — thousands of one-line statements
+    /// in a single "block" (bobbin's is ~6.9 MB). They must chunk at statement
+    /// boundaries, never error, and lose nothing.
+    #[test]
+    fn a_contiguous_edge_section_chunks_at_statement_boundaries() {
+        let header = "@prefix bobbin: <http://aegis.gastown.local/ontology/> .";
+        let mut t = String::from(header);
+        t.push_str("\n\n");
+        let edges: Vec<String> = (0..200)
+            .map(|i| format!("<http://x/a{i}> bobbin:calls <http://x/b{i}> ."))
+            .collect();
+        t.push_str(&edges.join("\n"));
+        let chunks = chunk_turtle(&t, 2_000).expect("edge section must chunk, not error");
+        assert!(chunks.len() > 1, "expected a real split");
+        let stitched: Vec<String> = chunks
+            .iter()
+            .flat_map(|c| c.lines())
+            .filter(|l| l.contains("bobbin:calls"))
+            .map(str::to_string)
+            .collect();
+        assert_eq!(
+            stitched, edges,
+            "edge statements lost, duplicated, or reordered"
+        );
+        for c in &chunks {
+            assert!(c.len() <= 2_000, "chunk over limit: {} bytes", c.len());
+            assert!(c.starts_with("@prefix"), "chunk missing prefix header");
+        }
     }
 
     #[test]
