@@ -1315,10 +1315,23 @@ markdownlint, mdBook.
 
 **Not yet built:** the resident daemon / per-tenant overlays (Phase 3); LSP
 precision tier (planned `lsp` feature); CPG control-dependence + inter-procedural
-taint (planned `cpg` feature);
-Quipu promotion wiring (`quipu`, `--to quipu`); doc→code reference extraction
+taint (planned `cpg` feature); doc→code reference extraction
 (FR-33); `pre-edit` guard; position-based tool variants; the `langs-extra`
 grammar extractors.
+
+**Phase 4 (graph-export → Quipu) — status (2026-07-23, harding; verified by
+mechanism against `src/`, cross-refs the open GitHub issues):**
+
+| Section | Status | Evidence |
+|---|---|---|
+| FR-34 `hank export` (Turtle) | ✅ Implemented | `src/export.rs::to_turtle` (`:32`), tested |
+| FR-19/21/22 `hank promote` / `export --to quipu` | ✅ Implemented (behind `quipu` feature) | `src/promote.rs::promote` (`:229`) — SHACL-validate → `quipu_knot`/`POST /knot`, all-or-nothing, reads the committed tree only (FR-22); tested (`:335`). GH #15. *(Supersedes the earlier "Quipu promotion wiring — not built" line above: it is built, and behind the feature — a separate refinery/rig copy still stubs `promote`, which is not this crate.)* |
+| §9.7 commit→touched-entities provenance edge | 🟡 Partial | Hank emits only code structure — grep finds no `GitCommit`/`modifies` emission in `promote`/`export`. The edge is produced OUT of hank (an hourly commit-ingest job), so §9.7's *hank-placement* is unmet; module-granularity only. GH #18. |
+| §9.4 branch modeling (named-graph vs qualifier) | ⬜ Planned | Config scaffold only — `config.rs::branch_model` (`:147`, default `"named_graph"`); no code attaches `bobbin:onBranch` or a `GRAPH bobbin:branch/<b>` to any promoted edge. Lands with the Phase-4 promote emit point; qualifier fallback first. GH #17. |
+
+Pre-existing Phase 1/2 spec-gaps also remain open (out of the graph-export
+scope): FR-2/FR-4 LSP precision (#7), §10/FR-4 position-based variants (#8),
+FR-7/FR-8 CPG (#22).
 
 ## Appendix E: Design Decision Log
 
