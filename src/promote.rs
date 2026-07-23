@@ -127,7 +127,28 @@ fn parse_report(report: &str) -> Validation {
 /// unset — `Bearer ` (no token) would be sent as a real-but-wrong credential
 /// and turn a misconfigured env into a confusing 401.
 fn quipu_auth_token() -> Option<String> {
-    normalize_token(std::env::var("QUIPU_AUTH_TOKEN").ok())
+    normalize_token(std::env::var("QUIPU_AUTH_TOKEN").ok()).or_else(token_from_file)
+}
+
+/// The token file — the half of distribution that reaches processes launched
+/// BEFORE the token existed (an env var is captured at spawn; a file is read
+/// per request). Env wins above as the per-invocation override. Path:
+/// `QUIPU_AUTH_TOKEN_FILE`, else `~/.config/quipu/token`. Absent/unreadable
+/// is `None`: no auth configured, the open-server default.
+fn token_from_file() -> Option<String> {
+    let path = std::env::var("QUIPU_AUTH_TOKEN_FILE")
+        .ok()
+        .filter(|p| !p.is_empty())
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| format!("{h}/.config/quipu/token"))
+        })?;
+    normalize_token(
+        std::fs::read_to_string(path)
+            .ok()
+            .map(|s| s.trim().to_string()),
+    )
 }
 
 /// The pure half of [`quipu_auth_token`]: empty-or-absent collapses to `None`.
