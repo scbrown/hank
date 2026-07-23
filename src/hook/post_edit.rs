@@ -21,7 +21,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::HookInput;
+use super::{HookInput, ToolInput};
 use crate::config::HankConfig;
 use crate::daemon::client::{expected_same_root_daemon, fetch_edit};
 use crate::extract::extract_symbols;
@@ -79,7 +79,37 @@ pub fn advisory_for(input_json: &str, default_root: &Path, tenant: Option<&str>)
     if symbols.is_empty() {
         return None;
     }
-    let names: Vec<String> = symbols.into_iter().map(|s| s.name).collect();
+
+    // aegis-rcyd / #75: scope the advisory to the symbol(s) the edit actually
+    // TOUCHED, not every symbol in the file. Without this, a comment- or
+    // whitespace-only edit cries "N callers, re-check!" identically to a
+    // signature change — alarm fatigue that trains agents to tune the advisory
+    // out (the opposite of the "is it acted on?" goal). The post-edit `source`
+    // already contains the replacement text, so locate it to get the changed
+    // line span(s) and keep only symbols whose body overlaps. Fall back to the
+    // whole file when we cannot localize (Write's full `content`, a pure
+    // deletion, or an unlocatable replacement) — conservative: over-advise
+    // rather than miss a real breaking change.
+    let names: Vec<String> = match edited_line_spans(&input.tool_input, &source) {
+        Some(spans) if !spans.is_empty() => {
+            let scoped: Vec<String> = symbols
+                .into_iter()
+                .filter(|sym| {
+                    spans
+                        .iter()
+                        .any(|&(lo, hi)| sym.start_line <= hi && sym.end_line >= lo)
+                })
+                .map(|sym| sym.name)
+                .collect();
+            // The edit landed outside every symbol body (e.g. an import or a
+            // module-level comment) — nothing with callers to re-check.
+            if scoped.is_empty() {
+                return None;
+            }
+            scoped
+        }
+        _ => symbols.into_iter().map(|s| s.name).collect(),
+    };
 
     let (mut per_symbol, files) =
         resident_feed(&root, &rel, tenant).or_else(|| transient_callers(&root, &rel, &names))?;
@@ -90,6 +120,43 @@ pub fn advisory_for(input_json: &str, default_root: &Path, tenant: Option<&str>)
     }
 
     Some(render(&rel, &per_symbol, &files))
+}
+
+/// The 1-based inclusive line span(s) the edit changed, located in the POST-edit
+/// `source`. `Edit` → the line range(s) of `new_string` as it now sits in the
+/// file (all occurrences — the same text may legitimately appear more than
+/// once); `MultiEdit` → the union across its edits. Returns `None` when we
+/// cannot localize (Write's whole-file `content`, or a pure deletion whose
+/// replacement text is empty) so the caller falls back to whole-file scoping.
+fn edited_line_spans(tool_input: &ToolInput, source: &str) -> Option<Vec<(usize, usize)>> {
+    let mut needles: Vec<&str> = Vec::new();
+    if let Some(ns) = tool_input.new_string.as_deref() {
+        needles.push(ns);
+    }
+    for e in &tool_input.edits {
+        if let Some(ns) = e.new_string.as_deref() {
+            needles.push(ns);
+        }
+    }
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    for needle in needles {
+        if needle.is_empty() {
+            continue; // deletion: no text to locate post-hoc
+        }
+        let added_lines = needle.matches('\n').count();
+        let mut from = 0usize;
+        while let Some(rel) = source[from..].find(needle) {
+            let byte = from + rel;
+            let start_line = source[..byte].matches('\n').count() + 1; // 1-based
+            spans.push((start_line, start_line + added_lines));
+            from = byte + needle.len().max(1);
+        }
+    }
+    if spans.is_empty() {
+        None
+    } else {
+        Some(spans)
+    }
 }
 
 /// Per-symbol external-caller counts and their files. The shared shape both
@@ -190,6 +257,76 @@ mod tests {
         let text = advisory_for(&payload, dir.path(), None).expect("expected an advisory");
         assert!(text.contains("leaf"));
         assert!(text.contains("b.rs"));
+    }
+
+    #[test]
+    fn scopes_advisory_to_the_edited_symbol() {
+        // a.rs defines `leaf` (edited) and `other` (untouched), both called from b.rs.
+        // The file on disk is POST-edit, as the real hook sees it.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("a.rs"),
+            "fn leaf() {\n    let x = 2;\n}\nfn other() {}\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("b.rs"), "fn m() { leaf(); other(); }\n").unwrap();
+
+        let payload = serde_json::json!({
+            "tool_name": "Edit",
+            "cwd": dir.path().to_str().unwrap(),
+            "tool_input": {
+                "file_path": dir.path().join("a.rs").to_str().unwrap(),
+                "old_string": "let x = 1;",
+                "new_string": "let x = 2;",
+            },
+        })
+        .to_string();
+
+        let text = advisory_for(&payload, dir.path(), None).expect("expected an advisory");
+        assert!(text.contains("leaf"), "advises on the edited symbol: {text}");
+        assert!(
+            !text.contains("other"),
+            "must NOT cry wolf on the untouched symbol: {text}"
+        );
+    }
+
+    #[test]
+    fn no_advice_when_edit_is_outside_every_symbol() {
+        // A top-of-file comment edit touches no symbol body — the cry-wolf case.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("a.rs"),
+            "// header updated\nfn leaf() {}\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("b.rs"), "fn m() { leaf(); }\n").unwrap();
+
+        let payload = serde_json::json!({
+            "tool_name": "Edit",
+            "cwd": dir.path().to_str().unwrap(),
+            "tool_input": {
+                "file_path": dir.path().join("a.rs").to_str().unwrap(),
+                "old_string": "// header",
+                "new_string": "// header updated",
+            },
+        })
+        .to_string();
+        assert!(
+            advisory_for(&payload, dir.path(), None).is_none(),
+            "a comment-only edit must not advise on symbols it did not touch"
+        );
+    }
+
+    #[test]
+    fn edited_line_spans_locates_edit_and_falls_back() {
+        let src = "aaa\nbbb\nccc\n";
+        let ti = ToolInput { new_string: Some("bbb".into()), ..Default::default() };
+        assert_eq!(edited_line_spans(&ti, src), Some(vec![(2, 2)]));
+        // Deletion → None (unlocatable post-hoc).
+        let ti = ToolInput { new_string: Some(String::new()), ..Default::default() };
+        assert_eq!(edited_line_spans(&ti, src), None);
+        // No diff info (Write) → None → whole-file fallback.
+        assert_eq!(edited_line_spans(&ToolInput::default(), src), None);
     }
 
     #[test]
