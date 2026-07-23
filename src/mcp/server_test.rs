@@ -135,6 +135,84 @@ async fn callers_and_callees_carry_a_top_level_tier() {
     assert_top_level_tier(&callees, "hank_callees");
 }
 
+// --- Stage 3c wiring (aegis-1qze): resident daemon vs. transient fallback ----
+//
+// Multi-thread runtime on purpose: the tool handlers call the SYNC daemon
+// client in-line, so the daemon must be able to accept on another worker while
+// the handler's thread blocks on the socket.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unscoped_query_uses_the_daemon_and_a_path_scoped_one_never_does() {
+    let dir = fixture(); // x.rs: a calls b
+    let engine = crate::daemon::ResidentEngine::build(dir.path(), None).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, crate::daemon::http::router(engine)).await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Config override EXPECTING that daemon (override path, so no user-config
+    // layering can leak in).
+    let config = dir.path().join("daemon-config.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "[hank.serve]\nuse_daemon = true\nbind_address = \"127.0.0.1\"\n\
+             mcp_http_port = {port}\n"
+        ),
+    )
+    .unwrap();
+    let server = HankMcpServer::new(dir.path().to_path_buf(), None, Some(config));
+
+    // Grow the tree AFTER the resident graph was built: a transient build sees
+    // `late`, the daemon cannot. Which graph answered is therefore observable.
+    std::fs::write(dir.path().join("late.rs"), "fn late() { b(); }\n").unwrap();
+
+    // Unscoped -> the RESIDENT graph answers (no `late`).
+    let resident = served(
+        server
+            .hank_callers(Parameters(NeighborsRequest {
+                symbol: "b".into(),
+                path: None,
+            }))
+            .await,
+    );
+    let names: Vec<&str> = resident["neighbors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"a"), "got {names:?}");
+    assert!(
+        !names.contains(&"late"),
+        "`late` postdates the resident graph; its presence means the transient \
+         path answered an unscoped query despite a usable daemon: {names:?}"
+    );
+    assert_top_level_tier(&resident, "hank_callers(resident)");
+
+    // Path-scoped -> NEVER the daemon (whole-root graph ≠ subtree graph): the
+    // transient build answers and sees `late`.
+    let scoped = served(
+        server
+            .hank_callers(Parameters(NeighborsRequest {
+                symbol: "b".into(),
+                path: Some(".".into()),
+            }))
+            .await,
+    );
+    let names: Vec<&str> = scoped["neighbors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["name"].as_str().unwrap())
+        .collect();
+    assert!(
+        names.contains(&"late"),
+        "a path-scoped query must be answered transiently, not by the daemon: {names:?}"
+    );
+}
+
 #[tokio::test]
 async fn dataflow_carries_a_top_level_tier() {
     let dir = fixture();

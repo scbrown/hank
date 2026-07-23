@@ -19,7 +19,8 @@ use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
-use super::MeasureReply;
+use super::{Impact, MeasureReply, Neighbors};
+use crate::graph::Dir;
 
 /// Whether a resident daemon answered a liveness probe.
 ///
@@ -177,6 +178,120 @@ pub fn fetch_measure(
         .map_err(|e| format!("daemon at {addr} sent an unparseable measure reply ({e})"))
 }
 
+/// Raw synchronous HTTP GET: the body on a 2xx, `Err(reason)` on any other
+/// outcome. The shared shape under the typed fetches below — same
+/// `std::net`-only approach as [`probe`], and the same contract: an error is
+/// "the daemon could not answer", to be handled by falling back, never ignored.
+fn http_get(host: &str, port: u16, path: &str, timeout: Duration) -> Result<String, String> {
+    let addr = format!("{host}:{port}");
+    let Ok(mut addrs) = addr.to_socket_addrs() else {
+        return Err(format!("cannot resolve {addr}"));
+    };
+    let Some(sockaddr) = addrs.next() else {
+        return Err(format!("no address for {addr}"));
+    };
+    let mut stream = TcpStream::connect_timeout(&sockaddr, timeout)
+        .map_err(|e| format!("no daemon at {addr} ({e})"))?;
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+
+    let req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| format!("write to {addr} failed ({e})"))?;
+    let mut raw = String::new();
+    stream
+        .read_to_string(&mut raw)
+        .map_err(|e| format!("read from {addr} failed ({e})"))?;
+
+    let status = raw
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| format!("daemon at {addr} sent no status line"))?;
+    if !status.starts_with('2') {
+        return Err(format!("daemon at {addr} returned HTTP {status}"));
+    }
+    raw.split("\r\n\r\n")
+        .nth(1)
+        .map(str::to_string)
+        .ok_or_else(|| format!("daemon at {addr} sent no body"))
+}
+
+/// Percent-encode a query-string value. Symbols are code identifiers so this is
+/// nearly always a no-op, but a name must never be able to smuggle `&`/`?`/
+/// spaces into the request line.
+fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// The analysis root the daemon at `host:port` serves, from `GET /status`. A
+/// thin client MUST check this against its own root before trusting any graph
+/// answer — a daemon for repo B answering repo A's query would not error, it
+/// would confidently lie. `Err` means "no usable daemon", handled by fallback.
+pub fn fetch_root(host: &str, port: u16, timeout: Duration) -> Result<String, String> {
+    let body = http_get(host, port, "/status", timeout)?;
+    let status: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("daemon at {host}:{port} sent an unparseable status ({e})"))?;
+    status
+        .get("root")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| format!("daemon at {host}:{port} status reports no root"))
+}
+
+/// Direct callers/callees of `symbol` from the RESIDENT graph (`GET /callers`
+/// or `/callees`). `Err` on any failure — the caller falls back to a transient
+/// build, never treats it as an empty answer (that would collapse "daemon down"
+/// into "no callers", the fact-vs-absence bug).
+pub fn fetch_neighbors(
+    host: &str,
+    port: u16,
+    symbol: &str,
+    dir: Dir,
+    timeout: Duration,
+) -> Result<Neighbors, String> {
+    let endpoint = match dir {
+        Dir::Callers => "callers",
+        Dir::Callees => "callees",
+    };
+    let body = http_get(
+        host,
+        port,
+        &format!("/{endpoint}?symbol={}", urlencode(symbol)),
+        timeout,
+    )?;
+    serde_json::from_str(&body)
+        .map_err(|e| format!("daemon at {host}:{port} sent an unparseable {endpoint} reply ({e})"))
+}
+
+/// Blast radius of `symbol` from the RESIDENT graph (`GET /impact`). Same
+/// contract as [`fetch_neighbors`]: `Err` means fall back, never "no impact".
+pub fn fetch_impact(
+    host: &str,
+    port: u16,
+    symbol: &str,
+    hops: u32,
+    timeout: Duration,
+) -> Result<Impact, String> {
+    let body = http_get(
+        host,
+        port,
+        &format!("/impact?symbol={}&hops={hops}", urlencode(symbol)),
+        timeout,
+    )?;
+    serde_json::from_str(&body)
+        .map_err(|e| format!("daemon at {host}:{port} sent an unparseable impact reply ({e})"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,6 +317,32 @@ mod tests {
             Duration::from_millis(200),
         );
         assert!(!r.is_up());
+    }
+
+    #[test]
+    fn urlencode_passes_identifiers_and_encodes_request_line_metacharacters() {
+        // The common case is a no-op; the point is that a symbol name cannot
+        // smuggle `&`/`?`/spaces into the HTTP request line.
+        assert_eq!(urlencode("authenticate_v2"), "authenticate_v2");
+        assert_eq!(urlencode("a&b ?c"), "a%26b%20%3Fc");
+    }
+
+    #[test]
+    fn fetch_neighbors_and_impact_on_a_closed_port_are_Err_never_empty() {
+        // "Daemon down" must be an Err the caller handles by falling back —
+        // never a parse into an empty answer (fact-vs-absence).
+        let n = fetch_neighbors(
+            "127.0.0.1",
+            1,
+            "leaf",
+            Dir::Callers,
+            Duration::from_millis(200),
+        );
+        assert!(n.is_err());
+        let i = fetch_impact("127.0.0.1", 1, "leaf", 5, Duration::from_millis(200));
+        assert!(i.is_err());
+        let r = fetch_root("127.0.0.1", 1, Duration::from_millis(200));
+        assert!(r.is_err());
     }
 
     #[test]

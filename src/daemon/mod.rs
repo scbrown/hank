@@ -38,7 +38,7 @@ use crate::types::Tier;
 
 pub mod client;
 #[cfg(feature = "mcp")]
-mod http;
+pub(crate) mod http;
 
 /// The base graph plus its policy snapshot, built once and held for the process
 /// lifetime. Cheap to clone (`Arc`), so the HTTP layer shares one instance.
@@ -200,8 +200,10 @@ fn graph_tier() -> String {
 }
 
 /// One reached symbol in a neighbors/impact reply. Owned + `Serialize` so the
-/// daemon layer does not depend on the `mcp` feature's response types.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+/// daemon layer does not depend on the `mcp` feature's response types, and
+/// `Deserialize` so a thin client (the MCP cutover, stage 3c) parses the same
+/// type off the wire that the daemon serialized — no shadow DTO to drift.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReachedItem {
     /// Symbol name.
     pub name: String,
@@ -211,8 +213,9 @@ pub struct ReachedItem {
     pub start_line: usize,
     /// Hop distance from the seed (1 = direct).
     pub distance: u32,
-    /// Relationship to the seed (`calls` or `called_by`).
-    pub via: &'static str,
+    /// Relationship to the seed (`calls` or `called_by`). Owned (not
+    /// `&'static str`) so the type round-trips through a client's parse.
+    pub via: String,
 }
 
 fn reached_item(r: &Reached) -> ReachedItem {
@@ -221,7 +224,7 @@ fn reached_item(r: &Reached) -> ReachedItem {
         file: r.file.clone(),
         start_line: r.start_line,
         distance: r.distance,
-        via: r.via,
+        via: r.via.to_string(),
     }
 }
 
@@ -229,7 +232,7 @@ fn reached_item(r: &Reached) -> ReachedItem {
 /// `neighbors` on purpose: "the symbol is not in the graph" and "the symbol has
 /// no callers" are different answers, and collapsing them is the fact-vs-absence
 /// bug this project keeps paying for.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Neighbors {
     /// The queried symbol.
     pub symbol: String,
@@ -242,7 +245,7 @@ pub struct Neighbors {
 }
 
 /// Reply for `/impact` — the transitive blast radius of changing a symbol.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Impact {
     /// The queried symbol.
     pub symbol: String,
