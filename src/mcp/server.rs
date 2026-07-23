@@ -403,13 +403,15 @@ impl HankMcpServer {
                     crate::promote::Promotion::Wrote(k) => PromoteResponse {
                         wrote: true,
                         count: Some(k.count),
-                        tx_id: k.tx_id,
+                        tx_id: k.tx_ids.last().copied(),
+                        chunks: Some(k.chunks),
                         violations: Vec::new(),
                     },
                     crate::promote::Promotion::Refused(violations) => PromoteResponse {
                         wrote: false,
                         count: None,
                         tx_id: None,
+                        chunks: None,
                         violations,
                     },
                 };
