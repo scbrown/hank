@@ -433,6 +433,43 @@ mod tests {
 
     const SHAPES: &str = CODE_EDGE_SHAPES;
 
+    // The round-trip that pins the exporter to the shapes (#13/#14): a REAL
+    // `export::to_turtle` projection of a real repo must SHACL-validate against
+    // the shipped shapes. The hand-written CONFORMING fixture only claims to
+    // mirror the emitter; this proves it, and catches emitter/shape drift (a
+    // new predicate, a dropped required field) at the exporter rather than as a
+    // Quipu refusal in production.
+    #[test]
+    fn a_real_export_projection_validates_against_the_shipped_shapes() {
+        let dir = tempfile::tempdir().unwrap();
+        // A repo exercising every emitted edge kind the shapes gate: a call
+        // (mid→leaf), an import (b uses a), and a doc Section referencing a
+        // symbol.
+        std::fs::write(dir.path().join("a.rs"), "pub fn leaf() {}\n").unwrap();
+        std::fs::write(
+            dir.path().join("b.rs"),
+            "use crate::a::leaf;\nfn mid() { leaf(); }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("README.md"),
+            "# Guide\n\nThe `leaf` function is the entry point.\n",
+        )
+        .unwrap();
+
+        let turtle = crate::export::to_turtle(dir.path(), "demo").expect("export ran");
+        assert!(
+            turtle.contains("bobbin:calls"),
+            "fixture must emit a call edge"
+        );
+        let v = validate(&turtle, SHAPES).expect("validation ran");
+        assert!(
+            v.conforms,
+            "real export output must validate against the shipped shapes; violations: {:?}",
+            v.violations
+        );
+    }
+
     #[test]
     fn empty_bearer_token_is_unset_not_a_credential() {
         // An empty env value must behave like no token at all — sending

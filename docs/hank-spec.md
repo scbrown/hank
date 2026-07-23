@@ -1056,12 +1056,12 @@ criterion; every phase must keep the `quipu` feature compiling both on and off
 
 ### Phase 4 — Promote to Quipu
 
-- [ ] Extend the code ontology with edge shapes (§9.2) and `Section → references → CodeSymbol` (§5.10); start permissive.
+- [x] Extend the code ontology with edge shapes (§9.2) and `Section → references → CodeSymbol` (§5.10); start permissive: `shapes/code-edges.ttl` covers `calls`/`references`/`imports`/`dataDependsOn`/`controlDependsOn`/`hasTier` + `Section→references`, permissive (nodeKind IRI, `sh:class` deferred), with node shapes synced from Quipu's `code-entities.ttl` (hank #13).
 - [x] Turtle emission of the referential structure (`hank export --format turtle`, FR-34, code side) — extend to docs (FR-33) and wire `--to quipu`.
 - [x] Doc→code reference extraction (FR-33) folded into the **export**: `src/docref.rs`
       scans markdown for code-symbol mentions and `src/export.rs` emits
       `Section → references → CodeSymbol`. Not yet wired into the live edit hook.
-- [ ] SHACL-validate (`rudof`) before every write (FR-20).
+- [x] SHACL-validate (`rudof`) before every write (FR-20): `promote::validate` runs `rudof_lib` in-process against `code-edges.ttl` and refuses the whole promotion on any violation (all-or-nothing); a real `export` projection is round-trip-validated in the test suite so the emitter cannot drift from the gate (hank #14).
 - [ ] Promote on commit/merge via `quipu_knot` / `Store::transact`, bitemporal (FR-19, FR-21, FR-22).
 - [ ] Branch modeling per §9.4: promote each branch into a named graph if Quipu
       quad support (§9.5) has landed; else branch-as-qualifier fallback. SPARQL-
