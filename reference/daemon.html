@@ -206,10 +206,12 @@ down, the guard <strong>fails open and says so</strong> — the edit proceeds an
 session gets a loud once-per-session notice. Down = allowed AND announced,
 never silently allowed, never blocked (see
 <a href="policy-guard.html">Pre-Edit Policy Guard</a>).</li>
-<li><strong><code>hank hook post-edit</code></strong> extracts the edited file's symbols fresh (their
-content is what just changed) and asks the resident graph for their external
-callers via <code>/callers</code>. Daemon down = transient fallback with a stderr note —
-silent to the model, because the advisory is advice, not enforcement.</li>
+<li><strong><code>hank hook post-edit</code></strong> runs the FR-30 cycle in one <code>POST /edit</code>: the
+just-saved file is recorded in the session tenant's overlay (<code>--tenant</code>,
+default <code>single-tenant</code>) and the advisory comes back from the fresh
+composed view. Daemon down = transient fallback with a stderr note — silent
+to the model, because the advisory is advice, not enforcement, and the file
+on disk (not the overlay) is the system of record.</li>
 <li><strong>MCP graph tools</strong> (<code>hank_callers</code>, <code>hank_callees</code>, <code>hank_impact</code>,
 <code>hank_references</code>) answer from the resident graph when the request is not
 <code>path</code>-scoped; otherwise, and on any daemon failure, they fall back to the
@@ -223,16 +225,36 @@ Freshness tags (the FR-3 second half) arrive with overlay updates (hank #3);
 replies omit them rather than faking <code>fresh</code>.</p>
 <div class="table-wrapper"><table><thead><tr><th>Route</th><th>Method</th><th>Query/body</th><th>Answer</th></tr></thead><tbody>
 <tr><td><code>/health</code></td><td>GET</td><td>—</td><td>bare <code>ok</code> (the liveness probe)</td></tr>
-<tr><td><code>/status</code></td><td>GET</td><td>—</td><td>root, node/edge counts, uptime, tiers</td></tr>
-<tr><td><code>/callers</code></td><td>GET</td><td><code>symbol</code></td><td>direct callers, from the resident graph</td></tr>
-<tr><td><code>/callees</code></td><td>GET</td><td><code>symbol</code></td><td>direct callees, from the resident graph</td></tr>
-<tr><td><code>/impact</code></td><td>GET</td><td><code>symbol</code>, <code>hops</code> (default 5)</td><td>transitive blast radius</td></tr>
-<tr><td><code>/references</code></td><td>GET</td><td><code>symbol</code></td><td>definition sites, from the resident index</td></tr>
-<tr><td><code>/symbols</code></td><td>GET</td><td><code>file</code> (root-relative)</td><td>that file's symbols, line order</td></tr>
+<tr><td><code>/status</code></td><td>GET</td><td>—</td><td>root, node/edge counts, uptime, tiers, <code>tenant_layer</code> (base commit + active overlays; <code>null</code> = layer absent)</td></tr>
+<tr><td><code>/callers</code></td><td>GET</td><td><code>symbol</code>, <code>tenant?</code></td><td>direct callers</td></tr>
+<tr><td><code>/callees</code></td><td>GET</td><td><code>symbol</code>, <code>tenant?</code></td><td>direct callees</td></tr>
+<tr><td><code>/impact</code></td><td>GET</td><td><code>symbol</code>, <code>hops</code> (default 5), <code>tenant?</code></td><td>transitive blast radius</td></tr>
+<tr><td><code>/references</code></td><td>GET</td><td><code>symbol</code>, <code>tenant?</code></td><td>definition sites</td></tr>
+<tr><td><code>/symbols</code></td><td>GET</td><td><code>file</code> (root-relative), <code>tenant?</code></td><td>that file's symbols, line order</td></tr>
 <tr><td><code>/dataflow</code></td><td>GET</td><td><code>function</code>, <code>path?</code>, <code>var?</code>, <code>forward?</code>, <code>hops?</code></td><td>intra-procedural data dependence</td></tr>
 <tr><td><code>/measure</code></td><td>POST</td><td><code>{file, rel, anchors[], max_hops?}</code></td><td>edit blast-radius sizing for the guard</td></tr>
+<tr><td><code>/edit</code></td><td>POST</td><td><code>{tenant, rel, content?}</code></td><td>FR-30 feed-and-advise: record the edit in the tenant's overlay, return which of the file's symbols have external callers (from the fresh view). Omitted <code>content</code> is read from disk, root-confined.</td></tr>
 </tbody></table>
 </div>
+<h2 id="the-tenant-layer-hank-2"><a class="header" href="#the-tenant-layer-hank-2">The tenant layer (hank #2)</a></h2>
+<p>When the root is a git repo, the daemon also holds a <strong>tenant registry</strong>: one
+shared read-only base built at the startup <code>HEAD</code>, plus a copy-on-write
+overlay per tenant, fed by <code>POST /edit</code> (the post-edit hook does this
+automatically when <code>use_daemon</code> is on). A query naming <code>tenant=</code> resolves
+against that tenant's <code>base + overlay</code> view; overlays are absolutely invisible
+to other tenants (§6.3).</p>
+<p>Two deliberate semantics to know:</p>
+<ul>
+<li><strong>Tenant views compose over the COMMITTED base</strong>, not the working tree
+(FR-22 keeps overlay churn distinct from committed truth). An uncommitted
+working-tree delta present at daemon startup is visible to the un-tenanted
+surface (which snapshots the working tree) and absent from tenant views
+until a tenant touches those files.</li>
+<li><strong>Naming a tenant when the layer is absent</strong> (root is not a repo — no commit
+to anchor a base to) is an explicit <strong>412</strong>, never an empty answer.
+<code>/status.tenant_layer</code> is <code>null</code> in that state, distinct from
+present-with-no-overlays.</li>
+</ul>
 <p>Notes that keep the answers honest:</p>
 <ul>
 <li><strong><code>found</code> vs empty.</strong> "The symbol is not in the graph" and "the symbol has no
