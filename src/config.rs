@@ -545,14 +545,14 @@ mod tests {
             ("lsp_on", "LSP tier not built"),
             (
                 "tenancy",
-                "Phase 3 — overlay manager not built (whole sub-table)",
+                "Phase 3 — engine built (hank #2); nothing reads these until the FR-18 lifecycle work (hank #6)",
             ),
-            ("max_overlays", "Phase 3 — overlay manager not built"),
+            ("max_overlays", "Phase 3 — read by the FR-18 lifecycle (hank #6)"),
             (
                 "high_fanin_threshold",
-                "Phase 3 — overlay manager not built",
+                "Phase 3 — read by the FR-18 lifecycle (hank #6)",
             ),
-            ("overlay_eviction", "Phase 3 — overlay manager not built"),
+            ("overlay_eviction", "Phase 3 — read by the FR-18 lifecycle (hank #6)"),
             ("promote_on", "Phase 4 — Quipu promotion not built"),
             ("shapes_path", "Phase 4 — Quipu promotion not built"),
         ];

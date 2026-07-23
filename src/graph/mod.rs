@@ -3,17 +3,21 @@
 //! Phase 2 builds a symbol-level call graph over a subtree and answers
 //! reachability in either direction. This is the FR-12 primitive: the same
 //! traversal answers "what does this change affect?" (callers, transitively)
-//! and "what does this call?" (callees). Phase 3 makes this a hot, per-tenant
-//! resident graph (Phase-3 `base`/`overlay`/`tenant`, not yet built); today it is
-//! built on demand.
+//! and "what does this call?" (callees). Phase 3 layers the tenant model over it:
+//! a shared read-only [`Base`] at a resolved commit, per-tenant copy-on-write
+//! [`Overlay`]s, and the composed [`TenantView`] the same BFS walks (hank #2;
+//! the FR-16 frontier recompute is hank #3).
 //!
 //! The single breadth-first traversal lives in [`blast`] behind the [`Adjacency`]
 //! trait, so the base graph, the composed per-tenant view, and the frontier
 //! update all share one implementation (FR-12, "build it once").
 
+mod base;
 mod blast;
 mod community;
 mod lookup;
+mod overlay;
+mod tenant;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -24,8 +28,11 @@ use crate::errors::Result;
 use crate::extract::extract_structure;
 use crate::types::{EdgeKind, Tier};
 
+pub use base::{Base, FileFacts};
 pub use blast::{reachable_over, Adjacency, Dir, NodeMeta, Reached};
 pub use community::{Community, CommunityMember};
+pub use overlay::{Overlay, OverlaySymbol, ParsedFile};
+pub use tenant::{OverlayStatus, RegistryStatus, SymRef, TenantRegistry, TenantView};
 
 /// A node in the call graph: one defined symbol.
 #[derive(Debug, Clone)]
