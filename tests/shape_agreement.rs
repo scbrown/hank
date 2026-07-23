@@ -63,7 +63,10 @@ fn rudof_refuses_the_violating_fixture() {
         "rudof ACCEPTED the violating fixture — the in-process validator cannot reject, \
          which is the exact present-but-inert defect this test exists to catch"
     );
-    assert!(!v.violations.is_empty(), "a refusal must name its violations");
+    assert!(
+        !v.violations.is_empty(),
+        "a refusal must name its violations"
+    );
 }
 
 /// The agreement assertion proper. Ignored by default: requires a reachable
@@ -85,8 +88,18 @@ fn rudof_and_quipu_agree_on_both_verdicts() {
             json_string(data)
         );
         let out = std::process::Command::new("curl")
-            .args(["-s", "-m", "60", "-X", "POST", "-H", "Content-Type: application/json",
-                   "--data-binary", "@-", &url])
+            .args([
+                "-s",
+                "-m",
+                "60",
+                "-X",
+                "POST",
+                "-H",
+                "Content-Type: application/json",
+                "--data-binary",
+                "@-",
+                &url,
+            ])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .spawn()
@@ -104,7 +117,10 @@ fn rudof_and_quipu_agree_on_both_verdicts() {
         } else if text.contains("\"conforms\":false") || text.contains("\"conforms\": false") {
             false
         } else {
-            panic!("quipu /validate gave no verdict: {}", &text[..text.len().min(200)]);
+            panic!(
+                "quipu /validate gave no verdict: {}",
+                &text[..text.len().min(200)]
+            );
         }
     };
 
@@ -112,7 +128,9 @@ fn rudof_and_quipu_agree_on_both_verdicts() {
         ("conforming", CONFORMING, true),
         ("violating", VIOLATING, false),
     ] {
-        let rudof = validate(data, CODE_EDGE_SHAPES).expect("rudof ran").conforms;
+        let rudof = validate(data, CODE_EDGE_SHAPES)
+            .expect("rudof ran")
+            .conforms;
         let quipu = quipu_verdict(data);
         assert_eq!(
             rudof, quipu,

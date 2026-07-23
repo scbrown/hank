@@ -124,7 +124,8 @@ pub fn write_knot(endpoint: &str, turtle: &str, source: &str) -> Result<KnotResu
     // Provenance on every write (promotion tail item 4): quipu records actor +
     // source per transaction; an anonymous writer is unauditable, and hank was
     // the only anonymous one left.
-    let body = serde_json::json!({ "turtle": turtle, "actor": "hank", "source": source }).to_string();
+    let body =
+        serde_json::json!({ "turtle": turtle, "actor": "hank", "source": source }).to_string();
 
     // Quipu is known to flap (transient 503 "no available server", recovering in
     // seconds). Ride through TRANSIENT failures — 5xx and transport errors — with

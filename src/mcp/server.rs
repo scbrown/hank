@@ -398,20 +398,21 @@ impl HankMcpServer {
             let turtle = crate::export::to_turtle(&base, &repo).map_err(internal)?;
 
             let source = format!("hank promote {repo} (mcp)");
-            let response = match crate::promote::promote(&endpoint, &turtle, &source).map_err(internal)? {
-                crate::promote::Promotion::Wrote(k) => PromoteResponse {
-                    wrote: true,
-                    count: Some(k.count),
-                    tx_id: k.tx_id,
-                    violations: Vec::new(),
-                },
-                crate::promote::Promotion::Refused(violations) => PromoteResponse {
-                    wrote: false,
-                    count: None,
-                    tx_id: None,
-                    violations,
-                },
-            };
+            let response =
+                match crate::promote::promote(&endpoint, &turtle, &source).map_err(internal)? {
+                    crate::promote::Promotion::Wrote(k) => PromoteResponse {
+                        wrote: true,
+                        count: Some(k.count),
+                        tx_id: k.tx_id,
+                        violations: Vec::new(),
+                    },
+                    crate::promote::Promotion::Refused(violations) => PromoteResponse {
+                        wrote: false,
+                        count: None,
+                        tx_id: None,
+                        violations,
+                    },
+                };
             json_result(&response)
         }
     }
