@@ -119,9 +119,12 @@ fn parse_report(report: &str) -> Validation {
 /// `endpoint` is the Quipu base URL (e.g. from `--to` / config); this appends
 /// `/knot`. NEVER defaulted to a hardcoded host — a promotion that silently picks a
 /// graph is how facts land in the wrong one.
-pub fn write_knot(endpoint: &str, turtle: &str) -> Result<KnotResult> {
+pub fn write_knot(endpoint: &str, turtle: &str, source: &str) -> Result<KnotResult> {
     let url = format!("{}/knot", endpoint.trim_end_matches('/'));
-    let body = serde_json::json!({ "turtle": turtle }).to_string();
+    // Provenance on every write (promotion tail item 4): quipu records actor +
+    // source per transaction; an anonymous writer is unauditable, and hank was
+    // the only anonymous one left.
+    let body = serde_json::json!({ "turtle": turtle, "actor": "hank", "source": source }).to_string();
 
     // Quipu is known to flap (transient 503 "no available server", recovering in
     // seconds). Ride through TRANSIENT failures — 5xx and transport errors — with
@@ -222,12 +225,12 @@ pub struct KnotResult {
 
 /// The full promotion: validate, then write iff it conforms. On non-conformance it
 /// writes NOTHING and returns the violations — the all-or-nothing guarantee.
-pub fn promote(endpoint: &str, turtle: &str) -> Result<Promotion> {
+pub fn promote(endpoint: &str, turtle: &str, source: &str) -> Result<Promotion> {
     let v = validate(turtle, CODE_EDGE_SHAPES)?;
     if !v.conforms {
         return Ok(Promotion::Refused(v.violations));
     }
-    let knot = write_knot(endpoint, turtle)?;
+    let knot = write_knot(endpoint, turtle, source)?;
     Ok(Promotion::Wrote(knot))
 }
 
@@ -331,7 +334,7 @@ bobbin:code_bad a bobbin:CodeSymbol ;
     fn promote_refuses_without_writing_when_invalid() {
         // endpoint is deliberately unreachable; a valid refusal must return BEFORE
         // any network call, so this must not error on the bad endpoint.
-        let out = promote("http://127.0.0.1:1", VIOLATING).expect("no write attempted");
+        let out = promote("http://127.0.0.1:1", VIOLATING, "test").expect("no write attempted");
         match out {
             Promotion::Refused(vs) => assert!(!vs.is_empty()),
             Promotion::Wrote(_) => panic!("wrote invalid facts to Quipu"),

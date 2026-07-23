@@ -792,7 +792,8 @@ impl Cli {
             );
             std::process::exit(2);
         }
-        let outcome = crate::promote::promote(endpoint, &turtle)?;
+        let source = format!("hank promote {repo} (cli)");
+        let outcome = crate::promote::promote(endpoint, &turtle, &source)?;
         let mut out = std::io::stdout();
         let wrote = outcome.report(&mut out)?;
         // A refusal is a could-not-promote, not a success: exit non-zero so a script

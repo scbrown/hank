@@ -1,4 +1,5 @@
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ex:     <http://example.org/> .
 @prefix bobbin: <http://aegis.gastown.local/ontology/> .
 # Node-contract fields present because the real promoter always emits them
 # (verified against live promotions); the node shapes synced 2026-07-23 bind

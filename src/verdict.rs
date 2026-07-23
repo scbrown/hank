@@ -145,7 +145,11 @@ pub fn promote_verdict(
     evidence: &str,
 ) -> Result<crate::promote::KnotResult> {
     let turtle = verdict_turtle(keypair, policy_name, target_ref, satisfied, evidence);
-    crate::promote::write_knot(endpoint, &turtle)
+    crate::promote::write_knot(
+        endpoint,
+        &turtle,
+        &format!("hank verdict: {policy_name} on {target_ref}"),
+    )
 }
 
 /// Escape a value for a Turtle double-quoted string literal.

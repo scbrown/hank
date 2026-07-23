@@ -397,7 +397,8 @@ impl HankMcpServer {
             };
             let turtle = crate::export::to_turtle(&base, &repo).map_err(internal)?;
 
-            let response = match crate::promote::promote(&endpoint, &turtle).map_err(internal)? {
+            let source = format!("hank promote {repo} (mcp)");
+            let response = match crate::promote::promote(&endpoint, &turtle, &source).map_err(internal)? {
                 crate::promote::Promotion::Wrote(k) => PromoteResponse {
                     wrote: true,
                     count: Some(k.count),

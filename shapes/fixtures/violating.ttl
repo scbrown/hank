@@ -1,3 +1,4 @@
+@prefix ex:     <http://example.org/> .
 @prefix bobbin: <http://aegis.gastown.local/ontology/> .
 bobbin:bad_sym a bobbin:CodeSymbol ;
   bobbin:calls "not-an-iri" ;
