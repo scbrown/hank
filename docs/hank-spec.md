@@ -332,7 +332,11 @@ SHACL.
 (§14.4).
 
 **FR-22:** Uncommitted overlay churn MUST NOT be promoted. Hank holds the
-in-flight reality; Quipu holds only the settled record.
+in-flight reality; Quipu holds only the settled record. Enforced structurally:
+`hank promote --commit <ish>` projects `export::to_turtle_at` over the
+**committed git tree** at that ref, never the working tree — an in-flight
+overlay edit or unsaved buffer cannot reach a promotion by construction (the
+hank #15 committed-tree slice).
 
 ### 5.7 Monitor-guided edit verification *(multilspy monitors → Hank, served directly; cap. 8)*
 
@@ -1130,8 +1134,10 @@ commit one:
    binary preserved), behind the `src/git.rs` boundary so a later swap to
    `gix`/`git2` is localized and reversible. Resolves the baseline commit
    (`resolve_commit`) and the commit-diff (`changed_paths`); degrades gracefully
-   outside a repo (§6.4). Building base-graph *content at* a historical ref (vs
-   the working tree) is the remaining slice.
+   outside a repo (§6.4). Content *at* a historical ref is read via
+   `list_files_at` + `read_blob_at` — the base graph (`build_at_ref`) and
+   promotion (`export::to_turtle_at`) both read committed-tree content, never
+   the working tree.
 3. **CPG realization.** Joern-as-subprocess vs Rust-native traversals (§14.1) —
    the single biggest architectural fork; resolve early in Phase 2.
 4. **Branch model.** Named graphs (via Quipu quad support, §9.4/§9.5) are the

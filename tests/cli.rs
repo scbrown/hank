@@ -709,11 +709,21 @@ fn promote_refuses_dir_name_identity_and_accepts_origin() {
     }
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("x.rs"), "pub fn x() -> u32 { 1 }\n").unwrap();
-    Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(dir.path())
-        .assert()
-        .success();
+    // Promotion reads the COMMITTED tree (FR-22), so the fixture must commit —
+    // a working-tree-only file would (correctly) promote nothing.
+    for args in [
+        &["init", "-q"][..],
+        &["config", "user.email", "t@t"],
+        &["config", "user.name", "t"],
+        &["add", "-A"],
+        &["commit", "-qm", "base"],
+    ] {
+        Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .assert()
+            .success();
+    }
 
     // No origin, no --repo: refused BEFORE any network I/O, naming the remedy.
     Command::cargo_bin("hank")
