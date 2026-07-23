@@ -13,7 +13,9 @@ hank daemon --port 4050  # override the port
 
 The daemon binds `[hank.serve] bind_address:mcp_http_port` (default
 `127.0.0.1:3040`). It refuses to start if the graph cannot be built — it never
-serves a graph it does not hold.
+serves a graph it does not hold. SIGINT/SIGTERM drain in-flight requests and
+exit 0: a supervisor's `stop` is a clean stop, and the shutdown is announced on
+stderr, not silent.
 
 ## Who uses it
 
@@ -27,6 +29,10 @@ never answer for repo A.
   session gets a loud once-per-session notice. Down = allowed AND announced,
   never silently allowed, never blocked (see
   [Pre-Edit Policy Guard](policy-guard.md)).
+- **`hank hook post-edit`** extracts the edited file's symbols fresh (their
+  content is what just changed) and asks the resident graph for their external
+  callers via `/callers`. Daemon down = transient fallback with a stderr note —
+  silent to the model, because the advisory is advice, not enforcement.
 - **MCP graph tools** (`hank_callers`, `hank_callees`, `hank_impact`,
   `hank_references`) answer from the resident graph when the request is not
   `path`-scoped; otherwise, and on any daemon failure, they fall back to the

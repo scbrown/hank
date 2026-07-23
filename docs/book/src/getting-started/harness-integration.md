@@ -83,7 +83,11 @@ moment Hank is unavailable. Read
 
 ## Performance note
 
-This prototype builds the call graph transiently on each invocation. Once the
-Phase-3 resident per-tenant overlay lands, the hook becomes a thin client of the
-`hank serve` daemon and meets the sub-100ms budget a synchronous guard needs.
-See [the specification](../design/specification.md) §5.9 (FR-30/FR-31).
+By default the hooks build the call graph transiently on each invocation. With
+a running [resident daemon](../reference/daemon.md) and `[hank.serve]
+use_daemon = true`, both hooks become thin clients of the resident graph — no
+per-invocation build, which is what meets the sub-100ms budget a synchronous
+guard needs. The daemon being down degrades differently per hook: the pre-edit
+guard fails open **loudly**, the post-edit advisory falls back silently (it is
+advice, not enforcement). See
+[the specification](../design/specification.md) §5.9 (FR-30/FR-31).
