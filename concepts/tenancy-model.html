@@ -225,8 +225,13 @@ that reachable frontier — the <em>second</em> caller of the one <code>reachabl
 (FR-12), never a second traversal. The base also keeps a call-site index
 (<code>callers_of_name</code>) keyed by callee name, which is what lets an overlay-NEW
 symbol (one with zero base definitions) find its base callers — the case a
-naive per-file update misses. Still open: FR-17/FR-18 watch integration and
-overlay lifecycle/eviction (hank #5/#6).</p>
+naive per-file update misses.</p>
+<p>On-disk edits drive this automatically (FR-17, hank #5): a <code>notify</code> watcher
+(<code>watch::OverlayRefresh</code>), <code>.gitignore</code>-filtered and debounced, touches the
+tenant's overlay on the fast tier and runs <code>update_frontier</code> on the deferred
+heavy tier, tracking per-file freshness (<code>recomputing</code> while the frontier is
+pending, <code>fresh</code> after). Still open: FR-18 overlay lifecycle/eviction
+(hank #6).</p>
 
                     </main>
 
