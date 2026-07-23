@@ -29,7 +29,9 @@ use super::tools::{
     ImpactResponse, NeighborsResponse, ReachItem, ReconciliationItem, RefItem, ReferencesResponse,
 };
 use crate::config::HankConfig;
-use crate::daemon::client::{fetch_impact, fetch_neighbors, fetch_references, fetch_root};
+use crate::daemon::client::{
+    expected_same_root_daemon, fetch_impact, fetch_neighbors, fetch_references,
+};
 use crate::daemon::ReachedItem;
 use crate::graph::Dir;
 use crate::reconcile::reconcile;
@@ -45,33 +47,15 @@ const DAEMON_TIMEOUT: Duration = Duration::from_millis(500);
 /// probe pre-empting it).
 fn usable_daemon(config_override: Option<&Path>, root: &Path) -> Option<(String, u16)> {
     let config = HankConfig::resolve(config_override, root).ok()?;
-    if !config.serve.use_daemon {
-        return None;
-    }
-    let host = config.serve.bind_address;
-    let port = config.serve.mcp_http_port;
-    let served = match fetch_root(&host, port, DAEMON_TIMEOUT) {
-        Ok(served) => served,
+    // The expected/same-root logic is the shared client helper's (stage 5) —
+    // one implementation of "would this daemon confidently lie to us".
+    match expected_same_root_daemon(&config, root, DAEMON_TIMEOUT)? {
+        Ok(addr) => Some(addr),
         Err(reason) => {
             eprintln!("hank mcp: daemon expected but unusable, transient fallback: {reason}");
-            return None;
+            None
         }
-    };
-    // Canonicalize BOTH sides: the daemon reports the root it was launched
-    // with, which may be spelled differently (symlink, relative path) than
-    // ours. Any doubt means "not the same repo" — fall back rather than lie.
-    let same = match (Path::new(&served).canonicalize(), root.canonicalize()) {
-        (Ok(theirs), Ok(ours)) => theirs == ours,
-        _ => false,
-    };
-    if !same {
-        eprintln!(
-            "hank mcp: daemon at {host}:{port} serves {served}, not {}; transient fallback",
-            root.display()
-        );
-        return None;
     }
-    Some((host, port))
 }
 
 /// Convert a daemon reach item to the MCP wire DTO. The daemon tags provenance

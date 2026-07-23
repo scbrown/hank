@@ -6,19 +6,31 @@
 //! calling a tool. **Advisory only** — the blocking companion is
 //! [`super::pre_edit`].
 //!
-//! This prototype builds the call graph transiently per invocation. Once the
-//! Phase-3 resident per-tenant overlay lands, the hook becomes a thin client of
-//! the `hank serve` daemon and meets the sub-100ms budget a synchronous guard
-//! needs (FR-31).
+//! With `[hank.serve] use_daemon = true` this is a thin client of the resident
+//! daemon (FR-31, hank #1 stage 5): the edited file's symbols are still
+//! extracted fresh HERE (their content is what just changed), but their callers
+//! come from the resident graph — no per-invocation `CodeGraph::build`. The
+//! daemon being unusable falls back to the transient build with a stderr note;
+//! like the MCP tools and unlike the pre-edit guard, fallback is silent to the
+//! model — this is an advisory, not an enforcement surface, and a transient
+//! answer is equally correct.
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use super::HookInput;
+use crate::config::HankConfig;
+use crate::daemon::client::{expected_same_root_daemon, fetch_neighbors};
 use crate::extract::extract_symbols;
 use crate::graph::{CodeGraph, Dir};
+
+/// Budget per localhost round-trip, same rationale as the MCP thin client:
+/// generous against a resident graph, small enough that a wedged daemon costs
+/// one slow query before the transient fallback answers.
+const DAEMON_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// How many impacted symbols to list before summarizing the rest.
 const MAX_LISTED: usize = 8;
@@ -66,23 +78,10 @@ pub fn advisory_for(input_json: &str, default_root: &Path) -> Option<String> {
     if symbols.is_empty() {
         return None;
     }
+    let names: Vec<String> = symbols.into_iter().map(|s| s.name).collect();
 
-    let graph = CodeGraph::build(&root).ok()?;
-    let mut per_symbol: Vec<(String, usize)> = Vec::new();
-    let mut files: BTreeSet<String> = BTreeSet::new();
-    for symbol in &symbols {
-        let external: Vec<_> = graph
-            .direct(&symbol.name, Dir::Callers)
-            .into_iter()
-            .filter(|caller| caller.file != rel)
-            .collect();
-        if !external.is_empty() {
-            per_symbol.push((symbol.name.clone(), external.len()));
-            for caller in &external {
-                files.insert(caller.file.clone());
-            }
-        }
-    }
+    let (mut per_symbol, files) =
+        resident_callers(&root, &rel, &names).or_else(|| transient_callers(&root, &rel, &names))?;
     per_symbol.sort();
     per_symbol.dedup();
     if per_symbol.is_empty() {
@@ -90,6 +89,63 @@ pub fn advisory_for(input_json: &str, default_root: &Path) -> Option<String> {
     }
 
     Some(render(&rel, &per_symbol, &files))
+}
+
+/// Per-symbol external-caller counts and their files. The shared shape both
+/// sources produce, so the advisory renders identically either way.
+type ExternalCallers = (Vec<(String, usize)>, BTreeSet<String>);
+
+/// External callers from the RESIDENT daemon, or `None` to fall back — not
+/// expected (silent), or expected-but-unusable / mid-session failure (stderr
+/// note; an advisory has no enforcement gap to be loud about).
+fn resident_callers(root: &Path, rel: &str, names: &[String]) -> Option<ExternalCallers> {
+    let config = HankConfig::resolve(None, root).ok()?;
+    let (host, port) = match expected_same_root_daemon(&config, root, DAEMON_TIMEOUT)? {
+        Ok(addr) => addr,
+        Err(reason) => {
+            eprintln!("hank post-edit: daemon expected but unusable, transient fallback: {reason}");
+            return None;
+        }
+    };
+    let mut per_symbol: Vec<(String, usize)> = Vec::new();
+    let mut files: BTreeSet<String> = BTreeSet::new();
+    for name in names {
+        let reply = match fetch_neighbors(&host, port, name, Dir::Callers, DAEMON_TIMEOUT) {
+            Ok(reply) => reply,
+            Err(reason) => {
+                eprintln!("hank post-edit: daemon query failed, transient fallback: {reason}");
+                return None;
+            }
+        };
+        let external: Vec<_> = reply.neighbors.iter().filter(|c| c.file != rel).collect();
+        if !external.is_empty() {
+            per_symbol.push((name.clone(), external.len()));
+            files.extend(external.iter().map(|c| c.file.clone()));
+        }
+    }
+    Some((per_symbol, files))
+}
+
+/// External callers from a transient whole-root build — the pre-daemon path,
+/// kept as the fallback.
+fn transient_callers(root: &Path, rel: &str, names: &[String]) -> Option<ExternalCallers> {
+    let graph = CodeGraph::build(root).ok()?;
+    let mut per_symbol: Vec<(String, usize)> = Vec::new();
+    let mut files: BTreeSet<String> = BTreeSet::new();
+    for name in names {
+        let external: Vec<_> = graph
+            .direct(name, Dir::Callers)
+            .into_iter()
+            .filter(|caller| caller.file != rel)
+            .collect();
+        if !external.is_empty() {
+            per_symbol.push((name.clone(), external.len()));
+            for caller in &external {
+                files.insert(caller.file.clone());
+            }
+        }
+    }
+    Some((per_symbol, files))
 }
 
 /// Format the advisory shown to the agent.
@@ -156,5 +212,81 @@ mod tests {
         assert!(advisory_for("not json", Path::new(".")).is_none());
         let payload = serde_json::json!({ "tool_input": { "file_path": "README.md" } }).to_string();
         assert!(advisory_for(&payload, Path::new(".")).is_none());
+    }
+
+    // Project config expecting a daemon at 127.0.0.1:port. Written as the
+    // PROJECT config so it wins over any developer user config for these keys.
+    fn write_daemon_config(root: &Path, port: u16) {
+        let bobbin = root.join(".bobbin");
+        std::fs::create_dir_all(&bobbin).unwrap();
+        std::fs::write(
+            bobbin.join("config.toml"),
+            format!(
+                "[hank.serve]\nuse_daemon = true\nbind_address = \"127.0.0.1\"\n\
+                 mcp_http_port = {port}\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    fn edit_payload(root: &Path, file: &str) -> String {
+        serde_json::json!({
+            "tool_name": "Edit",
+            "cwd": root.to_str().unwrap(),
+            "tool_input": { "file_path": root.join(file).to_str().unwrap() },
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn daemon_EXPECTED_but_DOWN_falls_back_to_the_transient_advisory() {
+        // Port 1 never listens. The advisory must still be produced (transient
+        // fallback) — a down daemon degrades performance, never the advisory.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.rs"), "fn leaf() {}\n").unwrap();
+        std::fs::write(dir.path().join("b.rs"), "fn mid() { leaf(); }\n").unwrap();
+        write_daemon_config(dir.path(), 1);
+
+        let text = advisory_for(&edit_payload(dir.path(), "a.rs"), dir.path())
+            .expect("the transient fallback must still advise");
+        assert!(text.contains("leaf"));
+        assert!(text.contains("b.rs"));
+    }
+
+    // Serving the router needs axum (`mcp` feature); the down/fallback quadrant
+    // above runs feature-free.
+    #[cfg(feature = "mcp")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn daemon_up_and_same_root_advises_from_the_RESIDENT_graph() {
+        use crate::daemon::{http, ResidentEngine};
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.rs"), "fn leaf() {}\n").unwrap();
+        std::fs::write(dir.path().join("b.rs"), "fn mid() { leaf(); }\n").unwrap();
+        let engine = ResidentEngine::build(dir.path(), None).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, http::router(engine)).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        write_daemon_config(dir.path(), port);
+
+        // `late.rs` postdates the resident graph: a transient build would count
+        // it as a second caller file, the resident graph cannot. Its absence
+        // below proves who answered.
+        std::fs::write(dir.path().join("late.rs"), "fn late() { leaf(); }\n").unwrap();
+
+        let payload = edit_payload(dir.path(), "a.rs");
+        let root = dir.path().to_path_buf();
+        let text = tokio::task::spawn_blocking(move || advisory_for(&payload, &root))
+            .await
+            .unwrap()
+            .expect("an up, same-root daemon must advise");
+        assert!(text.contains("b.rs"), "{text}");
+        assert!(
+            !text.contains("late.rs"),
+            "`late.rs` postdates the resident graph — its presence means a \
+             transient build answered, not the daemon: {text}"
+        );
     }
 }

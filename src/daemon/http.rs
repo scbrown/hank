@@ -241,13 +241,41 @@ async fn measure(
     Ok(Json(MeasureReply::from_sizing(&sizing)))
 }
 
-/// Bind `host:port` and serve the router until the process is signalled.
+/// Bind `host:port` and serve the router until SIGINT/SIGTERM, then drain
+/// in-flight requests and exit 0 — a supervisor's `stop` is a clean stop, not
+/// a kill. (The thin clients' loud-when-absent contract covers the window
+/// after: a stopped daemon is announced by its callers, not by this process.)
 pub async fn serve(engine: ResidentEngine, host: &str, port: u16) -> anyhow::Result<()> {
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     eprintln!("hank daemon: liveness surface on http://{addr}/health");
-    axum::serve(listener, router(engine)).await?;
+    axum::serve(listener, router(engine))
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    eprintln!("hank daemon: shut down cleanly");
     Ok(())
+}
+
+/// Resolves on SIGINT (Ctrl-C) or, on unix, SIGTERM — the signals a terminal
+/// or a supervisor actually sends.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
+    eprintln!("hank daemon: shutdown signal received — draining");
 }
 
 #[cfg(test)]

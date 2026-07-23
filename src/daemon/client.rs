@@ -17,9 +17,11 @@
 
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::path::Path;
 use std::time::Duration;
 
 use super::{Definitions, Impact, MeasureReply, Neighbors};
+use crate::config::HankConfig;
 use crate::graph::Dir;
 
 /// Whether a resident daemon answered a liveness probe.
@@ -290,6 +292,43 @@ pub fn fetch_impact(
     )?;
     serde_json::from_str(&body)
         .map_err(|e| format!("daemon at {host}:{port} sent an unparseable impact reply ({e})"))
+}
+
+/// The daemon address from `config`, IF one is expected AND it serves `root`.
+///
+/// Three-state on purpose — the caller's loudness depends on which:
+/// - `None`: no daemon expected (`use_daemon = false`, the default). Absence
+///   is normal; stay silent.
+/// - `Some(Err(reason))`: a daemon IS expected but unusable — down,
+///   unparseable, or serving a DIFFERENT root (a daemon for repo B answering
+///   repo A would not error, it would confidently lie, so the root must match
+///   canonicalized). The caller falls back and reports the reason.
+/// - `Some(Ok((host, port)))`: usable — query it.
+pub fn expected_same_root_daemon(
+    config: &HankConfig,
+    root: &Path,
+    timeout: Duration,
+) -> Option<Result<(String, u16), String>> {
+    if !config.serve.use_daemon {
+        return None;
+    }
+    let host = config.serve.bind_address.clone();
+    let port = config.serve.mcp_http_port;
+    let served = match fetch_root(&host, port, timeout) {
+        Ok(served) => served,
+        Err(reason) => return Some(Err(reason)),
+    };
+    let same = match (Path::new(&served).canonicalize(), root.canonicalize()) {
+        (Ok(theirs), Ok(ours)) => theirs == ours,
+        _ => false,
+    };
+    if !same {
+        return Some(Err(format!(
+            "daemon at {host}:{port} serves {served}, not {}",
+            root.display()
+        )));
+    }
+    Some(Ok((host, port)))
 }
 
 /// Definition sites of `symbol` from the RESIDENT node index
