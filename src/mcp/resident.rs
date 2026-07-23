@@ -25,9 +25,11 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Duration;
 
-use super::tools::{ImpactResponse, NeighborsResponse, ReachItem, ReconciliationItem};
+use super::tools::{
+    ImpactResponse, NeighborsResponse, ReachItem, ReconciliationItem, RefItem, ReferencesResponse,
+};
 use crate::config::HankConfig;
-use crate::daemon::client::{fetch_impact, fetch_neighbors, fetch_root};
+use crate::daemon::client::{fetch_impact, fetch_neighbors, fetch_references, fetch_root};
 use crate::daemon::ReachedItem;
 use crate::graph::Dir;
 use crate::reconcile::reconcile;
@@ -159,6 +161,38 @@ pub(super) fn impact(
     })
 }
 
+/// `hank_references` from the resident node index, or `None` to fall back to
+/// the transient every-file walk — the biggest per-call saving of the three
+/// cutovers, since the transient path re-extracts the whole subtree per query.
+pub(super) fn references(
+    config_override: Option<&Path>,
+    root: &Path,
+    symbol: &str,
+) -> Option<ReferencesResponse> {
+    let (host, port) = usable_daemon(config_override, root)?;
+    match fetch_references(&host, port, symbol, DAEMON_TIMEOUT) {
+        Ok(reply) => Some(ReferencesResponse {
+            symbol: reply.symbol,
+            count: reply.count,
+            definitions: reply
+                .definitions
+                .iter()
+                .map(|d| RefItem {
+                    file: d.file.clone(),
+                    name: symbol.to_string(),
+                    kind: d.kind.clone(),
+                    start_line: d.start_line,
+                    tier: reply.tier.clone(),
+                })
+                .collect(),
+        }),
+        Err(reason) => {
+            eprintln!("hank mcp: daemon references query failed, transient fallback: {reason}");
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,6 +307,28 @@ mod tests {
             .expect("cochange given -> reconciliation");
         assert_eq!(recon.corroborated, vec!["caller.rs".to_string()]);
         assert_eq!(recon.cochange_only, vec!["ghost.rs".to_string()]);
+
+        // References from the daemon too (stage 4): `late` postdates the
+        // resident graph, so a RESIDENT answer has zero sites — a transient
+        // walk would find late.rs. Zero here proves who answered.
+        let root = dir.path().to_path_buf();
+        let cfg = config.clone();
+        let refs = tokio::task::spawn_blocking(move || references(Some(&cfg), &root, "late"))
+            .await
+            .unwrap()
+            .expect("references must come from the daemon");
+        assert_eq!(refs.count, 0, "resident graph predates late.rs");
+
+        // And a symbol the resident graph does hold arrives tier-tagged per item.
+        let root = dir.path().to_path_buf();
+        let cfg = config.clone();
+        let refs = tokio::task::spawn_blocking(move || references(Some(&cfg), &root, "leaf"))
+            .await
+            .unwrap()
+            .expect("references must come from the daemon");
+        assert_eq!(refs.count, 1);
+        assert_eq!(refs.definitions[0].name, "leaf");
+        assert_eq!(refs.definitions[0].tier, "treesitter");
     }
 
     #[tokio::test]

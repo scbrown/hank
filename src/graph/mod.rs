@@ -13,6 +13,7 @@
 
 mod blast;
 mod community;
+mod lookup;
 
 use std::collections::HashMap;
 use std::path::Path;
