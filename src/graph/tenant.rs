@@ -72,10 +72,25 @@ impl TenantRegistry {
     }
 
     /// Record `source` as tenant's truth for `rel` (creating the tenant on
-    /// first touch). The parse is interned by content hash: identical bytes
-    /// across tenants share one allocation (FR-15).
+    /// first touch). Content-hash structural sharing (FR-15) on two levels:
+    ///
+    /// - **Base hit → no overlay storage.** If `source` hashes to what the base
+    ///   already holds for `rel`, the overlay would only re-state base truth, so
+    ///   nothing is stored — any prior touch of `rel` is dropped and the base
+    ///   resumes answering. This is the primary §6.2 lever: a tenant whose edits
+    ///   match the baseline costs nothing.
+    /// - **Cross-tenant hit → shared parse.** Otherwise the parse is interned by
+    ///   content hash, so N tenants holding identical bytes share ONE
+    ///   [`ParsedFile`] allocation rather than N copies.
     pub fn touch(&mut self, tenant: &str, rel: &str, source: &str) {
         let parsed = ParsedFile::parse(rel, source);
+        // Base hit: identical to the baseline ⇒ the overlay adds nothing.
+        if self.base.file(rel).is_some_and(|f| f.hash == parsed.hash) {
+            if let Some(overlay) = self.overlays.get_mut(tenant) {
+                overlay.revert(rel);
+            }
+            return;
+        }
         let shared = self
             .intern
             .entry(parsed.hash.clone())
@@ -85,6 +100,30 @@ impl TenantRegistry {
             .entry(tenant.to_string())
             .or_default()
             .touch(rel, shared);
+    }
+
+    /// FR-15 sharing stats over the live overlays (§6.2): how much overlay
+    /// storage the content-hash intern is actually saving right now.
+    #[must_use]
+    pub fn sharing_stats(&self) -> SharingStats {
+        let total_touches: usize = self.overlays.values().map(Overlay::touched_count).sum();
+        // Distinct parses ACTUALLY referenced by a live overlay — not
+        // `intern.len()`, which also counts parses whose only holders have
+        // since reverted (retained until FR-18 eviction, hank #6).
+        let mut live: std::collections::BTreeSet<*const ParsedFile> =
+            std::collections::BTreeSet::new();
+        for overlay in self.overlays.values() {
+            for rel in overlay.touched() {
+                if let Some(p) = overlay.parsed(rel) {
+                    live.insert(Arc::as_ptr(p));
+                }
+            }
+        }
+        SharingStats {
+            total_touches,
+            unique_parses: live.len(),
+            interned: self.intern.len(),
+        }
     }
 
     /// Drop tenant's touch of `rel` (base resumes answering). No-op for an
@@ -142,6 +181,42 @@ impl TenantRegistry {
         RegistryStatus {
             base_commit: self.base.commit().to_string(),
             active_overlays: active,
+        }
+    }
+}
+
+/// FR-15 sharing measurement over the live overlays (§6.2). The lever is the
+/// gap between `total_touches` (what N tenants each hold) and `unique_parses`
+/// (the distinct [`ParsedFile`] allocations actually backing them) — when
+/// tenants edit alike, the second stays flat while the first grows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SharingStats {
+    /// Touched files summed across every live overlay.
+    pub total_touches: usize,
+    /// Distinct parse allocations those touches share (by pointer identity).
+    pub unique_parses: usize,
+    /// Entries in the intern cache — `>= unique_parses`, the excess being
+    /// parses retained after all their overlays reverted (freed by FR-18
+    /// eviction, hank #6; the excess is logged, never silently dropped).
+    pub interned: usize,
+}
+
+impl SharingStats {
+    /// Overlay parses saved by sharing: `total_touches - unique_parses`. Zero
+    /// when every touch is unique; grows as tenants converge on the same bytes.
+    #[must_use]
+    pub fn saved(&self) -> usize {
+        self.total_touches.saturating_sub(self.unique_parses)
+    }
+
+    /// Sharing ratio in `[0.0, 1.0]`: the fraction of touches that cost no new
+    /// parse. `0.0` when nothing is touched or nothing is shared.
+    #[must_use]
+    pub fn ratio(&self) -> f64 {
+        if self.total_touches == 0 {
+            0.0
+        } else {
+            self.saved() as f64 / self.total_touches as f64
         }
     }
 }

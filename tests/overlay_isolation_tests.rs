@@ -297,6 +297,89 @@ fn frontier_is_bounded_and_spans_both_directions_and_is_tenant_isolated() {
 }
 
 #[test]
+fn a_touch_matching_base_content_contributes_no_overlay_storage_fr15() {
+    // The primary §6.2 lever: an edit identical to the baseline costs nothing.
+    let (_dir, mut reg) = registry();
+    // mid.rs at base is exactly this — touching it with the same bytes is a
+    // no-op, so no overlay is created.
+    reg.touch("a", "mid.rs", "fn mid() { leaf(); }\n");
+    assert!(
+        reg.overlay("a").is_none_or(|o| !o.is_touched("mid.rs")),
+        "base-identical touch must not mask the file"
+    );
+    assert_eq!(
+        caller_names(&reg, "a", "leaf"),
+        ["mid"],
+        "base truth stands"
+    );
+
+    // Edit away from base, then back to base content: the second touch UN-masks,
+    // dropping the overlay storage the first one added.
+    reg.touch("a", "mid.rs", "fn mid2() { leaf(); }\n");
+    assert!(reg.overlay("a").unwrap().is_touched("mid.rs"));
+    reg.touch("a", "mid.rs", "fn mid() { leaf(); }\n"); // back to base
+    assert!(
+        !reg.overlay("a").unwrap().is_touched("mid.rs"),
+        "returning to base content releases the overlay entry"
+    );
+    assert_eq!(caller_names(&reg, "a", "leaf"), ["mid"]);
+}
+
+#[test]
+fn thirty_two_overlays_of_mostly_identical_content_share_storage_fr15() {
+    // §6.2/§14.2: N developers must cost one base + N small deltas. 32 tenants
+    // each add the SAME new helper file; a handful add a unique variant. The
+    // intern cache must collapse the identical ones to a single parse.
+    let (_dir, mut reg) = registry();
+    const TENANTS: usize = 32;
+    const UNIQUE: usize = 4; // a few tenants edit differently
+    let shared = "fn shared_helper() { leaf(); }\n";
+    for i in 0..TENANTS {
+        let t = format!("dev{i}");
+        if i < UNIQUE {
+            reg.touch(&t, "helper.rs", &format!("fn helper{i}() {{ leaf(); }}\n"));
+        } else {
+            reg.touch(&t, "helper.rs", shared);
+        }
+    }
+
+    let stats = reg.sharing_stats();
+    // Configurable budget: distinct parses must stay near the number of
+    // DISTINCT contents (UNIQUE + 1 shared), not scale with tenant count.
+    let budget = UNIQUE + 1;
+    assert_eq!(stats.total_touches, TENANTS);
+    assert_eq!(
+        stats.unique_parses, budget,
+        "sharing must collapse identical content to one parse each"
+    );
+    assert!(
+        stats.unique_parses <= budget,
+        "unique parses {} exceeded the budget {budget}",
+        stats.unique_parses
+    );
+
+    // AC #4: log the measured sharing, and log the retained-but-unreferenced
+    // excess (interned - unique) so bounded coverage is never silent.
+    eprintln!(
+        "FR-15 sharing: {} touches → {} unique parses (ratio {:.2}, saved {}); \
+         intern cache holds {} (excess {} retained pending FR-18 eviction)",
+        stats.total_touches,
+        stats.unique_parses,
+        stats.ratio(),
+        stats.saved(),
+        stats.interned,
+        stats.interned.saturating_sub(stats.unique_parses),
+    );
+    assert!(stats.ratio() > 0.8, "28/32 identical ⇒ high sharing");
+
+    // And the sharing is real at the allocation level: the 28 shared tenants
+    // point at ONE ParsedFile.
+    let p = reg.overlay("dev31").unwrap().parsed("helper.rs").unwrap();
+    let q = reg.overlay("dev5").unwrap().parsed("helper.rs").unwrap();
+    assert!(Arc::ptr_eq(p, q), "identical content ⇒ one allocation");
+}
+
+#[test]
 fn status_reports_base_commit_and_active_overlays() {
     let (_dir, mut reg) = registry();
     reg.touch("a", "mid.rs", "fn mid2() { leaf(); }\n");
