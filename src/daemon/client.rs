@@ -140,6 +140,22 @@ pub fn fetch_measure(
     })
     .to_string();
 
+    let raw = http_post(host, port, "/measure", &body, timeout)?;
+    serde_json::from_str::<MeasureReply>(&raw)
+        .map_err(|e| format!("daemon at {addr} sent an unparseable measure reply ({e})"))
+}
+
+/// Raw synchronous HTTP POST of a JSON body: the reply body on a 2xx,
+/// `Err(reason)` on any other outcome. Same `std::net`-only shape and same
+/// contract as [`http_get`].
+fn http_post(
+    host: &str,
+    port: u16,
+    path: &str,
+    body: &str,
+    timeout: Duration,
+) -> Result<String, String> {
+    let addr = format!("{host}:{port}");
     let Ok(mut addrs) = addr.to_socket_addrs() else {
         return Err(format!("cannot resolve {addr}"));
     };
@@ -152,7 +168,7 @@ pub fn fetch_measure(
     let _ = stream.set_write_timeout(Some(timeout));
 
     let req = format!(
-        "POST /measure HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\n\
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\n\
          Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
@@ -172,12 +188,10 @@ pub fn fetch_measure(
     if !status.starts_with('2') {
         return Err(format!("daemon at {addr} returned HTTP {status}"));
     }
-    let payload = raw
-        .split("\r\n\r\n")
+    raw.split("\r\n\r\n")
         .nth(1)
-        .ok_or_else(|| format!("daemon at {addr} sent no body"))?;
-    serde_json::from_str::<MeasureReply>(payload)
-        .map_err(|e| format!("daemon at {addr} sent an unparseable measure reply ({e})"))
+        .map(str::to_string)
+        .ok_or_else(|| format!("daemon at {addr} sent no body"))
 }
 
 /// Raw synchronous HTTP GET: the body on a 2xx, `Err(reason)` on any other
@@ -233,6 +247,18 @@ fn urlencode(s: &str) -> String {
         }
     }
     out
+}
+
+/// The daemon's full `/status` body as JSON. `Err` means "no usable daemon",
+/// handled by the caller's fallback.
+pub fn fetch_status_json(
+    host: &str,
+    port: u16,
+    timeout: Duration,
+) -> Result<serde_json::Value, String> {
+    let body = http_get(host, port, "/status", timeout)?;
+    serde_json::from_str(&body)
+        .map_err(|e| format!("daemon at {host}:{port} sent an unparseable status ({e})"))
 }
 
 /// The analysis root the daemon at `host:port` serves, from `GET /status`. A
@@ -329,6 +355,25 @@ pub fn expected_same_root_daemon(
         )));
     }
     Some(Ok((host, port)))
+}
+
+/// Feed the daemon's overlay for `tenant` with the just-saved `rel` and get
+/// the FR-30 advisory back (`POST /edit`; the daemon reads the file from disk,
+/// root-confined). `Err` means fall back to the transient advisory — the edit
+/// is then NOT recorded in any overlay, which is fine: the overlay is a cache
+/// of the tenant's edits, not the system of record (the file on disk is).
+pub fn fetch_edit(
+    host: &str,
+    port: u16,
+    tenant: &str,
+    rel: &str,
+    timeout: Duration,
+) -> Result<super::EditReply, String> {
+    let addr = format!("{host}:{port}");
+    let body = serde_json::json!({ "tenant": tenant, "rel": rel }).to_string();
+    let raw = http_post(host, port, "/edit", &body, timeout)?;
+    serde_json::from_str(&raw)
+        .map_err(|e| format!("daemon at {addr} sent an unparseable edit reply ({e})"))
 }
 
 /// Definition sites of `symbol` from the RESIDENT node index

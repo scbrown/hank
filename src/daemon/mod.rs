@@ -25,23 +25,24 @@
 //!    The seam is here; the signing is that issue's job, not this stage's.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
 use crate::config::HankConfig;
-use crate::graph::{CodeGraph, Dir};
+use crate::graph::{Base, CodeGraph, Dir, TenantRegistry};
 use crate::hook::Sizing;
 use crate::policy::PolicyConfig;
 
 pub mod client;
 #[cfg(feature = "mcp")]
 pub(crate) mod http;
+mod tenanted;
 pub mod wire;
 
 use wire::{def_item, graph_tier, reached_item};
 pub use wire::{
-    DefItem, Definitions, EngineStatus, FileSymbolItem, FileSymbols, Impact, MeasureReply,
-    Neighbors, ReachedItem,
+    AdvisedSymbol, DefItem, Definitions, EditReply, EngineStatus, FileSymbolItem, FileSymbols,
+    Impact, MeasureReply, Neighbors, ReachedItem,
 };
 
 /// The base graph plus its policy snapshot, built once and held for the process
@@ -60,6 +61,15 @@ struct Engine {
     built_at: SystemTime,
     nodes: usize,
     edges: usize,
+    /// The tenant layer (hank #2 wiring): a shared [`Base`] at the startup
+    /// HEAD plus per-tenant overlays, fed by `POST /edit`. `None` outside a
+    /// git repo — a `Base` needs a commit to anchor to; the working-tree
+    /// `graph` above keeps serving the un-tenanted surface either way.
+    /// Tenant views compose over the COMMITTED base by design (FR-22 keeps
+    /// overlay churn distinct from committed truth), so an uncommitted
+    /// working-tree delta at startup is visible to the legacy surface and
+    /// absent from tenant views until a tenant touches those files.
+    registry: Option<RwLock<TenantRegistry>>,
 }
 
 impl ResidentEngine {
@@ -73,6 +83,12 @@ impl ResidentEngine {
         let config = HankConfig::resolve(config_override, root)?;
         let graph = CodeGraph::build(root)?;
         let (nodes, edges) = graph.stats();
+        // The tenant layer needs a commit to anchor its shared base to.
+        // Outside a repo there is none — the engine still serves, un-tenanted,
+        // and /status says the tenant layer is absent rather than empty.
+        let registry = Base::build_at(root, "HEAD")
+            .ok()
+            .map(|base| RwLock::new(TenantRegistry::new(base)));
         Ok(Self {
             inner: Arc::new(Engine {
                 root: root.to_path_buf(),
@@ -81,6 +97,7 @@ impl ResidentEngine {
                 built_at: SystemTime::now(),
                 nodes,
                 edges,
+                registry,
             }),
         })
     }
@@ -208,6 +225,12 @@ impl ResidentEngine {
             edges: self.inner.edges,
             uptime_secs,
             tier: crate::types::Tier::served(),
+            tenant_layer: self
+                .inner
+                .registry
+                .as_ref()
+                .and_then(|lock| lock.read().ok())
+                .map(|reg| reg.status()),
         }
     }
 }

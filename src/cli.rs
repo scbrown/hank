@@ -309,7 +309,7 @@ impl Cli {
             Commands::Watch { path } => self.watch(path).await,
             Commands::Status => self.status(),
             Commands::Hook { event } => match event {
-                HookEvent::PostEdit => crate::hook::run_post_edit(),
+                HookEvent::PostEdit => crate::hook::run_post_edit(self.tenant.as_deref()),
                 HookEvent::PreEdit => {
                     crate::hook::run_pre_edit(self.tenant.as_deref(), self.config.as_deref())
                 }

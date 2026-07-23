@@ -177,6 +177,21 @@ pub(super) fn references(
     }
 }
 
+/// The daemon's tenant layer (base commit + active overlays) for
+/// `hank_status`, when a usable daemon holds one. `None` collapses "no daemon
+/// expected", "daemon unusable", and "layer absent (not a repo)" — the
+/// daemon's own `/status` distinguishes them; here absence just means the
+/// status has no tenant facts to add.
+pub(super) fn tenant_layer(
+    config_override: Option<&Path>,
+    root: &Path,
+) -> Option<serde_json::Value> {
+    let (host, port) = usable_daemon(config_override, root)?;
+    let body = crate::daemon::client::fetch_status_json(&host, port, DAEMON_TIMEOUT).ok()?;
+    let layer = body.get("tenant_layer")?.clone();
+    (!layer.is_null()).then_some(layer)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

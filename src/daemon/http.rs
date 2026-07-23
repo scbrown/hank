@@ -40,6 +40,7 @@ pub fn router(engine: ResidentEngine) -> Router {
         .route("/symbols", get(symbols))
         .route("/dataflow", get(dataflow))
         .route("/measure", post(measure))
+        .route("/edit", post(edit))
         .with_state(engine)
 }
 
@@ -55,65 +56,145 @@ async fn status(State(engine): State<ResidentEngine>) -> Json<EngineStatus> {
     Json(engine.status())
 }
 
-/// `?symbol=NAME` for the neighbor endpoints.
+/// `?symbol=NAME[&tenant=T]` for the neighbor/reference endpoints. With
+/// `tenant`, the answer resolves against that tenant's `base + overlay` view;
+/// without it, against the un-tenanted working-tree snapshot (unchanged).
 #[derive(Debug, Deserialize)]
 struct SymbolQuery {
     symbol: String,
+    tenant: Option<String>,
 }
 
-/// `?symbol=NAME&hops=N` for `/impact`; `hops` defaults to 5, matching the CLI.
+/// `?symbol=NAME&hops=N[&tenant=T]`; `hops` defaults to 5, matching the CLI.
 #[derive(Debug, Deserialize)]
 struct ImpactQuery {
     symbol: String,
     hops: Option<u32>,
+    tenant: Option<String>,
 }
 
-/// Direct callers of a symbol, from the resident graph.
+/// A tenant was named but the tenant layer is absent (the root is not a git
+/// repo, so no commit anchors a shared base). An explicit refusal — never an
+/// empty answer wearing a normal one.
+const NO_TENANT_LAYER: StatusCode = StatusCode::PRECONDITION_FAILED;
+
+/// Direct callers of a symbol.
 async fn callers(
     State(engine): State<ResidentEngine>,
     Query(q): Query<SymbolQuery>,
-) -> Json<Neighbors> {
-    Json(engine.neighbors(&q.symbol, Dir::Callers))
+) -> Result<Json<Neighbors>, StatusCode> {
+    match &q.tenant {
+        Some(t) => engine
+            .neighbors_for(t, &q.symbol, Dir::Callers)
+            .map(Json)
+            .ok_or(NO_TENANT_LAYER),
+        None => Ok(Json(engine.neighbors(&q.symbol, Dir::Callers))),
+    }
 }
 
-/// Direct callees of a symbol, from the resident graph.
+/// Direct callees of a symbol.
 async fn callees(
     State(engine): State<ResidentEngine>,
     Query(q): Query<SymbolQuery>,
-) -> Json<Neighbors> {
-    Json(engine.neighbors(&q.symbol, Dir::Callees))
+) -> Result<Json<Neighbors>, StatusCode> {
+    match &q.tenant {
+        Some(t) => engine
+            .neighbors_for(t, &q.symbol, Dir::Callees)
+            .map(Json)
+            .ok_or(NO_TENANT_LAYER),
+        None => Ok(Json(engine.neighbors(&q.symbol, Dir::Callees))),
+    }
 }
 
-/// Blast radius of changing a symbol, from the resident graph.
+/// Blast radius of changing a symbol.
 async fn impact(
     State(engine): State<ResidentEngine>,
     Query(q): Query<ImpactQuery>,
-) -> Json<Impact> {
-    Json(engine.impact(&q.symbol, q.hops.unwrap_or(5)))
+) -> Result<Json<Impact>, StatusCode> {
+    let hops = q.hops.unwrap_or(5);
+    match &q.tenant {
+        Some(t) => engine
+            .impact_for(t, &q.symbol, hops)
+            .map(Json)
+            .ok_or(NO_TENANT_LAYER),
+        None => Ok(Json(engine.impact(&q.symbol, hops))),
+    }
 }
 
-/// Definition sites of a symbol by name, from the resident node index — the
-/// `hank_references` answer with no per-call re-extraction.
+/// Definition sites of a symbol by name.
 async fn references(
     State(engine): State<ResidentEngine>,
     Query(q): Query<SymbolQuery>,
-) -> Json<Definitions> {
-    Json(engine.references(&q.symbol))
+) -> Result<Json<Definitions>, StatusCode> {
+    match &q.tenant {
+        Some(t) => engine
+            .references_for(t, &q.symbol)
+            .map(Json)
+            .ok_or(NO_TENANT_LAYER),
+        None => Ok(Json(engine.references(&q.symbol))),
+    }
 }
 
-/// `?file=REL` for `/symbols`.
+/// `?file=REL[&tenant=T]` for `/symbols`.
 #[derive(Debug, Deserialize)]
 struct FileQuery {
     file: String,
+    tenant: Option<String>,
 }
 
-/// The symbols one file contributes to the resident graph, at its build
-/// snapshot. See [`FileSymbols`] for the `known` semantics.
+/// The symbols one file contributes, at the relevant snapshot. See
+/// [`FileSymbols`] for the `known` semantics.
 async fn symbols(
     State(engine): State<ResidentEngine>,
     Query(q): Query<FileQuery>,
-) -> Json<FileSymbols> {
-    Json(engine.symbols(&q.file))
+) -> Result<Json<FileSymbols>, StatusCode> {
+    match &q.tenant {
+        Some(t) => engine
+            .symbols_for(t, &q.file)
+            .map(Json)
+            .ok_or(NO_TENANT_LAYER),
+        None => Ok(Json(engine.symbols(&q.file))),
+    }
+}
+
+/// `POST /edit` body — the FR-30 feed: record the edit in the tenant's
+/// overlay, answer the advisory from the fresh view. `content` is optional;
+/// when omitted the daemon reads `rel` from disk (the post-edit hook's case —
+/// the file was just saved), CONFINED TO THE ROOT like `/measure`.
+#[derive(Debug, Deserialize)]
+struct EditRequest {
+    tenant: String,
+    /// The edited file, relative to the root.
+    rel: String,
+    /// The file's new content; omit to read it from disk.
+    #[serde(default)]
+    content: Option<String>,
+}
+
+/// Feed a tenant's overlay and advise (FR-30). 412 when the tenant layer is
+/// absent (not a repo); 400 for a path escaping the root.
+async fn edit(
+    State(engine): State<ResidentEngine>,
+    Json(req): Json<EditRequest>,
+) -> Result<Json<super::EditReply>, StatusCode> {
+    let content = match req.content {
+        Some(content) => content,
+        None => {
+            let root = engine.root();
+            let joined = root.join(&req.rel);
+            let (Ok(canon), Ok(canon_root)) = (joined.canonicalize(), root.canonicalize()) else {
+                return Err(StatusCode::BAD_REQUEST);
+            };
+            if !canon.starts_with(&canon_root) {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            std::fs::read_to_string(&canon).map_err(|_| StatusCode::BAD_REQUEST)?
+        }
+    };
+    engine
+        .edit(&req.tenant, &req.rel, &content)
+        .map(Json)
+        .ok_or(NO_TENANT_LAYER)
 }
 
 /// Query for `/dataflow`, mirroring the `hank_dataflow` request.

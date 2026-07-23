@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use super::HookInput;
 use crate::config::HankConfig;
-use crate::daemon::client::{expected_same_root_daemon, fetch_neighbors};
+use crate::daemon::client::{expected_same_root_daemon, fetch_edit};
 use crate::extract::extract_symbols;
 use crate::graph::{CodeGraph, Dir};
 
@@ -37,12 +37,13 @@ const MAX_LISTED: usize = 8;
 
 /// Run the `post-edit` hook: read the harness payload from stdin and, if the
 /// edit has cross-file impact, print the `PostToolUse` advisory envelope.
-pub fn run_post_edit() -> anyhow::Result<()> {
+/// `tenant` is the session's overlay identity (the global `--tenant` flag).
+pub fn run_post_edit(tenant: Option<&str>) -> anyhow::Result<()> {
     let mut buf = String::new();
     std::io::stdin().lock().read_to_string(&mut buf).ok();
     let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
-    if let Some(text) = advisory_for(&buf, &root) {
+    if let Some(text) = advisory_for(&buf, &root, tenant) {
         let envelope = serde_json::json!({
             "hookSpecificOutput": {
                 "hookEventName": "PostToolUse",
@@ -58,7 +59,7 @@ pub fn run_post_edit() -> anyhow::Result<()> {
 /// Compute the advisory text for a hook payload, or `None` when there is nothing
 /// useful to say (unparseable, non-Rust, or no cross-file impact).
 #[must_use]
-pub fn advisory_for(input_json: &str, default_root: &Path) -> Option<String> {
+pub fn advisory_for(input_json: &str, default_root: &Path, tenant: Option<&str>) -> Option<String> {
     let input = HookInput::parse(input_json)?;
     let file_path = input.tool_input.file_path.clone()?;
     let file = PathBuf::from(&file_path);
@@ -81,7 +82,7 @@ pub fn advisory_for(input_json: &str, default_root: &Path) -> Option<String> {
     let names: Vec<String> = symbols.into_iter().map(|s| s.name).collect();
 
     let (mut per_symbol, files) =
-        resident_callers(&root, &rel, &names).or_else(|| transient_callers(&root, &rel, &names))?;
+        resident_feed(&root, &rel, tenant).or_else(|| transient_callers(&root, &rel, &names))?;
     per_symbol.sort();
     per_symbol.dedup();
     if per_symbol.is_empty() {
@@ -95,10 +96,13 @@ pub fn advisory_for(input_json: &str, default_root: &Path) -> Option<String> {
 /// sources produce, so the advisory renders identically either way.
 type ExternalCallers = (Vec<(String, usize)>, BTreeSet<String>);
 
-/// External callers from the RESIDENT daemon, or `None` to fall back — not
-/// expected (silent), or expected-but-unusable / mid-session failure (stderr
-/// note; an advisory has no enforcement gap to be loud about).
-fn resident_callers(root: &Path, rel: &str, names: &[String]) -> Option<ExternalCallers> {
+/// The FR-30 cycle against the RESIDENT daemon: ONE `POST /edit` records the
+/// just-saved file in this tenant's overlay AND returns the advisory from the
+/// fresh composed view. `None` to fall back — daemon not expected (silent), or
+/// expected-but-unusable (stderr note; an advisory has no enforcement gap to
+/// be loud about). On fallback the edit is not recorded anywhere, which is
+/// fine: the overlay caches the tenant's edits, the file on disk is the record.
+fn resident_feed(root: &Path, rel: &str, tenant: Option<&str>) -> Option<ExternalCallers> {
     let config = HankConfig::resolve(None, root).ok()?;
     let (host, port) = match expected_same_root_daemon(&config, root, DAEMON_TIMEOUT)? {
         Ok(addr) => addr,
@@ -107,23 +111,21 @@ fn resident_callers(root: &Path, rel: &str, names: &[String]) -> Option<External
             return None;
         }
     };
-    let mut per_symbol: Vec<(String, usize)> = Vec::new();
-    let mut files: BTreeSet<String> = BTreeSet::new();
-    for name in names {
-        let reply = match fetch_neighbors(&host, port, name, Dir::Callers, DAEMON_TIMEOUT) {
-            Ok(reply) => reply,
-            Err(reason) => {
-                eprintln!("hank post-edit: daemon query failed, transient fallback: {reason}");
-                return None;
-            }
-        };
-        let external: Vec<_> = reply.neighbors.iter().filter(|c| c.file != rel).collect();
-        if !external.is_empty() {
-            per_symbol.push((name.clone(), external.len()));
-            files.extend(external.iter().map(|c| c.file.clone()));
+    let tenant = tenant.unwrap_or("single-tenant");
+    match fetch_edit(&host, port, tenant, rel, DAEMON_TIMEOUT) {
+        Ok(reply) => Some((
+            reply
+                .advised
+                .into_iter()
+                .map(|a| (a.symbol, a.external_callers))
+                .collect(),
+            reply.files.into_iter().collect(),
+        )),
+        Err(reason) => {
+            eprintln!("hank post-edit: daemon edit feed failed, transient fallback: {reason}");
+            None
         }
     }
-    Some((per_symbol, files))
 }
 
 /// External callers from a transient whole-root build — the pre-daemon path,
@@ -185,7 +187,7 @@ mod tests {
         })
         .to_string();
 
-        let text = advisory_for(&payload, dir.path()).expect("expected an advisory");
+        let text = advisory_for(&payload, dir.path(), None).expect("expected an advisory");
         assert!(text.contains("leaf"));
         assert!(text.contains("b.rs"));
     }
@@ -204,14 +206,14 @@ mod tests {
             "tool_input": { "file_path": dir.path().join("a.rs").to_str().unwrap() },
         })
         .to_string();
-        assert!(advisory_for(&payload, dir.path()).is_none());
+        assert!(advisory_for(&payload, dir.path(), None).is_none());
     }
 
     #[test]
     fn quiet_on_non_rust_or_garbage() {
-        assert!(advisory_for("not json", Path::new(".")).is_none());
+        assert!(advisory_for("not json", Path::new("."), None).is_none());
         let payload = serde_json::json!({ "tool_input": { "file_path": "README.md" } }).to_string();
-        assert!(advisory_for(&payload, Path::new(".")).is_none());
+        assert!(advisory_for(&payload, Path::new("."), None).is_none());
     }
 
     // Project config expecting a daemon at 127.0.0.1:port. Written as the
@@ -247,7 +249,7 @@ mod tests {
         std::fs::write(dir.path().join("b.rs"), "fn mid() { leaf(); }\n").unwrap();
         write_daemon_config(dir.path(), 1);
 
-        let text = advisory_for(&edit_payload(dir.path(), "a.rs"), dir.path())
+        let text = advisory_for(&edit_payload(dir.path(), "a.rs"), dir.path(), None)
             .expect("the transient fallback must still advise");
         assert!(text.contains("leaf"));
         assert!(text.contains("b.rs"));
@@ -257,12 +259,29 @@ mod tests {
     // above runs feature-free.
     #[cfg(feature = "mcp")]
     #[tokio::test(flavor = "multi_thread")]
-    async fn daemon_up_and_same_root_advises_from_the_RESIDENT_graph() {
+    async fn daemon_up_and_same_root_advises_from_the_RESIDENT_view_and_feeds_the_overlay() {
         use crate::daemon::{http, ResidentEngine};
+        // The tenant layer anchors to a COMMIT, so the fixture is a real repo.
         let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?} failed");
+        };
+        run(&["init", "-q", "-b", "main"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
         std::fs::write(dir.path().join("a.rs"), "fn leaf() {}\n").unwrap();
         std::fs::write(dir.path().join("b.rs"), "fn mid() { leaf(); }\n").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-qm", "base"]);
+
         let engine = ResidentEngine::build(dir.path(), None).unwrap();
+        let observer = engine.clone();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
@@ -271,22 +290,29 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         write_daemon_config(dir.path(), port);
 
-        // `late.rs` postdates the resident graph: a transient build would count
-        // it as a second caller file, the resident graph cannot. Its absence
-        // below proves who answered.
+        // `late.rs` is UNCOMMITTED and untouched: the tenant view composes
+        // over base@HEAD, so it must not appear — a transient build would see
+        // it. Its absence below proves who answered.
         std::fs::write(dir.path().join("late.rs"), "fn late() { leaf(); }\n").unwrap();
 
         let payload = edit_payload(dir.path(), "a.rs");
         let root = dir.path().to_path_buf();
-        let text = tokio::task::spawn_blocking(move || advisory_for(&payload, &root))
+        let text = tokio::task::spawn_blocking(move || advisory_for(&payload, &root, Some("t1")))
             .await
             .unwrap()
             .expect("an up, same-root daemon must advise");
         assert!(text.contains("b.rs"), "{text}");
         assert!(
             !text.contains("late.rs"),
-            "`late.rs` postdates the resident graph — its presence means a \
-             transient build answered, not the daemon: {text}"
+            "`late.rs` is uncommitted and untouched — its presence means a \
+             transient build answered, not the tenant view: {text}"
         );
+
+        // And the advisory FED the overlay (FR-30): the daemon now holds the
+        // edit as tenant t1's touch of a.rs.
+        let reg = observer.registry().expect("repo ⇒ tenant layer");
+        let reg = reg.read().unwrap();
+        let overlay = reg.overlay("t1").expect("the edit created t1's overlay");
+        assert!(overlay.is_touched("a.rs"));
     }
 }
