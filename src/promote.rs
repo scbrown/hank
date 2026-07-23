@@ -4,8 +4,14 @@
 //! THE ORDER IS THE CONTRACT. `export::to_turtle` produces the facts; this module
 //! SHACL-validates them against the shipped shapes BEFORE any write, and refuses
 //! the whole promotion on a single violation (all-or-nothing per commit, §6.3).
-//! There are no partial writes: a promotion either validates and lands whole, or
-//! is refused whole with the specific violations.
+//! Validation is always whole-graph. The WRITE is chunked when the payload would
+//! exceed Quipu's request-body limit (axum defaults to 2 MiB and the deployed
+//! server sets no override — a 2.28 MB projection of the quipu repo itself came
+//! back 413, aegis-hbiw): entity blocks are split across multiple `/knot` posts,
+//! each under the limit, prefixes replicated. A chunked write is NOT atomic
+//! across chunks — if chunk k fails, chunks 0..k are landed — but every IRI is
+//! deterministic and `/knot` supersedes, so a re-run converges to the same graph
+//! rather than duplicating. The failure message names exactly what landed.
 //!
 //! WHY IN-PROCESS VALIDATION, NOT QUIPU'S. Quipu exposes `/validate`, and it works.
 //! But validating against the same server you are about to write to proves only
@@ -224,22 +230,97 @@ pub struct KnotResult {
     pub tx_id: Option<u64>,
 }
 
-/// The full promotion: validate, then write iff it conforms. On non-conformance it
-/// writes NOTHING and returns the violations — the all-or-nothing guarantee.
+/// Stay safely under axum's 2 MiB default body limit: the Turtle is JSON-string
+/// encoded (quotes/newlines escape to two bytes) before it travels, so leave
+/// headroom for that inflation plus the JSON envelope.
+const CHUNK_LIMIT: usize = 1_500_000;
+
+/// Split a Turtle document into chunks of whole entity blocks, each chunk
+/// carrying the prefix header. `to_turtle` separates entity blocks with blank
+/// lines and never emits blank nodes, so a block boundary is a safe split point.
+///
+/// Errors if a single block exceeds `limit` — that cannot be split without
+/// breaking a statement, and silently posting it would just 413 downstream.
+fn chunk_turtle(turtle: &str, limit: usize) -> Result<Vec<String>> {
+    if turtle.len() <= limit {
+        return Ok(vec![turtle.to_string()]);
+    }
+    let mut blocks = turtle.split("\n\n");
+    // The first "block" is the @prefix header `to_turtle` puts at the top.
+    let header = blocks.next().unwrap_or_default();
+    let mut chunks = Vec::new();
+    let mut cur = String::from(header);
+    for block in blocks {
+        if block.trim().is_empty() {
+            continue;
+        }
+        if header.len() + 2 + block.len() > limit {
+            return Err(Error::Promote(format!(
+                "a single entity block is {} bytes, over the {} byte chunk limit — cannot split below statement granularity",
+                block.len(),
+                limit
+            )));
+        }
+        if cur.len() + 2 + block.len() > limit {
+            chunks.push(std::mem::replace(&mut cur, String::from(header)));
+        }
+        cur.push_str("\n\n");
+        cur.push_str(block);
+    }
+    if cur.len() > header.len() {
+        chunks.push(cur);
+    }
+    Ok(chunks)
+}
+
+/// The aggregated result of a (possibly chunked) promotion write.
+#[derive(Debug, Clone)]
+pub struct WriteSummary {
+    /// Sum of the per-chunk `count` fields — the idempotence signal (a re-run
+    /// returns the same total, not a larger one).
+    pub count: u64,
+    /// Every transaction id Quipu returned, in write order.
+    pub tx_ids: Vec<u64>,
+    /// How many `/knot` posts the write took (1 = the classic single-post path).
+    pub chunks: usize,
+}
+
+/// The full promotion: validate the WHOLE graph, then write iff it conforms —
+/// in one `/knot` post when it fits, in idempotent chunks when it would 413.
+/// On non-conformance it writes NOTHING and returns the violations.
 pub fn promote(endpoint: &str, turtle: &str, source: &str) -> Result<Promotion> {
     let v = validate(turtle, CODE_EDGE_SHAPES)?;
     if !v.conforms {
         return Ok(Promotion::Refused(v.violations));
     }
-    let knot = write_knot(endpoint, turtle, source)?;
-    Ok(Promotion::Wrote(knot))
+    let chunks = chunk_turtle(turtle, CHUNK_LIMIT)?;
+    let total = chunks.len();
+    let mut summary = WriteSummary {
+        count: 0,
+        tx_ids: Vec::new(),
+        chunks: total,
+    };
+    for (i, chunk) in chunks.iter().enumerate() {
+        let knot = write_knot(endpoint, chunk, source).map_err(|e| {
+            Error::Promote(format!(
+                "chunk {}/{total} failed after {} chunk(s) landed — re-running is safe (deterministic IRIs supersede): {e}",
+                i + 1,
+                i
+            ))
+        })?;
+        summary.count += knot.count;
+        if let Some(t) = knot.tx_id {
+            summary.tx_ids.push(t);
+        }
+    }
+    Ok(Promotion::Wrote(summary))
 }
 
 /// The result of a full promotion: it either wrote, or refused whole.
 #[derive(Debug)]
 pub enum Promotion {
-    /// Validated and written; carries Quipu's transaction result.
-    Wrote(KnotResult),
+    /// Validated and written; carries the aggregated write result.
+    Wrote(WriteSummary),
     /// Did not pass SHACL; carries the violations and wrote nothing.
     Refused(Vec<String>),
 }
@@ -250,12 +331,17 @@ impl Promotion {
     pub fn report(&self, w: &mut impl Write) -> std::io::Result<bool> {
         match self {
             Promotion::Wrote(k) => {
-                writeln!(
-                    w,
-                    "  promoted: {} triples present{}",
-                    k.count,
-                    k.tx_id.map(|t| format!(" (tx {t})")).unwrap_or_default()
-                )?;
+                let txs = match k.tx_ids.as_slice() {
+                    [] => String::new(),
+                    [one] => format!(" (tx {one})"),
+                    [first, .., last] => format!(" (tx {first}..{last})"),
+                };
+                let chunked = if k.chunks > 1 {
+                    format!(" in {} chunks", k.chunks)
+                } else {
+                    String::new()
+                };
+                writeln!(w, "  promoted: {} triples present{txs}{chunked}", k.count)?;
                 Ok(true)
             }
             Promotion::Refused(vs) => {
@@ -340,5 +426,74 @@ bobbin:code_bad a bobbin:CodeSymbol ;
             Promotion::Refused(vs) => assert!(!vs.is_empty()),
             Promotion::Wrote(_) => panic!("wrote invalid facts to Quipu"),
         }
+    }
+
+    /// Build a synthetic Turtle doc in `to_turtle`'s shape: prefix header, then
+    /// entity blocks separated by blank lines.
+    fn synthetic_turtle(blocks: usize, block_bytes: usize) -> String {
+        let header = "@prefix bobbin: <http://aegis.gastown.local/ontology/> .";
+        let mut t = String::from(header);
+        for i in 0..blocks {
+            let pad = "x".repeat(block_bytes.saturating_sub(60));
+            t.push_str(&format!(
+                "\n\nbobbin:code_{i} a bobbin:CodeSymbol ;\n  rdfs:label \"{pad}\" ."
+            ));
+        }
+        t
+    }
+
+    #[test]
+    fn under_limit_turtle_is_a_single_untouched_chunk() {
+        let t = synthetic_turtle(3, 100);
+        let chunks = chunk_turtle(&t, 1_000_000).expect("chunked");
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], t, "single-chunk path must be byte-identical");
+    }
+
+    #[test]
+    fn oversized_turtle_splits_on_block_boundaries_preserving_every_block() {
+        let t = synthetic_turtle(40, 300);
+        let chunks = chunk_turtle(&t, 2_000).expect("chunked");
+        assert!(chunks.len() > 1, "expected a real split");
+        for c in &chunks {
+            assert!(c.len() <= 2_000, "chunk over limit: {} bytes", c.len());
+            assert!(
+                c.starts_with("@prefix bobbin:"),
+                "every chunk must carry the prefix header"
+            );
+        }
+        // Every block appears exactly once across all chunks, in order.
+        let stitched: Vec<&str> = chunks
+            .iter()
+            .flat_map(|c| c.split("\n\n").skip(1))
+            .collect();
+        let original: Vec<&str> = t.split("\n\n").skip(1).collect();
+        assert_eq!(stitched, original, "blocks lost, duplicated, or reordered");
+    }
+
+    #[test]
+    fn a_block_bigger_than_the_limit_errors_loudly() {
+        let t = synthetic_turtle(2, 5_000);
+        let err = chunk_turtle(&t, 1_000).expect_err("unsplittable block must error");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("cannot split below statement granularity"),
+            "error must name the cause, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn multi_chunk_report_names_the_chunk_count() {
+        let wrote = Promotion::Wrote(WriteSummary {
+            count: 9329,
+            tx_ids: vec![801, 802, 803],
+            chunks: 3,
+        });
+        let mut out = Vec::new();
+        wrote.report(&mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("9329 triples"), "{s}");
+        assert!(s.contains("tx 801..803"), "{s}");
+        assert!(s.contains("in 3 chunks"), "{s}");
     }
 }

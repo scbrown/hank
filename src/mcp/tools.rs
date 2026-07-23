@@ -408,8 +408,13 @@ pub struct PromoteResponse {
     /// Triples present for these facts after the write (idempotence signal). None
     /// on refusal.
     pub count: Option<u64>,
-    /// Quipu transaction id, when written.
+    /// Quipu transaction id of the last chunk written, when written. Large
+    /// promotions land in multiple `/knot` chunks (see `chunks`); every chunk's
+    /// write is idempotent, so the last tx is the graph's settled state.
     pub tx_id: Option<u64>,
+    /// How many `/knot` posts the write took (1 = single-post; >1 = the payload
+    /// exceeded Quipu's body limit and was split on entity-block boundaries).
+    pub chunks: Option<usize>,
     /// SHACL violations when refused — empty iff `wrote`. A refusal always carries
     /// at least one reason.
     pub violations: Vec<String>,
