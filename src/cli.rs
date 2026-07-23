@@ -816,7 +816,12 @@ impl Cli {
         Ok(())
     }
 
-    /// Without the `quipu` feature, promotion is unbuilt — say so honestly.
+    /// Without the `quipu` feature, promotion is unbuilt — say so honestly,
+    /// and exit non-zero: the same rule as the feature arm's refusal path. A
+    /// stub that exits 0 reads as a landed promotion to any script — measured
+    /// 2026-07-23 (aegis-ucoh): the quipu-ingest cron ran a feature-less
+    /// binary, took exit 0 as success, and advanced its promote marker past a
+    /// commit that was never promoted.
     #[cfg(not(feature = "quipu"))]
     #[allow(clippy::unused_self)] // method form for call-site symmetry with the quipu arm
     fn promote(
@@ -831,7 +836,7 @@ impl Cli {
             4,
             "Quipu promotion needs `--features quipu` (this binary was built without it)",
         );
-        Ok(())
+        std::process::exit(2);
     }
 }
 

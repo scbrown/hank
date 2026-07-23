@@ -38,9 +38,13 @@ jobs:
             ${{ runner.os }}-cargo-
 
       # mcp + langs-extra = the useful runtime set (`hank serve` + all grammars);
-      # both arms already pass in ci.yml, so this is a proven build.
+      # quipu added 2026-07-23 (aegis-ucoh): the promote seam shipped feature-less,
+      # so the DEPLOYED `hank promote` was a stub — and its exit-0 made the
+      # quipu-ingest cron advance its marker past a commit that was never
+      # promoted. All arms pass in ci.yml (quipu + mcp,quipu arms), so this
+      # remains a proven build.
       - name: Build release binary
-        run: cargo build --release --features mcp,langs-extra
+        run: cargo build --release --features mcp,langs-extra,quipu
 
       - name: Package
         run: |
