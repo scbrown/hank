@@ -17,14 +17,20 @@
 //!
 //! ## Relationship to the incremental update path
 //!
-//! The tiers here **feed** the existing extraction entrypoints rather than
-//! replacing them: the tree-sitter tier re-runs [`crate::extract::extract_structure`]
-//! per changed file (FR-16 step 1, "re-parse X"), and the heavy tier rebuilds the
-//! [`crate::graph::CodeGraph`]. When the Phase-3 copy-on-write overlay and the
-//! frontier-bounded update (FR-16) land, the heavy tier becomes a call into the
-//! overlay's `update_frontier` instead of a full rebuild — the scheduler and
-//! watcher above it are unchanged. See `docs/hank-spec.md` §5.5, §7.5, FR-16/17.
+//! The tiers **feed** the extraction/overlay entrypoints. Two handlers exist:
+//! - [`GraphRefresh`] (un-tenanted): tree-sitter tier re-parses each changed
+//!   file; heavy tier rebuilds the whole [`crate::graph::CodeGraph`]. Used by
+//!   `hank watch` with no tenant.
+//! - [`OverlayRefresh`] (tenant-aware): tree-sitter tier touches the tenant's
+//!   overlay; heavy tier is the frontier-bounded [`crate::graph::update_frontier`]
+//!   (FR-16), touching only the edited files + their reach — not a full rebuild.
+//!   It also tracks per-file [`crate::types::Freshness`] across the two tiers.
+//!
+//! Events are filtered by extension/`target`/`.git` ([`is_watch_relevant`]) and
+//! by the repo's `.gitignore` (via the `ignore` crate) before reaching the
+//! scheduler. See `docs/hank-spec.md` §5.5, §7.5, FR-16/17.
 
+mod overlay_refresh;
 mod schedule;
 
 use std::path::{Path, PathBuf};
@@ -41,6 +47,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher as _};
 use crate::graph::CodeGraph;
 use crate::types::Tier;
 
+pub use overlay_refresh::OverlayRefresh;
 pub use schedule::{is_watch_relevant, Debouncer, TierBatch, TieredScheduler};
 
 /// Sink for tiered re-extraction work. The watcher calls exactly one method per
@@ -56,12 +63,14 @@ pub trait TierHandler: Send {
     fn heavy(&mut self, paths: &[PathBuf]);
 }
 
-/// The default handler: feed the existing extraction entrypoints.
+/// The un-tenanted handler: feed the extraction entrypoints, whole-tree.
 ///
 /// - tree-sitter tier → [`crate::extract::extract_structure`] per changed file
 ///   (the FR-16 "re-parse X" step);
-/// - heavy tier → rebuild [`CodeGraph`] over `root` (the stand-in for the
-///   frontier-bounded overlay update until FR-16 lands).
+/// - heavy tier → rebuild [`CodeGraph`] over `root`.
+///
+/// For per-tenant, frontier-bounded updates (the FR-16 path) use
+/// [`OverlayRefresh`] instead; this remains for `hank watch` with no tenant.
 pub struct GraphRefresh {
     root: PathBuf,
 }
@@ -136,6 +145,12 @@ impl Watcher {
     ) -> crate::Result<Self> {
         let (tx, rx) = mpsc::channel::<PathBuf>();
 
+        // Respect the repo's .gitignore (and nested ones): a build artifact or
+        // a generated file that happens to be `.rs` must not drive overlay
+        // churn. Built once from `root`; an unreadable/absent ignore file just
+        // yields an empty matcher (nothing extra ignored), never a failure.
+        let ignore = build_gitignore(root);
+
         // notify runs the callback on its own thread; forward relevant changed
         // paths into the channel and drop the rest.
         let mut inner = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
@@ -144,7 +159,12 @@ impl Watcher {
                     return;
                 }
                 for path in event.paths {
-                    if is_watch_relevant(&path) {
+                    // Extension/target/.git filter first (cheap), then gitignore
+                    // — `_or_any_parents` so a file under an ignored DIR is
+                    // excluded, not just one matching a filename glob.
+                    if is_watch_relevant(&path)
+                        && !ignore.matched_path_or_any_parents(&path, false).is_ignore()
+                    {
                         // Receiver gone → watcher shutting down; ignore.
                         let _ = tx.send(path);
                     }
@@ -211,6 +231,20 @@ fn watch_err(e: &notify::Error) -> crate::Error {
     crate::Error::Config(format!("file-watch: {e}"))
 }
 
+/// A gitignore matcher for `root`, honoring `root/.gitignore` and nested ones
+/// the builder discovers. Errors degrade to an empty matcher — a broken ignore
+/// file must not silently swallow every event, so nothing is ignored rather
+/// than everything.
+fn build_gitignore(root: &Path) -> ignore::gitignore::Gitignore {
+    let mut builder = ignore::gitignore::GitignoreBuilder::new(root);
+    // add() returns Some(err) on a read/parse problem; ignore it and build what
+    // we have (possibly empty).
+    let _ = builder.add(root.join(".gitignore"));
+    builder
+        .build()
+        .unwrap_or_else(|_| ignore::gitignore::Gitignore::empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,6 +264,31 @@ mod tests {
         fn heavy(&mut self, paths: &[PathBuf]) {
             self.heavy.lock().unwrap().extend_from_slice(paths);
         }
+    }
+
+    #[test]
+    fn gitignore_excludes_ignored_rust_files() {
+        // A .rs file matched by .gitignore must not drive overlay churn, even
+        // though the extension filter alone would accept it (FR-17).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "generated/\n*.gen.rs\n").unwrap();
+        std::fs::create_dir(dir.path().join("generated")).unwrap();
+        let ignore = build_gitignore(dir.path());
+
+        let ignored = |rel: &str| {
+            ignore
+                .matched_path_or_any_parents(dir.path().join(rel), false)
+                .is_ignore()
+        };
+        assert!(
+            ignored("generated/x.rs"),
+            "a file under an ignored dir is excluded"
+        );
+        assert!(
+            ignored("build.gen.rs"),
+            "a file matching an ignore glob is excluded"
+        );
+        assert!(!ignored("src/lib.rs"), "a normal source file is watched");
     }
 
     #[test]
