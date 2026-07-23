@@ -771,15 +771,6 @@ impl Cli {
         to: Option<&str>,
         repo: Option<&str>,
     ) -> anyhow::Result<()> {
-        // Arbitrary-commit checkout is not wired yet: `export::to_turtle` reads the
-        // working tree, so a non-HEAD `--commit` would promote the WRONG facts and
-        // report success. Refuse loudly rather than promote a lie (#15 follow-up).
-        if commit != "HEAD" {
-            anyhow::bail!(
-                "promoting an arbitrary commit is not wired yet: --commit {commit} would \
-                 promote the working tree, not that commit. Only --commit HEAD is honoured."
-            );
-        }
         // `--to` overrides config for a one-off; otherwise the deployment's
         // configured endpoint. Empty on both is a refusal, never a guessed graph.
         let cfg = self.load_config(path)?;
@@ -808,7 +799,19 @@ impl Cli {
                 )
             })?,
         };
-        let turtle = crate::export::to_turtle(path, &repo)?;
+        // Promotion reads the COMMITTED tree at `commit` (FR-22): uncommitted
+        // working-tree churn — an in-flight overlay edit, an unsaved buffer —
+        // must never reach Quipu. Checked here, after the config preconditions
+        // (endpoint/identity) and just before the read, so it refuses a phantom
+        // ref rather than promoting against one.
+        if crate::git::resolve_commit(path, commit).is_none() {
+            anyhow::bail!(
+                "cannot promote `{commit}`: it does not resolve to a commit at {}. \
+                 Refusing rather than promoting a phantom ref.",
+                path.display()
+            );
+        }
+        let turtle = crate::export::to_turtle_at(path, &repo, commit)?;
         // A promotion that extracted NOTHING is not a promotion — it is a green
         // empty write (measured: a Python repo "promoted: 0 triples" with a
         // SUCCESS exit while analyze saw 1647 symbols, and the scheduler wrote
@@ -822,7 +825,13 @@ impl Cli {
             );
             std::process::exit(2);
         }
-        let source = format!("hank promote {repo} (cli)");
+        // Provenance carries the RESOLVED commit SHA, not the ref spelling —
+        // `--commit main` and `--commit <sha>` promoting the same tree record
+        // the same source (partial FR-21; full bitemporal fields are a #15
+        // follow-up).
+        let resolved =
+            crate::git::resolve_commit(path, commit).unwrap_or_else(|| commit.to_string());
+        let source = format!("hank promote {repo}@{resolved} (cli)");
         let outcome = crate::promote::promote(endpoint, &turtle, &source)?;
         let mut out = std::io::stdout();
         let wrote = outcome.report(&mut out)?;
