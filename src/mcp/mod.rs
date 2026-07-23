@@ -5,6 +5,7 @@
 //! uses. Tools follow the `hank_*` naming convention (see `docs/hank-spec.md`
 //! §10). This module is gated behind the `mcp` feature.
 
+mod resident;
 mod server;
 mod tools;
 mod transport;

@@ -214,11 +214,27 @@ impl HankMcpServer {
         &self,
         Parameters(req): Parameters<ImpactRequest>,
     ) -> Result<CallToolResult, McpError> {
+        let hops = req.hops.unwrap_or(5);
+        // Stage 3c: an expected, same-root resident daemon answers with no
+        // per-call build — but never a `path`-scoped request (the resident
+        // graph is whole-root; a subtree query is a different graph). Every
+        // `None` falls through to the transient build, silently (query
+        // surface, not the guard — loud-absence is the hook's contract).
+        if req.path.is_none() {
+            if let Some(response) = super::resident::impact(
+                self.config.as_deref(),
+                &self.root,
+                &req.symbol,
+                hops,
+                req.cochange.as_deref(),
+            ) {
+                return json_result(&response);
+            }
+        }
         let base = req
             .path
             .as_ref()
             .map_or_else(|| self.root.clone(), |p| self.root.join(p));
-        let hops = req.hops.unwrap_or(5);
         let graph = CodeGraph::build(&base).map_err(internal)?;
         let found = graph.has_symbol(&req.symbol);
         let reachable = graph.reachable(&req.symbol, Dir::Callers, hops);
@@ -450,6 +466,15 @@ impl HankMcpServer {
 impl HankMcpServer {
     /// Shared body for `hank_callers` / `hank_callees`.
     fn neighbors(&self, req: &NeighborsRequest, dir: Dir) -> Result<CallToolResult, McpError> {
+        // Stage 3c: same cutover shape as `hank_impact` — resident daemon when
+        // usable and unscoped, transient fallback otherwise (see there).
+        if req.path.is_none() {
+            if let Some(response) =
+                super::resident::neighbors(self.config.as_deref(), &self.root, &req.symbol, dir)
+            {
+                return json_result(&response);
+            }
+        }
         let base = req
             .path
             .as_ref()
