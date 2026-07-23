@@ -779,6 +779,19 @@ impl Cli {
             })?,
         };
         let turtle = crate::export::to_turtle(path, &repo)?;
+        // A promotion that extracted NOTHING is not a promotion — it is a green
+        // empty write (measured: a Python repo "promoted: 0 triples" with a
+        // SUCCESS exit while analyze saw 1647 symbols, and the scheduler wrote
+        // its done-marker over the void). Say so and refuse (exit 2, the
+        // could-not-promote code), so a marker-disciplined caller retries
+        // instead of booking emptiness as done.
+        if !turtle.contains("bobbin:CodeModule") {
+            eprintln!(
+                "hank promote: extracted NOTHING from {} — no parseable source                  files under this tree for the grammars in this build. Refusing                  to promote an empty graph as success. (Is the language behind                  the `langs-extra` feature? Is the path right?)",
+                path.display()
+            );
+            std::process::exit(2);
+        }
         let outcome = crate::promote::promote(endpoint, &turtle)?;
         let mut out = std::io::stdout();
         let wrote = outcome.report(&mut out)?;
