@@ -88,7 +88,7 @@ impl ResidentEngine {
         // and /status says the tenant layer is absent rather than empty.
         let registry = Base::build_at(root, "HEAD")
             .ok()
-            .map(|base| RwLock::new(TenantRegistry::new(base)));
+            .map(|base| RwLock::new(TenantRegistry::with_tenancy(base, config.tenancy.clone())));
         Ok(Self {
             inner: Arc::new(Engine {
                 root: root.to_path_buf(),

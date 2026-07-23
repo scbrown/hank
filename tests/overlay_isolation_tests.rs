@@ -380,6 +380,147 @@ fn thirty_two_overlays_of_mostly_identical_content_share_storage_fr15() {
 }
 
 #[test]
+fn sessions_open_and_close_create_and_evict_overlays_fr18() {
+    let (_dir, mut reg) = registry();
+    // Open two sessions with real edits.
+    reg.touch("a", "a.rs", "fn a_only() {}\n");
+    reg.touch("b", "b.rs", "fn b_only() {}\n");
+    assert_eq!(reg.tenants(), ["a", "b"]);
+
+    // Close a: its overlay is gone; b is untouched.
+    reg.close_session("a");
+    assert_eq!(reg.tenants(), ["b"]);
+    assert!(
+        !reg.view("a").has_symbol("a_only"),
+        "closed session cleared"
+    );
+    assert!(reg.view("b").has_symbol("b_only"));
+}
+
+#[test]
+fn reset_to_base_clears_the_overlay_but_keeps_the_session() {
+    let (_dir, mut reg) = registry();
+    reg.touch("a", "mid.rs", "fn mid2() { leaf(); }\n");
+    assert_eq!(caller_names(&reg, "a", "leaf"), ["mid2"]);
+
+    reg.reset("a");
+    // Overlay cleared → base truth resumes for a.
+    assert_eq!(caller_names(&reg, "a", "leaf"), ["mid"]);
+    assert!(reg.overlay("a").is_some_and(|o| o.touched_count() == 0));
+}
+
+#[test]
+fn exceeding_max_overlays_evicts_lru_per_policy_fr18() {
+    use hank::config::TenancyConfig;
+    let (_dir, base_reg) = registry();
+    let base = std::sync::Arc::clone(base_reg.base());
+    // Cap of 2, LRU policy.
+    let mut reg = TenantRegistry::with_tenancy(
+        base,
+        TenancyConfig {
+            max_overlays: 2,
+            high_fanin_threshold: 200,
+            overlay_eviction: "lru".to_string(),
+        },
+    );
+
+    reg.touch("a", "fa.rs", "fn fa() {}\n"); // a: created, used
+    reg.touch("b", "fb.rs", "fn fb() {}\n"); // b: created, used
+    reg.touch("a", "fa2.rs", "fn fa2() {}\n"); // a: used again → b is now LRU
+    assert_eq!(reg.tenants(), ["a", "b"]);
+
+    // Opening c exceeds the cap of 2 → LRU (b) is evicted, not a.
+    let evicted = reg.open_session("c");
+    assert_eq!(evicted.as_deref(), Some("b"), "LRU victim is b");
+    assert_eq!(reg.tenants(), ["a", "c"]);
+    assert!(!reg.view("b").has_symbol("fb"), "evicted overlay is gone");
+    assert!(reg.view("a").has_symbol("fa"), "recently-used survives");
+}
+
+#[test]
+fn on_session_close_policy_evicts_oldest_as_the_cap_backstop() {
+    use hank::config::TenancyConfig;
+    let (_dir, base_reg) = registry();
+    let base = std::sync::Arc::clone(base_reg.base());
+    let mut reg = TenantRegistry::with_tenancy(
+        base,
+        TenancyConfig {
+            max_overlays: 2,
+            high_fanin_threshold: 200,
+            overlay_eviction: "on_session_close".to_string(),
+        },
+    );
+    reg.touch("first", "f1.rs", "fn f1() {}\n");
+    reg.touch("second", "f2.rs", "fn f2() {}\n");
+    reg.touch("first", "f1b.rs", "fn f1b() {}\n"); // recency irrelevant to FIFO
+                                                   // Cap backstop under close-only policy evicts the OLDEST-created (first).
+    let evicted = reg.open_session("third");
+    assert_eq!(evicted.as_deref(), Some("first"), "FIFO backstop victim");
+    assert_eq!(reg.tenants(), ["second", "third"]);
+}
+
+#[test]
+fn a_high_fan_in_edit_does_not_blow_the_frontier_budget_fr18() {
+    // `hot` is called by 12 files; with threshold 5 its cascade is clipped to
+    // one hop. Build the fixture: hot.rs defines hot(); c0..c11 each call it,
+    // and each cN is itself called by dN (a second hop that the bound removes).
+    let dir = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        assert!(std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(args)
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    run(&["init", "-q", "-b", "main"]);
+    run(&["config", "user.email", "t@t"]);
+    run(&["config", "user.name", "t"]);
+    std::fs::write(dir.path().join("hot.rs"), "fn hot() {}\n").unwrap();
+    for i in 0..12 {
+        std::fs::write(
+            dir.path().join(format!("c{i}.rs")),
+            format!("fn c{i}() {{ hot(); }}\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join(format!("d{i}.rs")),
+            format!("fn d{i}() {{ c{i}(); }}\n"),
+        )
+        .unwrap();
+    }
+    run(&["add", "-A"]);
+    run(&["commit", "-qm", "base"]);
+    let base = Base::build_at(dir.path(), "main").unwrap();
+    let reg = TenantRegistry::new(base);
+    let view = reg.view("t");
+
+    // Unbounded: editing hot reaches all 12 c's AND all 12 d's (24).
+    let full = view.frontier(&["hot"], 5);
+    assert!(
+        full.len() >= 24,
+        "unbounded reaches two hops: {}",
+        full.len()
+    );
+
+    // Bounded at threshold 5: hot's direct fan (12) > 5, so the cascade is
+    // clipped to 1 hop — the 12 direct callers, none of the d's — and hot is
+    // reported as a bounded seed (logged by update_frontier_bounded).
+    let bounded = view.frontier_bounded(&["hot"], 5, 5);
+    assert_eq!(bounded.bounded_seeds, ["hot"], "hot flagged as high-fan-in");
+    let names: std::collections::BTreeSet<&str> =
+        bounded.reached.iter().map(|r| r.name.as_str()).collect();
+    assert!(names.contains("c0"), "direct callers kept");
+    assert!(
+        !names.contains("d0"),
+        "second hop clipped by the fan-in bound"
+    );
+    assert!(bounded.reached.len() < full.len(), "budget bounded");
+}
+
+#[test]
 fn status_reports_base_commit_and_active_overlays() {
     let (_dir, mut reg) = registry();
     reg.touch("a", "mid.rs", "fn mid2() { leaf(); }\n");

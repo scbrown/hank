@@ -22,11 +22,15 @@ debounce_ms = 300
 lsp_on = "save"
 
 [hank.tenancy]
-# (Phase 3 — not yet read) Maximum concurrent per-tenant overlays over one base.
+# Maximum concurrent per-tenant overlays over one base. A new overlay past the
+# cap evicts one per `overlay_eviction` (logged, never silent).
 max_overlays = 32
-# (Phase 3 — not yet read) Symbols with fan-in above this get special frontier handling.
+# Symbols whose direct fan-in exceeds this get a bounded frontier cascade
+# (clipped to one hop) so a widely-referenced signature edit cannot blow the
+# recompute budget (§14.2). The bounding is logged.
 high_fanin_threshold = 200
-# (Phase 3 — not yet read) "on_session_close" | "lru".
+# Overlay eviction at the cap: "lru" (evict least-recently-used) or
+# "on_session_close" (evict on close; oldest-created is the cap backstop).
 overlay_eviction = "on_session_close"
 
 [hank.serve]

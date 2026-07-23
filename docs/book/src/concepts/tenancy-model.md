@@ -56,5 +56,13 @@ On-disk edits drive this automatically (FR-17, hank #5): a `notify` watcher
 (`watch::OverlayRefresh`), `.gitignore`-filtered and debounced, touches the
 tenant's overlay on the fast tier and runs `update_frontier` on the deferred
 heavy tier, tracking per-file freshness (`recomputing` while the frontier is
-pending, `fresh` after). Still open: FR-18 overlay lifecycle/eviction
-(hank #6).
+pending, `fresh` after).
+
+Overlay lifecycle (FR-18/§14.2, hank #6) is the registry's job: sessions open
+on first touch and close explicitly (`close_session`), `reset` clears a tenant
+to base, and live overlays are capped at `[hank.tenancy].max_overlays` — a new
+overlay past the cap evicts one per `overlay_eviction` (`lru`, or oldest-created
+as the `on_session_close` backstop), always logged. A symbol whose direct
+fan-in exceeds `high_fanin_threshold` has its frontier cascade clipped to one
+hop, so a widely-referenced signature edit cannot blow the recompute budget —
+also logged, never a silent truncation. **This completes Phase 3.**

@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
 use super::TierHandler;
-use crate::graph::{update_frontier, TenantRegistry};
+use crate::graph::{update_frontier_bounded, TenantRegistry};
 use crate::types::{Freshness, Tier};
 
 /// Drives one tenant's overlay from its working-tree edits, tracking per-file
@@ -126,7 +126,9 @@ impl TierHandler for OverlayRefresh {
             }
         }
         let seeds: Vec<&str> = seed_names.iter().map(String::as_str).collect();
-        let frontier = update_frontier(&view, &seeds, self.hops);
+        // The §14.2 fan-in guard bounds a hot signature's cascade (logged).
+        let threshold = reg.tenancy().high_fanin_threshold;
+        let frontier = update_frontier_bounded(&view, &seeds, self.hops, threshold);
         tracing::info!(
             tenant = %self.tenant, changed = rels.len(), frontier = frontier.len(),
             "frontier recomputed (heavy tier)"

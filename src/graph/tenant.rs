@@ -46,22 +46,47 @@ pub enum SymRef {
 /// The tenant/session registry: one shared base, one overlay per tenant, one
 /// FR-15 intern cache across them. This is the object the resident daemon
 /// holds for its lifetime; views are made per query.
+///
+/// Overlay lifecycle (FR-18, §14.2): overlays are created on first
+/// touch/[`open_session`](Self::open_session), removed on
+/// [`close_session`](Self::close_session), cleared to base by
+/// [`reset`](Self::reset), and capped at `tenancy.max_overlays` — a new
+/// overlay past the cap evicts one per `tenancy.overlay_eviction`, always
+/// logged, never a silent drop.
 pub struct TenantRegistry {
     base: Arc<Base>,
     overlays: HashMap<String, Overlay>,
-    /// Content-hash → parse. Immutable entries; unbounded until the FR-18
-    /// lifecycle/eviction work (hank #6) gives it a policy.
+    /// Content-hash → parse. Immutable entries; retained past revert until a
+    /// tenant is closed (then swept — see [`close_session`](Self::close_session)).
     intern: HashMap<String, Arc<ParsedFile>>,
+    /// The `[hank.tenancy]` limits: cap, eviction policy, fan-in threshold.
+    tenancy: crate::config::TenancyConfig,
+    /// Monotonic clock for recency; bumped on every touch/open.
+    tick: u64,
+    /// Per-tenant `(created_tick, last_used_tick)` — LRU evicts the min
+    /// last-used, the `on_session_close` backstop evicts the min created.
+    stamps: HashMap<String, (u64, u64)>,
 }
 
 impl TenantRegistry {
-    /// A registry over `base`, with no tenants yet.
+    /// A registry over `base` with the default tenancy limits, no tenants yet.
     #[must_use]
     pub fn new(base: Arc<Base>) -> Self {
+        Self::with_tenancy(base, crate::config::TenancyConfig::default())
+    }
+
+    /// A registry over `base` with explicit `[hank.tenancy]` limits — what the
+    /// resident daemon and `hank watch` build so the configured cap/policy/
+    /// fan-in threshold are actually honored.
+    #[must_use]
+    pub fn with_tenancy(base: Arc<Base>, tenancy: crate::config::TenancyConfig) -> Self {
         Self {
             base,
             overlays: HashMap::new(),
             intern: HashMap::new(),
+            tenancy,
+            tick: 0,
+            stamps: HashMap::new(),
         }
     }
 
@@ -69,6 +94,76 @@ impl TenantRegistry {
     #[must_use]
     pub fn base(&self) -> &Arc<Base> {
         &self.base
+    }
+
+    /// The tenancy limits in force.
+    #[must_use]
+    pub fn tenancy(&self) -> &crate::config::TenancyConfig {
+        &self.tenancy
+    }
+
+    /// Register `tenant`'s session (FR-18): create its overlay slot if absent,
+    /// enforcing the `max_overlays` cap first. Idempotent for an open session
+    /// (just refreshes recency). Returns the tenant evicted to make room, if any.
+    pub fn open_session(&mut self, tenant: &str) -> Option<String> {
+        let evicted = self.ensure_capacity_for(tenant);
+        self.tick += 1;
+        let tick = self.tick;
+        self.stamps
+            .entry(tenant.to_string())
+            .and_modify(|(_, used)| *used = tick)
+            .or_insert((tick, tick));
+        self.overlays.entry(tenant.to_string()).or_default();
+        evicted
+    }
+
+    /// Close `tenant`'s session: remove its overlay and metadata entirely (the
+    /// `on_session_close` eviction), then sweep interned parses no live overlay
+    /// references any more. No-op for an unknown tenant.
+    pub fn close_session(&mut self, tenant: &str) {
+        self.overlays.remove(tenant);
+        self.stamps.remove(tenant);
+        self.sweep_intern();
+    }
+
+    /// Reset `tenant` to base: clear its overlay (the session stays open, its
+    /// recency preserved) so its view is the bare base again. No-op if unknown.
+    pub fn reset(&mut self, tenant: &str) {
+        if let Some(overlay) = self.overlays.get_mut(tenant) {
+            *overlay = Overlay::default();
+            self.sweep_intern();
+        }
+    }
+
+    /// If `tenant` is new and the registry is at `max_overlays`, evict one per
+    /// policy to make room. Returns the evicted tenant. Logged, never silent.
+    fn ensure_capacity_for(&mut self, tenant: &str) -> Option<String> {
+        if self.overlays.contains_key(tenant) || self.overlays.len() < self.tenancy.max_overlays {
+            return None;
+        }
+        let lru = self.tenancy.overlay_eviction == "lru";
+        // LRU → smallest last-used; on_session_close backstop → smallest created.
+        let victim = self
+            .stamps
+            .iter()
+            .filter(|(t, _)| self.overlays.contains_key(t.as_str()))
+            .min_by_key(|(_, (created, used))| if lru { *used } else { *created })
+            .map(|(t, _)| t.clone())?;
+        tracing::warn!(
+            evicted = %victim, policy = %self.tenancy.overlay_eviction,
+            cap = self.tenancy.max_overlays, opening = %tenant,
+            "overlay cap reached — evicting to make room (FR-18)"
+        );
+        self.overlays.remove(&victim);
+        self.stamps.remove(&victim);
+        self.sweep_intern();
+        Some(victim)
+    }
+
+    /// Drop interned parses no live overlay holds any more (`Arc` strong count
+    /// back to 1 — only the cache). Keeps the intern cache `O(live overlays)`.
+    fn sweep_intern(&mut self) {
+        self.intern.retain(|_, arc| Arc::strong_count(arc) > 1);
     }
 
     /// Record `source` as tenant's truth for `rel` (creating the tenant on
@@ -84,13 +179,16 @@ impl TenantRegistry {
     ///   [`ParsedFile`] allocation rather than N copies.
     pub fn touch(&mut self, tenant: &str, rel: &str, source: &str) {
         let parsed = ParsedFile::parse(rel, source);
-        // Base hit: identical to the baseline ⇒ the overlay adds nothing.
+        // Base hit: identical to the baseline ⇒ the overlay adds nothing. Does
+        // NOT open a session (nothing is stored), so it never triggers eviction.
         if self.base.file(rel).is_some_and(|f| f.hash == parsed.hash) {
             if let Some(overlay) = self.overlays.get_mut(tenant) {
                 overlay.revert(rel);
             }
             return;
         }
+        // A real touch opens/refreshes the session (cap-enforced, recency-bumped).
+        self.open_session(tenant);
         let shared = self
             .intern
             .entry(parsed.hash.clone())
@@ -134,9 +232,11 @@ impl TenantRegistry {
         }
     }
 
-    /// Remove a tenant and its overlay entirely (session close).
+    /// Remove a tenant and its overlay entirely. Alias for
+    /// [`close_session`](Self::close_session) (the FR-18 name); both sweep the
+    /// intern cache.
     pub fn drop_tenant(&mut self, tenant: &str) {
-        self.overlays.remove(tenant);
+        self.close_session(tenant);
     }
 
     /// The tenant's overlay, if it has one.
@@ -221,6 +321,17 @@ impl SharingStats {
     }
 }
 
+/// The result of a fan-in-bounded frontier walk (§14.2). `bounded_seeds` names
+/// the high-fan-in symbols whose cascade was clipped to one hop — the caller
+/// logs them, so bounding is always visible, never a silent truncation.
+#[derive(Debug, Clone)]
+pub struct BoundedFrontier {
+    /// The reached frontier symbols.
+    pub reached: Vec<Reached>,
+    /// Seed names whose cascade was bounded (fan-in over threshold).
+    pub bounded_seeds: Vec<String>,
+}
+
 /// One active overlay in a [`RegistryStatus`].
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub struct OverlayStatus {
@@ -281,15 +392,40 @@ impl TenantView<'_> {
     /// `distance`/`via`, so a caller can see how far a consequence propagated.
     #[must_use]
     pub fn frontier(&self, changed: &[&str], hops: u32) -> Vec<Reached> {
+        self.frontier_bounded(changed, hops, usize::MAX).reached
+    }
+
+    /// The FR-16 frontier with the §14.2 high-fan-in guard: a seed whose direct
+    /// (1-hop) fan already exceeds `high_fanin_threshold` is a widely-referenced
+    /// signature whose transitive cascade could blow the budget, so it is walked
+    /// only ONE hop instead of `hops`. The seed names so bounded are returned
+    /// (and logged by the caller) — the cascade is bounded, never silently
+    /// truncated. `usize::MAX` disables the guard (plain [`frontier`](Self::frontier)).
+    #[must_use]
+    pub fn frontier_bounded(
+        &self,
+        changed: &[&str],
+        hops: u32,
+        high_fanin_threshold: usize,
+    ) -> BoundedFrontier {
         let seeds: std::collections::BTreeSet<&str> = changed.iter().copied().collect();
         let mut seen: std::collections::BTreeSet<(String, String)> =
             std::collections::BTreeSet::new();
         let mut out = Vec::new();
+        let mut bounded_seeds = Vec::new();
         for &name in changed {
+            // Direct fan = 1-hop callers + callees. Cheap, and it is exactly the
+            // "widely referenced" measure §14.2 warns about.
+            let direct_fan = super::reachable_over(self, name, Dir::Callers, 1).len()
+                + super::reachable_over(self, name, Dir::Callees, 1).len();
+            let effective_hops = if direct_fan > high_fanin_threshold {
+                bounded_seeds.push(name.to_string());
+                1
+            } else {
+                hops
+            };
             for dir in [Dir::Callers, Dir::Callees] {
-                for r in super::reachable_over(self, name, dir, hops) {
-                    // A seed reached as another seed's frontier is not itself
-                    // frontier; and each reached symbol counts once.
+                for r in super::reachable_over(self, name, dir, effective_hops) {
                     if !seeds.contains(r.name.as_str())
                         && seen.insert((r.name.clone(), r.file.clone()))
                     {
@@ -298,7 +434,10 @@ impl TenantView<'_> {
                 }
             }
         }
-        out
+        BoundedFrontier {
+            reached: out,
+            bounded_seeds,
+        }
     }
 
     /// The composed definition sites of `name` — overlay definitions plus
