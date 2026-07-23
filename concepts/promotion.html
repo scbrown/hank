@@ -217,8 +217,15 @@ doc rot becomes a SPARQL query — "every <code>Document</code> referencing a <c
 that no longer exists."</p>
 <ul>
 <li>Facts are emitted as Turtle in the existing <code>bobbin:</code> code ontology and
-<strong>SHACL-validated before write</strong> — Hank never writes to Quipu without passing
-the shapes in <code>shapes/code-entities.ttl</code> (extended with edge shapes).</li>
+<strong>SHACL-validated before write</strong> (in-process via <code>rudof_lib</code>, FR-20) — Hank
+never writes to Quipu without passing <code>shapes/code-edges.ttl</code>, the compiled-in
+shape set. It gates the structural edges (<code>calls</code>, <code>references</code>, <code>imports</code>,
+<code>dataDependsOn</code>, <code>controlDependsOn</code>, <code>hasTier</code>) and the <code>Section → references</code>
+edge (§5.10), and carries the node-shape constraints synced byte-for-byte
+from Quipu's <code>code-entities.ttl</code> so a shape drift is caught at Hank rather
+than discovered as a Quipu refusal. A real <code>export</code> projection is
+round-trip-validated against these shapes in the test suite, so the emitter
+cannot drift from the gate unnoticed.</li>
 <li>Writes go through Quipu's existing surface (<code>quipu_knot</code> / <code>POST /knot</code> /
 <code>Store::transact</code>), honoring <code>valid_from</code>/<code>valid_to</code>, <code>actor</code>, and <code>source</code>
 (the commit SHA).</li>
