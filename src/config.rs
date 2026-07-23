@@ -543,16 +543,10 @@ mod tests {
             ("enable_lsp", "Phase 2/3 — LSP tier not built"),
             ("enable_cpg", "Phase 2 — CPG tier not built"),
             ("lsp_on", "LSP tier not built"),
-            (
-                "tenancy",
-                "Phase 3 — engine built (hank #2); nothing reads these until the FR-18 lifecycle work (hank #6)",
-            ),
-            ("max_overlays", "Phase 3 — read by the FR-18 lifecycle (hank #6)"),
-            (
-                "high_fanin_threshold",
-                "Phase 3 — read by the FR-18 lifecycle (hank #6)",
-            ),
-            ("overlay_eviction", "Phase 3 — read by the FR-18 lifecycle (hank #6)"),
+            // The [hank.tenancy] keys (tenancy / max_overlays /
+            // high_fanin_threshold / overlay_eviction) are now LIVE — read by
+            // TenantRegistry's FR-18 lifecycle (hank #6) — so they are no longer
+            // phased. The guard's "allowlist must not rot" check enforces that.
             ("promote_on", "Phase 4 — Quipu promotion not built"),
             ("shapes_path", "Phase 4 — Quipu promotion not built"),
         ];

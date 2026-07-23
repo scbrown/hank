@@ -657,7 +657,7 @@ impl Cli {
                 let base = crate::graph::Base::build_at(path, &config.base_ref)
                     .map_err(|e| anyhow::anyhow!("watch: no base graph to overlay: {e}"))?;
                 let registry = std::sync::Arc::new(std::sync::RwLock::new(
-                    crate::graph::TenantRegistry::new(base),
+                    crate::graph::TenantRegistry::with_tenancy(base, config.tenancy.clone()),
                 ));
                 Box::new(crate::watch::OverlayRefresh::new(
                     registry,

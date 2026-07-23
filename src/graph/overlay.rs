@@ -116,6 +116,30 @@ pub fn update_frontier(view: &super::TenantView<'_>, changed: &[&str], hops: u32
     view.frontier(changed, hops)
 }
 
+/// [`update_frontier`] with the §14.2 high-fan-in guard (FR-18): a seed whose
+/// direct fan exceeds `high_fanin_threshold` has its cascade clipped to one hop
+/// so a widely-referenced signature edit cannot blow the frontier budget. Any
+/// bounding is `warn!`-logged here — the cascade is bounded, never silently
+/// truncated (§6.2). Returns only the reached set; callers that need the
+/// bounded-seed list can call [`super::TenantView::frontier_bounded`] directly.
+#[must_use]
+pub fn update_frontier_bounded(
+    view: &super::TenantView<'_>,
+    changed: &[&str],
+    hops: u32,
+    high_fanin_threshold: usize,
+) -> Vec<Reached> {
+    let result = view.frontier_bounded(changed, hops, high_fanin_threshold);
+    if !result.bounded_seeds.is_empty() {
+        tracing::warn!(
+            seeds = ?result.bounded_seeds,
+            threshold = high_fanin_threshold,
+            "high-fan-in cascade bounded to 1 hop (FR-18 §14.2)"
+        );
+    }
+    result.reached
+}
+
 impl Overlay {
     /// Record `parsed` as the truth for `rel`. Replaces any previous touch of
     /// the same file; the index is rebuilt from the touched set —

@@ -31,9 +31,10 @@ use crate::types::{EdgeKind, Tier};
 pub use base::{Base, FileFacts};
 pub use blast::{reachable_over, Adjacency, Dir, NodeMeta, Reached};
 pub use community::{Community, CommunityMember};
-pub use overlay::{update_frontier, Overlay, OverlaySymbol, ParsedFile};
+pub use overlay::{update_frontier, update_frontier_bounded, Overlay, OverlaySymbol, ParsedFile};
 pub use tenant::{
-    OverlayStatus, RegistryStatus, SharingStats, SymRef, TenantRegistry, TenantView, ViewSymbol,
+    BoundedFrontier, OverlayStatus, RegistryStatus, SharingStats, SymRef, TenantRegistry,
+    TenantView, ViewSymbol,
 };
 
 /// A node in the call graph: one defined symbol.
