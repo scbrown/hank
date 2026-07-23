@@ -81,6 +81,13 @@ pub(crate) struct GrammarSpec {
     pub callee_name: fn(Node, &[u8]) -> Option<String>,
     /// Collect any module-name references contributed by this node.
     pub collect_imports: fn(Node, &[u8], &mut Vec<String>),
+    /// The name this node contributes to the scope chain of its descendants
+    /// (module/impl/trait/class/function — per language), or `None` for nodes
+    /// that do not open a named scope. This is sibling-independent by design:
+    /// a symbol's scope chain never changes because another symbol was added
+    /// (aegis-1q14 ruled out collision-conditional qualification for exactly
+    /// that reason).
+    pub scope_name: fn(Node, &[u8]) -> Option<String>,
 }
 
 /// Look up the extraction recipe for `language`, or `None` if this build cannot
@@ -280,17 +287,20 @@ fn walk(spec: &GrammarSpec, root: Node, bytes: &[u8]) -> FileStructure {
     let mut symbols = Vec::new();
     let mut calls = Vec::new();
     let mut import_refs = Vec::new();
-    // Each frame carries the name of the nearest enclosing function, so a call
-    // site can be attributed to its caller.
-    let mut stack: Vec<(Node, Option<String>)> = vec![(root, None)];
+    // Each frame carries the name of the nearest enclosing function (so a call
+    // site can be attributed to its caller) and the chain of named enclosing
+    // scopes (so a symbol's identity survives a same-named sibling elsewhere in
+    // the file — aegis-1q14).
+    let mut stack: Vec<(Node, Option<String>, Vec<String>)> = vec![(root, None, Vec::new())];
 
-    while let Some((node, enclosing)) = stack.pop() {
+    while let Some((node, enclosing, scope)) = stack.pop() {
         let mut inner = enclosing.clone();
 
         if let Some(kind) = (spec.symbol_kind)(node, bytes) {
             if let Some(name) = (spec.symbol_name)(node, bytes) {
                 symbols.push(Symbol {
                     name: name.clone(),
+                    scope: scope.clone(),
                     kind,
                     start_line: node.start_position().row + 1,
                     end_line: node.end_position().row + 1,
@@ -314,9 +324,18 @@ fn walk(spec: &GrammarSpec, root: Node, bytes: &[u8]) -> FileStructure {
 
         (spec.collect_imports)(node, bytes, &mut import_refs);
 
+        // Children inherit this node's scope, extended when the node opens one.
+        let child_scope = match (spec.scope_name)(node, bytes) {
+            Some(name) => {
+                let mut s = scope.clone();
+                s.push(name);
+                s
+            }
+            None => scope,
+        };
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            stack.push((child, inner.clone()));
+            stack.push((child, inner.clone(), child_scope.clone()));
         }
     }
 
@@ -371,6 +390,7 @@ mod tests {
     fn sym(name: &str, kind: SymbolKind, start_line: usize) -> Symbol {
         Symbol {
             name: name.to_string(),
+            scope: Vec::new(),
             kind,
             start_line,
             end_line: start_line,
@@ -464,6 +484,55 @@ trait Greet { fn hello(&self); }
         let source = "struct S; impl S { fn method(&self) {} }";
         let symbols = extract_symbols(source, "rust").unwrap();
         assert!(symbols.iter().any(|s| s.name == "method"));
+    }
+
+    /// The aegis-1q14 collision anatomy, from bobbin's live census: a top-level
+    /// `mod run;` and an impl-scoped `fn run` in one file must carry DIFFERENT
+    /// scope chains — that difference is what keeps their IRIs distinct.
+    #[test]
+    fn same_named_symbols_in_different_scopes_carry_different_scope_chains() {
+        let source = "\
+mod run;
+struct Cli;
+impl Cli { pub fn run(&self) {} }
+";
+        let symbols = extract_symbols(source, "rust").unwrap();
+        let runs: Vec<&Symbol> = symbols.iter().filter(|s| s.name == "run").collect();
+        assert_eq!(runs.len(), 2, "both `run` symbols extracted");
+        let scopes: Vec<&[String]> = runs.iter().map(|s| s.scope.as_slice()).collect();
+        assert!(scopes.contains(&&[][..]), "the mod decl is top-level");
+        assert!(
+            scopes.contains(&&["Cli".to_string()][..]),
+            "the method is impl-scoped, got {scopes:?}"
+        );
+    }
+
+    /// Two trait impls on the SAME type both define `fmt`; the type name alone
+    /// would still collide, so the impl scope carries the trait too.
+    #[test]
+    fn trait_impls_on_one_type_get_distinct_scopes() {
+        let source = "\
+struct A;
+impl std::fmt::Debug for A { fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { Ok(()) } }
+impl std::fmt::Display for A { fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { Ok(()) } }
+";
+        let symbols = extract_symbols(source, "rust").unwrap();
+        let scopes: Vec<String> = symbols
+            .iter()
+            .filter(|s| s.name == "fmt")
+            .map(|s| s.scope.join("::"))
+            .collect();
+        assert_eq!(scopes.len(), 2);
+        assert_ne!(scopes[0], scopes[1], "trait discriminates: {scopes:?}");
+    }
+
+    /// Nested named scopes stack: a fn inside a mod inside a mod.
+    #[test]
+    fn scope_chains_nest_outermost_first() {
+        let source = "mod outer { mod inner { fn leaf() {} } }";
+        let symbols = extract_symbols(source, "rust").unwrap();
+        let leaf = symbols.iter().find(|s| s.name == "leaf").unwrap();
+        assert_eq!(leaf.scope, vec!["outer".to_string(), "inner".to_string()]);
     }
 
     #[test]

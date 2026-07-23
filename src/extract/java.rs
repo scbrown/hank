@@ -15,6 +15,18 @@ pub(super) fn spec() -> GrammarSpec {
         is_call_kind: |kind| kind == "method_invocation",
         callee_name,
         collect_imports,
+        scope_name,
+    }
+}
+
+/// Classes, interfaces, and enums open named scopes (nested classes with
+/// same-named methods must not share an IRI — aegis-1q14).
+fn scope_name(node: Node, bytes: &[u8]) -> Option<String> {
+    match node.kind() {
+        "class_declaration" | "interface_declaration" | "enum_declaration" => {
+            field_name(node, bytes)
+        }
+        _ => None,
     }
 }
 

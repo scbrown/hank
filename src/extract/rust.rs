@@ -15,6 +15,33 @@ pub(super) fn spec() -> GrammarSpec {
         is_call_kind: |kind| kind == "call_expression",
         callee_name,
         collect_imports,
+        scope_name,
+    }
+}
+
+/// The name a node contributes to its descendants' scope chain.
+///
+/// `impl` blocks are the load-bearing case (aegis-1q14: bobbin's `default` ×14
+/// and `fmt` ×3 are all same-named methods in different impls). A trait impl
+/// includes the trait — `impl Debug for A` and `impl Display for A` both define
+/// `fmt` on the same type, so the type name alone would still collide. `@` joins
+/// them (IRI-safe, no whitespace): `A@Debug` vs `A@Display`.
+fn scope_name(node: Node, bytes: &[u8]) -> Option<String> {
+    match node.kind() {
+        "mod_item" | "trait_item" | "function_item" => field_name(node, bytes),
+        "impl_item" => {
+            let ty = node
+                .child_by_field_name("type")
+                .and_then(|n| n.utf8_text(bytes).ok())?;
+            match node
+                .child_by_field_name("trait")
+                .and_then(|n| n.utf8_text(bytes).ok())
+            {
+                Some(tr) => Some(format!("{ty}@{tr}")),
+                None => Some(ty.to_string()),
+            }
+        }
+        _ => None,
     }
 }
 

@@ -42,6 +42,24 @@ fn common() -> GrammarSpec {
         is_call_kind: |kind| kind == "call_expression",
         callee_name,
         collect_imports,
+        scope_name,
+    }
+}
+
+/// Classes, interfaces, enums, namespaces/modules, and functions open named
+/// scopes (two classes' same-named methods in one file must not share an IRI —
+/// aegis-1q14).
+fn scope_name(node: Node, bytes: &[u8]) -> Option<String> {
+    match node.kind() {
+        "class_declaration"
+        | "abstract_class_declaration"
+        | "interface_declaration"
+        | "enum_declaration"
+        | "module"
+        | "internal_module"
+        | "function_declaration"
+        | "generator_function_declaration" => field_name(node, bytes),
+        _ => None,
     }
 }
 

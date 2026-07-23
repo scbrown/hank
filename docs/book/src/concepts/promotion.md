@@ -76,8 +76,14 @@ SELECT ?affected WHERE { ?t bobbin:name "hbiw_beta" . ?affected bobbin:calls+ ?t
 Code entities do **not** suffer the alias-fragmentation that afflicts the
 human-named infrastructure graph (a blast-radius query over fragmented nodes
 returns a confident *subset*, worse than nothing): Hank mints one deterministic
-IRI per symbol (`…/code/<repo>/<file>::<symbol>`), so re-promotion updates the
-same node rather than minting a synonym, and the `calls+` closure is complete.
+IRI per symbol (`…/code/<repo>/<file>::<scope…>::<symbol>`), so re-promotion
+updates the same node rather than minting a synonym, and the `calls+` closure
+is complete. The scope chain — enclosing module/impl/trait/class/function
+names, with a trait impl written `Type@Trait` — is what keeps two same-named
+symbols in one file on distinct IRIs (without it, 42 same-name collisions
+across three real repos silently merged into single nodes, unioning different
+symbols' call edges). It is sibling-independent: adding a second `run`
+elsewhere in the file never renames the first.
 
 ## Branches as named graphs
 
