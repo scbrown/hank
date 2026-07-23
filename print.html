@@ -533,6 +533,7 @@ the quad-store RFC sketch.</p>
 
 COMMANDS:
     serve       Run the MCP server (stdio; --http for streamable-HTTP)
+    daemon      Run the resident-graph daemon (FR-31; see Resident Daemon)
     analyze     Build the base graph for a path and print a summary
     refs        Find the definition sites of a symbol by name
     callers     Direct callers and callees of a symbol
@@ -650,6 +651,10 @@ mcp_http_port = 3040
 # distinguishable error. The served MCP/HTTP surface is read-only regardless
 # today; this guards the write path and any future served write.
 read_only = false
+# When true, the hook and MCP graph tools consult the resident daemon at
+# bind_address:mcp_http_port (see Resident Daemon) and fall back to the
+# transient build when it is unusable. The guard's fallback is LOUD.
+use_daemon = false
 
 # (Phase 4) Quipu promotion. `promote_on` and `shapes_path` are not yet read.
 [hank.quipu]
@@ -706,10 +711,9 @@ projects quipu's. See the design note "Policy edit hooks — the hank side".</p>
 <p>Hank exposes its capabilities as MCP tools, over stdio and streamable-HTTP.
 Tools use the <code>hank_*</code> naming convention, alongside Bobbin's <code>bobbin_*</code> and
 Quipu's <code>quipu_*</code> on the same agent.</p>
-<p>A parallel REST HTTP API (a per-tool endpoint beside the MCP mount, for the
-broker and other non-MCP consumers) is planned for Phase 3, landing with the
-resident daemon it fronts (FR-27). Until then those consumers reach the same
-tools over the streamable-HTTP MCP transport (<code>hank serve --http</code>).</p>
+<p>A parallel REST HTTP API (a per-tool endpoint for the broker and other
+non-MCP consumers) is served by the <a href="reference/daemon.html">resident daemon</a> (<code>hank daemon</code>, FR-27/FR-31). With <code>[hank.serve] use_daemon = true</code>, the graph tools
+here become thin clients of the same resident engine.</p>
 <p>Build with the <code>mcp</code> feature and run <code>hank serve</code> (stdio) or <code>hank serve --http</code>
 (streamable-HTTP on <code>[hank.serve] mcp_http_port</code>, default 3040).</p>
 <pre><code class="language-bash">cargo build --features mcp
@@ -742,6 +746,80 @@ rather than guessed at. <code>ok: true</code> means "nothing this tier can see i
 not "this compiles".</p>
 <p>Every response carries a <code>tier</code> tag; structure-reading requests will accept a
 <code>tenant</code> parameter as multi-tenancy lands (Phase 3).</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="resident-daemon"><a class="header" href="#resident-daemon">Resident Daemon</a></h1>
+<p><code>hank daemon</code> is the Phase-3 resident engine (FR-31): it builds the base graph
+<strong>once</strong>, holds it in memory, and answers queries over a local HTTP API
+(FR-27). The hook and the MCP graph tools become thin clients of it — the
+per-invocation <code>CodeGraph</code> build that dominates their latency disappears, which
+is what makes the sub-100ms guard budget reachable.</p>
+<pre><code class="language-bash">hank daemon              # build the graph, serve on [hank.serve] bind/port
+hank daemon --port 4050  # override the port
+</code></pre>
+<p>The daemon binds <code>[hank.serve] bind_address:mcp_http_port</code> (default
+<code>127.0.0.1:3040</code>). It refuses to start if the graph cannot be built — it never
+serves a graph it does not hold.</p>
+<h2 id="who-uses-it"><a class="header" href="#who-uses-it">Who uses it</a></h2>
+<p>Clients consult the daemon only when <code>[hank.serve] use_daemon = true</code> (default
+<code>false</code>), and even then only after verifying via <code>/status</code> that the daemon
+serves <strong>the same root</strong> they are asking about — a daemon holding repo B must
+never answer for repo A.</p>
+<ul>
+<li><strong><code>hank hook pre-edit</code></strong> sizes edits via <code>POST /measure</code>. If the daemon is
+down, the guard <strong>fails open and says so</strong> — the edit proceeds and the
+session gets a loud once-per-session notice. Down = allowed AND announced,
+never silently allowed, never blocked (see
+<a href="reference/policy-guard.html">Pre-Edit Policy Guard</a>).</li>
+<li><strong>MCP graph tools</strong> (<code>hank_callers</code>, <code>hank_callees</code>, <code>hank_impact</code>,
+<code>hank_references</code>) answer from the resident graph when the request is not
+<code>path</code>-scoped; otherwise, and on any daemon failure, they fall back to the
+transient build. Fallback here is silent to the model (a transient answer is
+equally correct, just slower); absence still goes to stderr for the operator.</li>
+</ul>
+<h2 id="http-api"><a class="header" href="#http-api">HTTP API</a></h2>
+<p>Every reply carries its provenance <code>tier</code> (FR-3). Facts come from the graph
+built at daemon startup — <code>/status.uptime_secs</code> says how old that snapshot is.
+Freshness tags (the FR-3 second half) arrive with overlay updates (hank #3);
+replies omit them rather than faking <code>fresh</code>.</p>
+<div class="table-wrapper"><table><thead><tr><th>Route</th><th>Method</th><th>Query/body</th><th>Answer</th></tr></thead><tbody>
+<tr><td><code>/health</code></td><td>GET</td><td>—</td><td>bare <code>ok</code> (the liveness probe)</td></tr>
+<tr><td><code>/status</code></td><td>GET</td><td>—</td><td>root, node/edge counts, uptime, tiers</td></tr>
+<tr><td><code>/callers</code></td><td>GET</td><td><code>symbol</code></td><td>direct callers, from the resident graph</td></tr>
+<tr><td><code>/callees</code></td><td>GET</td><td><code>symbol</code></td><td>direct callees, from the resident graph</td></tr>
+<tr><td><code>/impact</code></td><td>GET</td><td><code>symbol</code>, <code>hops</code> (default 5)</td><td>transitive blast radius</td></tr>
+<tr><td><code>/references</code></td><td>GET</td><td><code>symbol</code></td><td>definition sites, from the resident index</td></tr>
+<tr><td><code>/symbols</code></td><td>GET</td><td><code>file</code> (root-relative)</td><td>that file's symbols, line order</td></tr>
+<tr><td><code>/dataflow</code></td><td>GET</td><td><code>function</code>, <code>path?</code>, <code>var?</code>, <code>forward?</code>, <code>hops?</code></td><td>intra-procedural data dependence</td></tr>
+<tr><td><code>/measure</code></td><td>POST</td><td><code>{file, rel, anchors[], max_hops?}</code></td><td>edit blast-radius sizing for the guard</td></tr>
+</tbody></table>
+</div>
+<p>Notes that keep the answers honest:</p>
+<ul>
+<li><strong><code>found</code> vs empty.</strong> "The symbol is not in the graph" and "the symbol has no
+callers" are different answers; every reply separates them. <code>/symbols</code> is the
+one surface that cannot: files enter the graph only through their symbols, so
+<code>known: false</code> covers absent, unparseable, and symbol-less files alike —
+render it as "no symbols in the resident graph", never "the file is empty".</li>
+<li><strong>Root confinement.</strong> <code>/measure</code> names a file to read and <code>/dataflow</code> a
+subtree to build; both refuse (400) any path resolving outside the daemon's
+root. A localhost daemon must not become an arbitrary-file reader.</li>
+<li><strong><code>/dataflow</code> is not resident.</strong> Dataflow has no resident model yet
+(hank #22); the daemon computes it per request so the surface is complete
+rather than silently partial. The reply shape will not change when a resident
+model arrives.</li>
+</ul>
+<h2 id="failure-semantics"><a class="header" href="#failure-semantics">Failure semantics</a></h2>
+<p>The client seam reports "daemon not reachable" as its own state that callers
+must handle — it can never be folded into an empty answer. What each caller
+does with it differs by contract:</p>
+<div class="table-wrapper"><table><thead><tr><th>Caller</th><th>Daemon down means</th></tr></thead><tbody>
+<tr><td>pre-edit guard</td><td>edit <strong>allowed</strong> + loud notice (fail-open, announced)</td></tr>
+<tr><td>MCP graph tools</td><td>transient rebuild, stderr note (correct, slower)</td></tr>
+<tr><td>anything parsing <code>/status</code></td><td>absent/unparseable = not a usable daemon</td></tr>
+</tbody></table>
+</div>
+<p>The guard's taxonomy keeps "the guard ran and found nothing" distinct from
+"the guard could not run" end to end; killing the daemon is the cheapest
+bypass, so its absence must always be visible.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="the-pre-edit-policy-guard--integration-contract"><a class="header" href="#the-pre-edit-policy-guard--integration-contract">The Pre-Edit Policy Guard — Integration Contract</a></h1>
 <p><code>hank hook pre-edit</code> is a Claude Code <strong><code>PreToolUse</code></strong> hook that can <strong>deny</strong> an
 edit whose blast radius or target path exceeds the calling agent's capability

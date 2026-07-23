@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>CLI Commands - Hank — Live Code Structure</title>
+        <title>Resident Daemon - Hank — Live Code Structure</title>
 
 
         <!-- Custom HTML head -->
@@ -147,7 +147,7 @@
                         <a href="https://github.com/scbrown/hank" title="Git repository" aria-label="Git repository">
                             <i id="git-repository-button" class="fa fa-github"></i>
                         </a>
-                        <a href="https://github.com/scbrown/hank/edit/main/docs/book/src/reference/cli.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                        <a href="https://github.com/scbrown/hank/edit/main/docs/book/src/reference/daemon.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
                             <i id="git-edit-button" class="fa fa-edit"></i>
                         </a>
 
@@ -181,104 +181,90 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="cli-commands"><a class="header" href="#cli-commands">CLI Commands</a></h1>
-<pre><code class="language-text">USAGE:
-    hank &lt;COMMAND&gt;
-
-COMMANDS:
-    serve       Run the MCP server (stdio; --http for streamable-HTTP)
-    daemon      Run the resident-graph daemon (FR-31; see Resident Daemon)
-    analyze     Build the base graph for a path and print a summary
-    refs        Find the definition sites of a symbol by name
-    callers     Direct callers and callees of a symbol
-    communities Densely-connected symbol clusters (deterministic Louvain, FR-9)
-    impact      Blast radius; --cochange reconciles against history (FR-11)
-    dataflow    Intra-procedural data dependence within a function
-    export      Emit the referential structure as Turtle (bobbin: ontology)
-    hook        Harness hook adapter (post-edit advisory / pre-edit guard)
-    verify      Verdict on a proposed edit buffer (FR-23/FR-24)
-    promote     Promote a commit's structural facts into Quipu    [Phase 4]
-    status      Show base commit, tiers, and configuration
-    completions Generate shell completions
-    help        Print help
-
-GLOBAL FLAGS:
-    --json      Machine-readable output
-    --quiet     Suppress non-essential output
-    --verbose   Raise the default log level to debug (RUST_LOG still wins)
-    --tenant    Tenant/session id (default: single-tenant)
-    --config    Path to config file (replaces discovery; must exist)
+                        <h1 id="resident-daemon"><a class="header" href="#resident-daemon">Resident Daemon</a></h1>
+<p><code>hank daemon</code> is the Phase-3 resident engine (FR-31): it builds the base graph
+<strong>once</strong>, holds it in memory, and answers queries over a local HTTP API
+(FR-27). The hook and the MCP graph tools become thin clients of it — the
+per-invocation <code>CodeGraph</code> build that dominates their latency disappears, which
+is what makes the sub-100ms guard budget reachable.</p>
+<pre><code class="language-bash">hank daemon              # build the graph, serve on [hank.serve] bind/port
+hank daemon --port 4050  # override the port
 </code></pre>
-<p><code>--config &lt;path&gt;</code> <strong>replaces</strong> config discovery rather than adding to it: it
-loads exactly that file over the compiled defaults, and the ambient
-<code>.bobbin/config.toml</code> is not consulted (FR-29 ranks a flag above project and
-user config). A <code>--config</code> path that does not exist is a loud error, never a
-silent fall-back to discovery — so pointing the pre-edit guard at a scope file
-with a mistyped path fails visibly instead of quietly enforcing the wrong scope.</p>
-<p><code>--verbose</code> raises the default tracing level from <code>info</code> to <code>debug</code>. <code>RUST_LOG</code>,
-when set, still wins and can target individual modules, so the precedence is
-<code>RUST_LOG</code> &gt; <code>--verbose</code> &gt; the <code>info</code> default.</p>
-<h2 id="examples"><a class="header" href="#examples">Examples</a></h2>
-<pre><code class="language-bash">hank analyze src
-hank analyze src --at main     # structure of the tree at a baseline commit (FR-13)
-hank refs authenticate src --json
-hank status                    # resolves base_ref to a commit SHA (in a git repo)
-hank impact authenticate src --hops 5   # lookup is by bare symbol name, not file::symbol
-hank communities src --json         # symbol clusters, largest-first
-hank verify --file src/auth.rs --buffer /tmp/edited.rs
-hank promote --commit HEAD
-</code></pre>
-<h2 id="hank-verify"><a class="header" href="#hank-verify"><code>hank verify</code></a></h2>
-<p>Checks a <em>proposed</em> buffer against the graph Hank already holds and returns a
-boolean verdict plus violations (FR-23/FR-24). Exits <strong>non-zero</strong> when the buffer
-has violations, so scripts and CI can gate on it.</p>
-<pre><code class="language-console">$ hank verify --file src/a.rs --buffer /tmp/proposed.rs
-violations src/a.rs [TreeSitter]
-  ghost:2 `ghost` is called here but is defined nowhere in this buffer or the
-          project graph, and is not brought into scope by a `use`.
-  takes_two:2 `takes_two` is called with 1 argument(s) but is defined at line 1
-          taking 2.
-</code></pre>
-<p>Only violations the edit <em>introduces</em> are reported: the file's current contents
-are the baseline, so pre-existing breakage is not blamed on this edit.</p>
-<p><strong>Read the <code>unchecked</code> list before trusting a clean verdict.</strong> At the tree-sitter
-tier there is no type information and no name resolution, so:</p>
-<div class="table-wrapper"><table><thead><tr><th>Violation (FR-23)</th><th>At this tier</th></tr></thead><tbody>
-<tr><td><code>identifier-does-not-exist</code></td><td>free calls only, and only ones the edit introduces</td></tr>
-<tr><td><code>wrong-arity</code></td><td>free calls resolving to exactly one known definition</td></tr>
-<tr><td><code>unresolved-import</code></td><td>bodiless <code>mod foo;</code> with no sibling file</td></tr>
-<tr><td><code>type-violation</code></td><td><strong>not checked</strong> — needs the LSP tier</td></tr>
+<p>The daemon binds <code>[hank.serve] bind_address:mcp_http_port</code> (default
+<code>127.0.0.1:3040</code>). It refuses to start if the graph cannot be built — it never
+serves a graph it does not hold.</p>
+<h2 id="who-uses-it"><a class="header" href="#who-uses-it">Who uses it</a></h2>
+<p>Clients consult the daemon only when <code>[hank.serve] use_daemon = true</code> (default
+<code>false</code>), and even then only after verifying via <code>/status</code> that the daemon
+serves <strong>the same root</strong> they are asking about — a daemon holding repo B must
+never answer for repo A.</p>
+<ul>
+<li><strong><code>hank hook pre-edit</code></strong> sizes edits via <code>POST /measure</code>. If the daemon is
+down, the guard <strong>fails open and says so</strong> — the edit proceeds and the
+session gets a loud once-per-session notice. Down = allowed AND announced,
+never silently allowed, never blocked (see
+<a href="policy-guard.html">Pre-Edit Policy Guard</a>).</li>
+<li><strong>MCP graph tools</strong> (<code>hank_callers</code>, <code>hank_callees</code>, <code>hank_impact</code>,
+<code>hank_references</code>) answer from the resident graph when the request is not
+<code>path</code>-scoped; otherwise, and on any daemon failure, they fall back to the
+transient build. Fallback here is silent to the model (a transient answer is
+equally correct, just slower); absence still goes to stderr for the operator.</li>
+</ul>
+<h2 id="http-api"><a class="header" href="#http-api">HTTP API</a></h2>
+<p>Every reply carries its provenance <code>tier</code> (FR-3). Facts come from the graph
+built at daemon startup — <code>/status.uptime_secs</code> says how old that snapshot is.
+Freshness tags (the FR-3 second half) arrive with overlay updates (hank #3);
+replies omit them rather than faking <code>fresh</code>.</p>
+<div class="table-wrapper"><table><thead><tr><th>Route</th><th>Method</th><th>Query/body</th><th>Answer</th></tr></thead><tbody>
+<tr><td><code>/health</code></td><td>GET</td><td>—</td><td>bare <code>ok</code> (the liveness probe)</td></tr>
+<tr><td><code>/status</code></td><td>GET</td><td>—</td><td>root, node/edge counts, uptime, tiers</td></tr>
+<tr><td><code>/callers</code></td><td>GET</td><td><code>symbol</code></td><td>direct callers, from the resident graph</td></tr>
+<tr><td><code>/callees</code></td><td>GET</td><td><code>symbol</code></td><td>direct callees, from the resident graph</td></tr>
+<tr><td><code>/impact</code></td><td>GET</td><td><code>symbol</code>, <code>hops</code> (default 5)</td><td>transitive blast radius</td></tr>
+<tr><td><code>/references</code></td><td>GET</td><td><code>symbol</code></td><td>definition sites, from the resident index</td></tr>
+<tr><td><code>/symbols</code></td><td>GET</td><td><code>file</code> (root-relative)</td><td>that file's symbols, line order</td></tr>
+<tr><td><code>/dataflow</code></td><td>GET</td><td><code>function</code>, <code>path?</code>, <code>var?</code>, <code>forward?</code>, <code>hops?</code></td><td>intra-procedural data dependence</td></tr>
+<tr><td><code>/measure</code></td><td>POST</td><td><code>{file, rel, anchors[], max_hops?}</code></td><td>edit blast-radius sizing for the guard</td></tr>
 </tbody></table>
 </div>
-<p>The bias is against false positives throughout: method calls, path-qualified
-calls, imports, locals, closures, and function-typed parameters are all left
-alone rather than guessed at. <code>ok: true</code> means "nothing this tier can see is
-wrong", not "this compiles".</p>
-<p><code>hank status</code> resolves the configured <code>base_ref</code> (default <code>main</code>) to a concrete
-commit via the system <code>git</code>; outside a git repository the base commit shows as
-unresolved and Hank falls back to the working tree.</p>
-<p><code>hank analyze --at &lt;ref&gt;</code> builds the summary from the <strong>git tree</strong> at a baseline
-commit (FR-13) rather than the working copy — the shared read-only base the
-Phase-3 resident graph will hold. It reads blob content at the ref (never the
-working tree), and degrades to an empty result outside a repo or for an
-unresolved ref.</p>
-<p><code>hank communities</code> partitions the call graph into densely-connected symbol
-clusters using deterministic Louvain (FR-9) — the same partition on every run,
-no RNG. Communities are ordered largest-first; members carry a <code>tier</code> tag.
-Quipu runs community detection over <em>committed</em> facts; Hank computes it live
-over the hot graph.</p>
-<p>Commands marked with a phase print a notice until their engine lands; see the
-<a href="../design/specification.html">Specification</a> §12.</p>
+<p>Notes that keep the answers honest:</p>
+<ul>
+<li><strong><code>found</code> vs empty.</strong> "The symbol is not in the graph" and "the symbol has no
+callers" are different answers; every reply separates them. <code>/symbols</code> is the
+one surface that cannot: files enter the graph only through their symbols, so
+<code>known: false</code> covers absent, unparseable, and symbol-less files alike —
+render it as "no symbols in the resident graph", never "the file is empty".</li>
+<li><strong>Root confinement.</strong> <code>/measure</code> names a file to read and <code>/dataflow</code> a
+subtree to build; both refuse (400) any path resolving outside the daemon's
+root. A localhost daemon must not become an arbitrary-file reader.</li>
+<li><strong><code>/dataflow</code> is not resident.</strong> Dataflow has no resident model yet
+(hank #22); the daemon computes it per request so the surface is complete
+rather than silently partial. The reply shape will not change when a resident
+model arrives.</li>
+</ul>
+<h2 id="failure-semantics"><a class="header" href="#failure-semantics">Failure semantics</a></h2>
+<p>The client seam reports "daemon not reachable" as its own state that callers
+must handle — it can never be folded into an empty answer. What each caller
+does with it differs by contract:</p>
+<div class="table-wrapper"><table><thead><tr><th>Caller</th><th>Daemon down means</th></tr></thead><tbody>
+<tr><td>pre-edit guard</td><td>edit <strong>allowed</strong> + loud notice (fail-open, announced)</td></tr>
+<tr><td>MCP graph tools</td><td>transient rebuild, stderr note (correct, slower)</td></tr>
+<tr><td>anything parsing <code>/status</code></td><td>absent/unparseable = not a usable daemon</td></tr>
+</tbody></table>
+</div>
+<p>The guard's taxonomy keeps "the guard ran and found nothing" distinct from
+"the guard could not run" end to end; killing the daemon is the cheapest
+bypass, so its absence must always be visible.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../concepts/promotion.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../reference/mcp-tools.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
-                            <a rel="next prefetch" href="../reference/config.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../reference/policy-guard.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
 
@@ -288,11 +274,11 @@ over the hot graph.</p>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../concepts/promotion.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../reference/mcp-tools.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
                     </a>
 
-                    <a rel="next prefetch" href="../reference/config.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../reference/policy-guard.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>
