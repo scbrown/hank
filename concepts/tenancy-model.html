@@ -204,6 +204,20 @@ reachability query that answers "what does this change affect?" for a consumer.<
 <p><strong>One primitive, two uses — build it once.</strong></p>
 <p>See the <a href="../design/specification.html">Specification</a> §5.5 for the frontier
 algorithm, eviction policy, and high-fan-in handling.</p>
+<h2 id="implementation-state"><a class="header" href="#implementation-state">Implementation state</a></h2>
+<p>The engine above exists as a library (hank #2): <code>graph::Base</code> (shared,
+read-only, <code>Arc</code>-shared, built at a resolved commit with per-file content
+hashes), <code>graph::Overlay</code> (owned re-parses of touched files only —
+<code>O(touched)</code>, never <code>O(repo)</code>), and <code>graph::TenantRegistry</code> /
+<code>graph::TenantView</code> (the per-query <code>base + overlay</code> composition, walked by the
+same FR-12 BFS as every other graph). Isolation is structural: a view composes
+exactly one tenant's overlay, the base is immutable, and interned parses are
+shared by content hash (FR-15) without sharing any view state. The
+<code>tests/overlay_isolation_tests.rs</code> suite pins §6.3 absolute isolation,
+masking/revert/deletion, and the cost shape. Not yet wired: the resident
+daemon serving per-tenant views over HTTP/MCP (registry-in-daemon), and the
+FR-16 frontier recompute (hank #3) — until then an overlay-NEW symbol name
+(one with zero base definitions) cannot see its base callers.</p>
 
                     </main>
 
