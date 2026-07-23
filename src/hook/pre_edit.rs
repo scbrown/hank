@@ -76,10 +76,23 @@ pub fn guard(
                 .map(str::to_string)
         })
         .unwrap_or_default();
+    // The MODE rides every guard line (soak hygiene): the enforce-flip gate is
+    // "zero false positives measured over ambient ADVISE traffic", and the
+    // first live window was unusable because operator test bursts under an
+    // enforce config were indistinguishable from fleet lines. The mode is the
+    // filter that makes the soak evidence clean.
+    let mode = HankConfig::resolve(config_override, default_root)
+        .map(|c| match c.policy.mode {
+            Mode::Off => "off",
+            Mode::Advise => "advise",
+            Mode::Enforce => "enforce",
+        })
+        .unwrap_or("?");
     crate::metrics::emit(
         "guard",
         &[
             ("result", result.into()),
+            ("mode", mode.into()),
             (
                 "duration_ms",
                 u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX).into(),
@@ -505,6 +518,15 @@ fn governed_check(
         "governed",
         &[
             ("rules", rule_names.into()),
+            (
+                "mode",
+                match config.policy.mode {
+                    Mode::Off => "off",
+                    Mode::Advise => "advise",
+                    Mode::Enforce => "enforce",
+                }
+                .into(),
+            ),
             ("structural", (structural_count as u64).into()),
             ("blocking", any_blocking.into()),
         ],
