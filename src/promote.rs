@@ -256,7 +256,7 @@ fn chunk_turtle(turtle: &str, limit: usize) -> Result<Vec<String>> {
     let mut cur = String::from(header);
 
     // Append one statement-complete piece, starting a new chunk when full.
-    let mut push_piece = |cur: &mut String, chunks: &mut Vec<String>, piece: &str| -> Result<()> {
+    let push_piece = |cur: &mut String, chunks: &mut Vec<String>, piece: &str| -> Result<()> {
         if header.len() + 2 + piece.len() > limit {
             return Err(Error::Promote(format!(
                 "a single Turtle statement is {} bytes, over the {limit} byte chunk limit — cannot split below statement granularity",

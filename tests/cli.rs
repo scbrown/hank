@@ -598,6 +598,12 @@ fn languages_restricts_what_analyze_counts() {
 
 #[test]
 fn serve_read_only_refuses_a_write() {
+    if !cfg!(feature = "quipu") {
+        // The featureless stub exits 2 with its phase note BEFORE any guard
+        // runs (it must — its exit 0 once let a cron book an unpromoted commit
+        // as done), so there is no read_only path to pin in this build.
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("x.rs"), "fn x(){}\n").unwrap();
     // git init so promote's own preconditions don't mask the guard.
@@ -635,18 +641,13 @@ fn serve_read_only_refuses_a_write() {
         .env("HOME", dir.path())
         .current_dir(dir.path())
         .assert();
-    if cfg!(feature = "quipu") {
-        // With promotion wired, `promote` with no `--to` refuses for lack of an
-        // endpoint — a real precondition, reached only because the guard let it
-        // through. The guard is proven passed by the absence of its name here.
-        assert
-            .failure()
-            .stderr(predicate::str::contains("--to").or(predicate::str::contains("endpoint")))
-            .stderr(predicate::str::contains("read_only").not());
-    } else {
-        // Without the feature, promotion is a phase-4 stub that succeeds.
-        assert.success();
-    }
+    // With promotion wired, `promote` with no `--to` refuses for lack of an
+    // endpoint — a real precondition, reached only because the guard let it
+    // through. The guard is proven passed by the absence of its name here.
+    assert
+        .failure()
+        .stderr(predicate::str::contains("--to").or(predicate::str::contains("endpoint")))
+        .stderr(predicate::str::contains("read_only").not());
 }
 
 /// `hank export` prints Turtle; `hank export --to <url>` PROMOTES instead — one
@@ -686,7 +687,13 @@ fn export_to_routes_through_promotion_not_print() {
             .failure()
             .stdout(predicate::str::contains("bobbin:").not());
     } else {
-        assert.success();
+        // The featureless stub exits 2 (a stub exit 0 once let the quipu-ingest
+        // cron advance its promote marker past a commit that never promoted —
+        // aegis-ucoh). Pin the non-zero contract here so it cannot regress to a
+        // silent success.
+        assert
+            .failure()
+            .stderr(predicate::str::contains("--features quipu"));
     }
 }
 
