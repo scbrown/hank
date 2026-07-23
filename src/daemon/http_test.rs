@@ -336,6 +336,51 @@ async fn edit_feeds_the_tenant_overlay_and_queries_scope_by_tenant() {
 }
 
 #[tokio::test]
+async fn edit_matching_base_content_still_advises_and_does_not_412() {
+    // FR-15 base hit: an edit identical to the baseline creates no overlay
+    // entry, but /edit must still answer 200 with the base advisory — the file
+    // still has symbols with external callers. (Regression: deriving names from
+    // the absent overlay parse made this a spurious 412.)
+    let dir = committed_repo(); // leaf.rs, mid.rs calls leaf
+    let engine = ResidentEngine::build(dir.path(), None).unwrap();
+    let port = spawn(engine).await;
+
+    let (code, reply) = post_json(
+        port,
+        "/edit",
+        &serde_json::json!({
+            "tenant": "a", "rel": "leaf.rs", "content": "fn leaf() {}\n"
+        })
+        .to_string(),
+    )
+    .await;
+    assert_eq!(code, 200, "base-identical edit must not 412");
+    let reply = reply.unwrap();
+    assert_eq!(
+        reply["symbols"].as_u64().unwrap(),
+        1,
+        "base symbols still seen"
+    );
+    let advised: Vec<&str> = reply["advised"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["symbol"].as_str().unwrap())
+        .collect();
+    assert_eq!(advised, ["leaf"], "leaf has an external caller (mid.rs)");
+
+    // And it created NO overlay: /status shows no active overlay for a.
+    let status = get_json(port, "/status").await;
+    assert!(
+        status["tenant_layer"]["active_overlays"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "a base-identical edit must not mask anything"
+    );
+}
+
+#[tokio::test]
 async fn a_tenant_query_without_a_tenant_layer_is_refused_not_empty() {
     // A non-repo root has no commit to anchor a base to: naming a tenant must
     // be an explicit 412, never an empty answer wearing a normal one. The

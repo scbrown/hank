@@ -118,14 +118,11 @@ impl ResidentEngine {
         }
         let reg = lock.read().ok()?;
         let view = reg.view(tenant);
-        let names: Vec<String> = reg
-            .overlay(tenant)?
-            .parsed(rel)?
-            .structure
-            .symbols
-            .iter()
-            .map(|s| s.name.clone())
-            .collect();
+        // Read the edited file's symbols from the COMPOSED view, not the
+        // overlay's parse: an edit that matches the baseline (FR-15 base hit)
+        // creates no overlay entry, yet its symbols — the base's — still have
+        // an advisory. file_symbols resolves overlay-if-touched, base otherwise.
+        let names: Vec<String> = view.file_symbols(rel).into_iter().map(|s| s.name).collect();
         let mut advised = Vec::new();
         let mut files: BTreeSet<String> = BTreeSet::new();
         for name in &names {

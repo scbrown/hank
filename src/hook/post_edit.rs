@@ -290,6 +290,10 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         write_daemon_config(dir.path(), port);
 
+        // A REAL edit to a.rs (differs from base, still defines `leaf`): the
+        // daemon reads it from disk, so it must not match the baseline or the
+        // FR-15 base-hit would make it a no-op.
+        std::fs::write(dir.path().join("a.rs"), "fn leaf() {}\nfn added() {}\n").unwrap();
         // `late.rs` is UNCOMMITTED and untouched: the tenant view composes
         // over base@HEAD, so it must not appear — a transient build would see
         // it. Its absence below proves who answered.
