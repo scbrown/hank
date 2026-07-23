@@ -268,11 +268,7 @@ mod tests {
             ("host:solo.git", "solo"),
             ("/home/someone/checkouts/hank", "hank"),
         ] {
-            assert_eq!(
-                repo_name_from_url(url).as_deref(),
-                Some(want),
-                "url: {url}"
-            );
+            assert_eq!(repo_name_from_url(url).as_deref(), Some(want), "url: {url}");
         }
         // Degenerate inputs yield None, never an empty identity.
         assert_eq!(repo_name_from_url(""), None);

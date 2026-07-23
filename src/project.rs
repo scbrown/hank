@@ -96,7 +96,9 @@ pub fn decode_text_rules(sparql_json: &str) -> Result<Vec<TextRule>> {
         let get = |key: &str| -> Option<String> { binding_value(binding, key) };
         let required = |key: &str| -> Result<String> {
             get(key).ok_or_else(|| {
-                Error::Projection(format!("text-rule row {i}: missing required binding `{key}`"))
+                Error::Projection(format!(
+                    "text-rule row {i}: missing required binding `{key}`"
+                ))
             })
         };
         let tier = match required("tier")?.as_str() {

@@ -81,13 +81,12 @@ pub fn guard(
     // first live window was unusable because operator test bursts under an
     // enforce config were indistinguishable from fleet lines. The mode is the
     // filter that makes the soak evidence clean.
-    let mode = HankConfig::resolve(config_override, default_root)
-        .map(|c| match c.policy.mode {
+    let mode =
+        HankConfig::resolve(config_override, default_root).map_or("?", |c| match c.policy.mode {
             Mode::Off => "off",
             Mode::Advise => "advise",
             Mode::Enforce => "enforce",
-        })
-        .unwrap_or("?");
+        });
     crate::metrics::emit(
         "guard",
         &[
@@ -95,7 +94,9 @@ pub fn guard(
             ("mode", mode.into()),
             (
                 "duration_ms",
-                u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX).into(),
+                u64::try_from(started.elapsed().as_millis())
+                    .unwrap_or(u64::MAX)
+                    .into(),
             ),
             ("ext", ext.into()),
         ],
@@ -1301,7 +1302,9 @@ mod tests {
         );
         assert!(!blocks, "internal-only exposure must not block");
         assert!(messages.iter().any(|m| m.contains("downgraded")));
-        assert!(messages.iter().any(|m| m.contains("would BLOCK in a public repo")));
+        assert!(messages
+            .iter()
+            .any(|m| m.contains("would BLOCK in a public repo")));
     }
 
     #[cfg(feature = "quipu")]
@@ -1314,7 +1317,9 @@ mod tests {
             &RepoExposure::Unknown("repo `hank` is not in the graph".into()),
         );
         assert!(!blocks);
-        assert!(messages.iter().any(|m| m.contains("never blocks on a guess")));
+        assert!(messages
+            .iter()
+            .any(|m| m.contains("never blocks on a guess")));
         assert!(messages.iter().any(|m| m.contains("not in the graph")));
         // The remedy is named: exposure is DATA, so the fix is a graph write.
         assert!(messages.iter().any(|m| m.contains("repo_<name>")));
@@ -1328,6 +1333,9 @@ mod tests {
             &[text_violation(crate::textrules::TextTier::Warn)],
             &RepoExposure::Public,
         );
-        assert!(!blocks, "warn tier is advisory everywhere — per-pattern tier is data");
+        assert!(
+            !blocks,
+            "warn tier is advisory everywhere — per-pattern tier is data"
+        );
     }
 }

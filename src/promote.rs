@@ -275,11 +275,21 @@ mod tests {
     const SHAPES: &str = CODE_EDGE_SHAPES;
 
     // A promotion whose shape is correct: an IRI-valued `calls`, a known tier.
+    // The conforming fixture mirrors what the emitter ACTUALLY produces — a
+    // symbol carries name + definedIn, and its module carries filePath + repo +
+    // language — because the synced node shapes (quipu's registry) now require
+    // them. The old label-and-tier-only symbol predates the sync and fails
+    // MinCount x2: a "conforming" fixture thinner than any real emission tests
+    // a projection hank never writes.
     const CONFORMING: &str = r#"
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix bobbin: <http://aegis.gastown.local/ontology/> .
+bobbin:code_mod a bobbin:CodeModule ;
+  rdfs:label "m.rs" ; bobbin:filePath "m.rs" ;
+  bobbin:repo "fixture" ; bobbin:language "rust" .
 bobbin:code_x a bobbin:CodeSymbol ;
-  rdfs:label "x" ; bobbin:hasTier "lsp" ;
+  rdfs:label "x" ; bobbin:name "x" ; bobbin:hasTier "lsp" ;
+  bobbin:definedIn bobbin:code_mod ;
   bobbin:calls bobbin:code_y .
 "#;
 

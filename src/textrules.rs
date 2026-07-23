@@ -221,7 +221,9 @@ mod tests {
 
     #[test]
     fn clean_text_is_silent() {
-        assert!(lan_rule().violations("host: db.example.invalid\n", "a.md").is_empty());
+        assert!(lan_rule()
+            .violations("host: db.example.invalid\n", "a.md")
+            .is_empty());
     }
 
     #[test]
@@ -230,7 +232,10 @@ mod tests {
         let v = lan_rule().violations("assert dolt.lan", "src/no_internal_identifiers.rs");
         assert!(v.is_empty());
         // ...but the same content anywhere else still fires.
-        assert_eq!(lan_rule().violations("assert dolt.lan", "src/lib.rs").len(), 1);
+        assert_eq!(
+            lan_rule().violations("assert dolt.lan", "src/lib.rs").len(),
+            1
+        );
     }
 
     #[test]
@@ -238,7 +243,11 @@ mod tests {
         let mut rule = lan_rule();
         rule.exempt_path_regex = Some("([unclosed".into());
         // Failing toward enforcement: the rule still applies everywhere...
-        assert_eq!(rule.violations("dolt.lan", "src/no_internal_identifiers.rs").len(), 1);
+        assert_eq!(
+            rule.violations("dolt.lan", "src/no_internal_identifiers.rs")
+                .len(),
+            1
+        );
         // ...and the misconfiguration is loud.
         let errs = errors(&[rule]);
         assert_eq!(errs.len(), 1);
@@ -251,7 +260,11 @@ mod tests {
         rule.pattern = "([unclosed".into();
         assert!(rule.violations("dolt.lan", "a.md").is_empty()); // engine yields nothing...
         let errs = errors(&[rule]);
-        assert_eq!(errs.len(), 1, "...and errors() surfaces it for the loud fail-open");
+        assert_eq!(
+            errs.len(),
+            1,
+            "...and errors() surfaces it for the loud fail-open"
+        );
     }
 
     #[test]
@@ -281,7 +294,9 @@ mod tests {
             exempt_path_regex: None,
             rationale: None,
         };
-        assert!(node.violations("activation of a private key", "a.md").is_empty());
+        assert!(node
+            .violations("activation of a private key", "a.md")
+            .is_empty());
         assert_eq!(node.violations("deploy to vati", "a.md").len(), 1);
     }
 }

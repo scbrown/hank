@@ -19,12 +19,12 @@
 //! quipu's own vocabulary on the quipu side, the guard's REAL Outcome enum on
 //! this side, and "allowed clean" vs "allowed because unguarded" never share
 //! a label):
-//!   guard     {result: allow|deny|notify, duration_ms, ext}   every pre-edit
-//!   fail_open {fail_kind}                the guard degraded, and why-kind
+//!   guard     {result: allow|deny|notify, `duration_ms`, ext}   every pre-edit
+//!   `fail_open` {`fail_kind`}              the guard degraded, and why-kind
 //!   governed  {rules: [...], structural: n, blocking}         a rule spoke
 //!   command   {cmd}                      DELIBERATE use — the leverage signal
-//! Every line also carries ts (unix secs), agent ($SHANTY_AGENT) and tenant
-//! ($BOBBIN_ROLE), the two identity envs every st launch exports.
+//! Every line also carries ts (unix secs), agent (`$SHANTY_AGENT`) and tenant
+//! (`$BOBBIN_ROLE`), the two identity envs every st launch exports.
 
 use std::path::PathBuf;
 
@@ -82,8 +82,7 @@ pub fn emit_to(path: &std::path::Path, kind: &str, fields: &[(&str, serde_json::
             "ts".into(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0)
+                .map_or(0, |d| d.as_secs())
                 .into(),
         );
         if let Ok(agent) = std::env::var("SHANTY_AGENT") {
@@ -113,7 +112,11 @@ pub fn emit_to(path: &std::path::Path, kind: &str, fields: &[(&str, serde_json::
         // O_APPEND: one small write per line — atomic enough for a line-oriented
         // reader on the same host; a torn tail line is skipped by the converter
         // (the same one-corrupt-record-must-not-dam rule as ev-172).
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
             let _ = writeln!(f, "{line}");
         }
     }));
@@ -144,7 +147,11 @@ mod tests {
     fn a_line_is_valid_json_with_kind_and_fields() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("m.jsonl");
-        emit_to(&p, "guard", &[("result", "deny".into()), ("duration_ms", 12.into())]);
+        emit_to(
+            &p,
+            "guard",
+            &[("result", "deny".into()), ("duration_ms", 12.into())],
+        );
         let text = std::fs::read_to_string(&p).unwrap();
         let v: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
         assert_eq!(v["kind"], "guard");
@@ -178,7 +185,10 @@ mod tests {
         let p = dir.path().join("m.jsonl");
         std::fs::write(&p, vec![b'x'; (ROTATE_BYTES + 1) as usize]).unwrap();
         emit_to(&p, "guard", &[("result", "allow".into())]);
-        assert!(p.with_extension("jsonl.old").exists(), "the big file rolled aside");
+        assert!(
+            p.with_extension("jsonl.old").exists(),
+            "the big file rolled aside"
+        );
         assert_eq!(
             std::fs::read_to_string(&p).unwrap().lines().count(),
             1,
