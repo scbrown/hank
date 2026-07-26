@@ -1413,6 +1413,11 @@ Recommended order:
 references (FR-33/34, Phase 4); the `lsp`/`cpg` precision tiers; and filling in
 the `langs-extra` extractors.
 
+**Beyond code (Phase 4+):** a general in-memory fact graph + policy harness for
+the NeuralAmplifier project — generic non-code ingestion, a game-state policy
+model, `hank_guard`/`hank_whatif`, and per-game tenancy (FR-35..FR-39). Scoped in
+[neuralamplifier-harness.md](neuralamplifier-harness.md).
+
 **Known imprecision to keep in mind.** Call/reference resolution is *by name*
 (tree-sitter tier), so it over-connects on common names (`build`, `new`,
 `write`). This is expected — the `lsp`/`cpg` tiers are what refine it. Every
