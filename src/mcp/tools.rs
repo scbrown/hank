@@ -17,15 +17,36 @@ pub struct SymbolsRequest {
 /// Request for `hank_references` — definition sites of a symbol by name.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ReferencesRequest {
-    /// The symbol name to locate.
-    #[schemars(description = "Symbol name to locate, e.g. 'authenticate'")]
-    pub symbol: String,
+    /// The symbol name to locate. Optional so a caller can name the symbol by
+    /// POSITION instead (`at_file` + `at_line`, FR-4 / hank #8).
+    #[schemars(
+        description = "Symbol name to locate, e.g. 'authenticate'. Give this OR at_file+at_line."
+    )]
+    pub symbol: Option<String>,
 
     /// Directory to search (relative to the root; defaults to the whole root).
     #[schemars(
         description = "Directory to search, relative to the root. Omit to search everything."
     )]
     pub path: Option<String>,
+
+    /// File of a position-based lookup, relative to the search path.
+    #[schemars(
+        description = "With at_line: resolve the symbol AT this file/line instead of by name. \
+                       Use when a name is ambiguous ('build', 'new') and you know where you are. \
+                       Answers with the one symbol enclosing that line, not every symbol sharing \
+                       its name."
+    )]
+    pub at_file: Option<String>,
+
+    /// 1-based line of a position-based lookup.
+    ///
+    /// LINE, not (line, column): the tree-sitter extractor records lines, so a
+    /// column would be accepted and silently ignored — the FR-3 shape where an
+    /// approximation is served as the finer tier. Column precision arrives with
+    /// the LSP tier (FR-2).
+    #[schemars(description = "1-based line for a position-based lookup. Requires at_file.")]
+    pub at_line: Option<usize>,
 }
 
 /// Request for `hank_analyze` — a structural summary of a subtree.
@@ -88,6 +109,23 @@ pub struct ReferencesResponse {
     pub count: usize,
     /// The definition sites.
     pub definitions: Vec<RefItem>,
+    /// How many symbols the answer was searched against, when that is known. A
+    /// `count` of 0 over `searched_symbols: 0` means NOTHING under the queried
+    /// path was parseable — which is not the same fact as "the name is absent
+    /// from a populated graph", and a caller must be able to tell them apart
+    /// before reporting "this symbol does not exist" (hank #76).
+    ///
+    /// OMITTED, not zeroed, when the answer came from the resident daemon: the
+    /// `/references` reply carries `found` but no graph size, and a fabricated
+    /// `0` there would assert "nothing was parseable" about a fully populated
+    /// resident graph — the exact confident-wrong-answer this field exists to
+    /// prevent. Same rule as the FR-3 freshness half: omit rather than fake.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub searched_symbols: Option<usize>,
+    /// Provenance tier of the answer (FR-3), carried at the top level so the
+    /// EMPTY result is tagged too — a zero-definition reply has no `RefItem` to
+    /// hang a tier on, which is the same hole `not_found` closed on the CLI side.
+    pub tier: String,
 }
 
 /// Response for `hank_analyze`.

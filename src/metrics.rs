@@ -19,7 +19,8 @@
 //! quipu's own vocabulary on the quipu side, the guard's REAL Outcome enum on
 //! this side, and "allowed clean" vs "allowed because unguarded" never share
 //! a label):
-//!   guard     {result: allow|deny|notify, `duration_ms`, ext}   every pre-edit
+//!   guard     {result: allow|deny|notify, `duration_ms`, ext, mode,
+//!              path?, rule?}                                    every pre-edit
 //!   `fail_open` {`fail_kind`}              the guard degraded, and why-kind
 //!   governed  {rules: [...], structural: n, blocking}         a rule spoke
 //!   command   {cmd}                      DELIBERATE use — the leverage signal

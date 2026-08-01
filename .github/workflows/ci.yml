@@ -51,7 +51,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-clippy-${{ matrix.name }}-
             ${{ runner.os }}-cargo-
-      - run: cargo clippy ${{ matrix.flags }} -- -D warnings -A missing-docs
+      - run: cargo clippy ${{ matrix.flags }} --all-targets -- -D warnings -A missing-docs
 
   test:
     name: Test (${{ matrix.name }})

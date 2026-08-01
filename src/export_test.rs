@@ -30,7 +30,7 @@ fn symbol_iris_are_module_scoped() {
 
 /// The aegis-1q14 acceptance at the export layer: two same-named symbols in
 /// one file emit DISTINCT IRIs (before the scope chain they collapsed into
-/// one node in the BTreeSet — invisible downstream by construction).
+/// one node in the `BTreeSet` — invisible downstream by construction).
 #[test]
 fn same_named_symbols_in_one_file_get_distinct_iris() {
     let dir = tempfile::tempdir().unwrap();

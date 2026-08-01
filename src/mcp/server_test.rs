@@ -252,8 +252,10 @@ async fn every_fact_serving_response_carries_a_tier() {
             "hank_references",
             served(
                 s.hank_references(Parameters(ReferencesRequest {
-                    symbol: "a".into(),
+                    symbol: Some("a".into()),
                     path: None,
+                    at_file: None,
+                    at_line: None,
                 }))
                 .await,
             ),
@@ -339,4 +341,120 @@ async fn status_advertises_only_implemented_tiers() {
         serde_json::json!(["treesitter"]),
         "status advertised a tier with no implementation: {payload}"
     );
+}
+
+#[tokio::test]
+async fn references_declares_its_tier_at_the_top_level() {
+    // The empty-answer hole, on the references surface. `ReferencesResponse`
+    // tagged each `RefItem` and nothing else, so the one reply with no items —
+    // "this symbol has no definitions" — was served with no tier at all. That is
+    // the answer most likely to be acted on ("it does not exist"), and it was the
+    // only one FR-3 did not cover.
+    let dir = fixture();
+    let payload = served(
+        server(&dir)
+            .hank_references(Parameters(ReferencesRequest {
+                symbol: Some("definitely_not_here".into()),
+                path: None,
+                at_file: None,
+                at_line: None,
+            }))
+            .await,
+    );
+    assert_eq!(payload["count"], 0, "fixture has no such symbol: {payload}");
+    assert_top_level_tier(&payload, "hank_references");
+}
+
+#[tokio::test]
+#[cfg(feature = "langs-extra")] // needs the python grammar compiled in
+async fn references_resolves_a_non_rust_definition_on_the_transient_path() {
+    // hank #76 on the MCP surface. The transient fallback walked `rust_files()`
+    // and parsed every hit as "rust" — so this path answered "no definitions" for
+    // every Python/Go/TypeScript symbol in the tree. A `path`-scoped request ALWAYS
+    // lands here (it never consults the daemon, by design), so this was not merely
+    // the no-daemon case: it was every scoped reference query.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("quipu.py"),
+        "def derive_agents(cfg):\n    return cfg\n",
+    )
+    .unwrap();
+    let s = HankMcpServer::new(dir.path().to_path_buf(), None, None);
+
+    let payload = served(
+        s.hank_references(Parameters(ReferencesRequest {
+            symbol: Some("derive_agents".into()),
+            // Scoped on purpose: pins the TRANSIENT path, not the resident one.
+            at_file: None,
+            at_line: None,
+            path: Some(".".into()),
+        }))
+        .await,
+    );
+
+    assert_eq!(payload["count"], 1, "python definition missed: {payload}");
+    assert_eq!(payload["definitions"][0]["file"], "quipu.py");
+    assert_eq!(payload["definitions"][0]["start_line"], 1);
+    // The searched-set size is knowable on this path, so it is served — the
+    // discriminator between "absent name" and "nothing was parseable".
+    assert_eq!(payload["searched_symbols"], 1, "{payload}");
+}
+
+#[tokio::test]
+async fn references_by_position_answers_with_the_one_symbol_pointed_at() {
+    // hank #8 / FR-4 on the agent-facing surface. `x.rs` in `fixture()` defines
+    // `a` and `b`; a real tree has twelve `build`s, and an agent reading code
+    // knows WHERE it is, not which one. Position must answer with that symbol —
+    // resolving it to a name and looking the name up would hand back the whole
+    // name class, which is the ambiguity the position was given to remove.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("x.rs"),
+        "struct Alpha;\nimpl Alpha {\n    fn build() {}\n}\nstruct Beta;\nimpl Beta {\n    fn build() {}\n}\n",
+    )
+    .unwrap();
+    let s = HankMcpServer::new(dir.path().to_path_buf(), None, None);
+
+    // By name: ambiguous, both sites.
+    let by_name = served(
+        s.hank_references(Parameters(ReferencesRequest {
+            symbol: Some("build".into()),
+            path: Some(".".into()),
+            at_file: None,
+            at_line: None,
+        }))
+        .await,
+    );
+    assert_eq!(by_name["count"], 2, "name is ambiguous here: {by_name}");
+
+    // By position: exactly the one enclosing that line.
+    let by_pos = served(
+        s.hank_references(Parameters(ReferencesRequest {
+            symbol: None,
+            path: Some(".".into()),
+            at_file: Some("x.rs".into()),
+            at_line: Some(7),
+        }))
+        .await,
+    );
+    assert_eq!(by_pos["count"], 1, "position must disambiguate: {by_pos}");
+    assert_eq!(by_pos["definitions"][0]["start_line"], 7, "{by_pos}");
+    assert_top_level_tier(&by_pos, "hank_references");
+}
+
+#[tokio::test]
+async fn references_refuses_half_a_position_rather_than_downgrading_to_a_name() {
+    // `at_file` without `at_line` is not a position. Falling back to a name
+    // lookup would answer "which one is here?" with "all of them" — a silent
+    // downgrade to the very over-connection the parameter exists to cut.
+    let dir = fixture();
+    let err = server(&dir)
+        .hank_references(Parameters(ReferencesRequest {
+            symbol: Some("a".into()),
+            path: Some(".".into()),
+            at_file: Some("x.rs".into()),
+            at_line: None,
+        }))
+        .await;
+    assert!(err.is_err(), "half a position must be refused, not guessed");
 }

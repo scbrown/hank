@@ -1,6 +1,13 @@
 //! Tests for the daemon HTTP surface. Child module of [`super`] (`http`), split
 //! into a `_test.rs` file for the file-size discipline (tests exempt).
 
+//! Test names here shout the invariant they pin — `is_NEVER_observable`,
+//! `daemon_EXPECTED_but_DOWN`, `is_DOWN_not_UP`. That capitalisation is the
+//! same emphasis the prose uses throughout this repo, and it is load-bearing in
+//! a test name: it says which word the assertion turns on. Allowed explicitly,
+//! and scoped to tests, so the lint stays live everywhere else rather than
+//! being switched off crate-wide (hank #83).
+#![allow(non_snake_case)]
 use super::*;
 use crate::daemon::client::{probe, Reachability};
 use std::time::Duration;
@@ -67,7 +74,7 @@ async fn the_query_endpoints_answer_from_the_resident_graph() {
 
     // /callers?symbol=leaf — `caller` calls `leaf`.
     let callers = get_json(port, "/callers?symbol=leaf").await;
-    assert_eq!(callers["found"].as_bool().unwrap(), true);
+    assert!(callers["found"].as_bool().unwrap());
     let names: Vec<&str> = callers["neighbors"]
         .as_array()
         .unwrap()
@@ -79,12 +86,12 @@ async fn the_query_endpoints_answer_from_the_resident_graph() {
 
     // /impact?symbol=leaf — the transitive blast radius.
     let impact = get_json(port, "/impact?symbol=leaf&hops=5").await;
-    assert_eq!(impact["found"].as_bool().unwrap(), true);
+    assert!(impact["found"].as_bool().unwrap());
     assert!(impact["count"].as_u64().unwrap() >= 1);
 
     // An unknown symbol is found=false, not an error.
     let missing = get_json(port, "/callers?symbol=nope").await;
-    assert_eq!(missing["found"].as_bool().unwrap(), false);
+    assert!(!missing["found"].as_bool().unwrap());
 }
 
 #[tokio::test]
@@ -98,7 +105,7 @@ async fn references_serves_every_definition_site_from_the_resident_index() {
     let port = spawn(engine).await;
 
     let refs = get_json(port, "/references?symbol=shared").await;
-    assert_eq!(refs["found"].as_bool().unwrap(), true);
+    assert!(refs["found"].as_bool().unwrap());
     assert_eq!(refs["count"].as_u64().unwrap(), 2, "both definition sites");
     let mut files: Vec<&str> = refs["definitions"]
         .as_array()
@@ -112,7 +119,7 @@ async fn references_serves_every_definition_site_from_the_resident_index() {
 
     // Absent symbol: found=false, zero sites — an answer, not an error.
     let missing = get_json(port, "/references?symbol=absent").await;
-    assert_eq!(missing["found"].as_bool().unwrap(), false);
+    assert!(!missing["found"].as_bool().unwrap());
     assert_eq!(missing["count"].as_u64().unwrap(), 0);
 }
 
@@ -124,7 +131,7 @@ async fn symbols_serves_one_files_symbols_in_line_order() {
     let port = spawn(engine).await;
 
     let syms = get_json(port, "/symbols?file=two.rs").await;
-    assert_eq!(syms["known"].as_bool().unwrap(), true);
+    assert!(syms["known"].as_bool().unwrap());
     let names: Vec<&str> = syms["symbols"]
         .as_array()
         .unwrap()
@@ -137,7 +144,7 @@ async fn symbols_serves_one_files_symbols_in_line_order() {
     // A path the graph holds nothing for: known=false, and the reply still
     // carries its tier — absence is tagged like any other fact.
     let missing = get_json(port, "/symbols?file=missing.rs").await;
-    assert_eq!(missing["known"].as_bool().unwrap(), false);
+    assert!(!missing["known"].as_bool().unwrap());
     assert_eq!(missing["count"].as_u64().unwrap(), 0);
 }
 
@@ -154,7 +161,7 @@ async fn dataflow_mirrors_the_mcp_tool_and_is_confined_to_the_root() {
 
     // All edges of f: b depends on a, c depends on b.
     let all = get_json(port, "/dataflow?function=f").await;
-    assert_eq!(all["found"].as_bool().unwrap(), true);
+    assert!(all["found"].as_bool().unwrap());
     assert!(
         all["edges"].as_array().unwrap().len() >= 2,
         "got {}",
@@ -242,7 +249,7 @@ async fn measure_sizes_an_edit_and_confines_to_the_root() {
     .await;
     assert_eq!(code, 200);
     let body = body.unwrap();
-    assert_eq!(body["measured"].as_bool().unwrap(), true);
+    assert!(body["measured"].as_bool().unwrap());
     assert!(body["symbols"].as_u64().unwrap() >= 1);
 
     // A path OUTSIDE the root is refused, not read — the localhost daemon must
@@ -405,7 +412,7 @@ async fn a_tenant_query_without_a_tenant_layer_is_refused_not_empty() {
         "absent layer is null, not an empty registry"
     );
     let legacy = get_json(port, "/callers?symbol=leaf").await;
-    assert_eq!(legacy["found"].as_bool().unwrap(), true);
+    assert!(legacy["found"].as_bool().unwrap());
 }
 
 // Minimal HTTP GET without pulling a client dep into the crate: reuse the

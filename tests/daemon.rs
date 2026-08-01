@@ -63,6 +63,7 @@ fn start_daemon(root: &std::path::Path) -> (Child, u16) {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    let mut child = child;
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if let Ok(mut s) = TcpStream::connect(("127.0.0.1", port)) {
@@ -72,10 +73,23 @@ fn start_daemon(root: &std::path::Path) -> (Child, u16) {
                 return (child, port);
             }
         }
-        assert!(
-            Instant::now() < deadline,
-            "daemon did not serve /health within 30s"
-        );
+        if Instant::now() >= deadline {
+            // REAP BEFORE PANICKING. The timeout path used to drop the child
+            // implicitly, which neither kills nor waits on it: a daemon that came
+            // up slowly (or came up but failed /health) survived the test run,
+            // holding its port and its graph. In CI that is a stray process per
+            // failed run; locally it is a background `hank daemon` nobody
+            // remembers starting. Take its stderr with us, too — the panic that
+            // follows is the only place it will ever be read.
+            let _ = child.kill();
+            let stderr = child.stderr.take().map_or_else(String::new, |mut e| {
+                let mut s = String::new();
+                let _ = e.read_to_string(&mut s);
+                s
+            });
+            let _ = child.wait();
+            panic!("daemon did not serve /health within 30s; its stderr:\n{stderr}");
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
 }

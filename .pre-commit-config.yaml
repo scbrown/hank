@@ -27,7 +27,7 @@ repos:
 
       - id: cargo-clippy
         name: cargo clippy
-        entry: cargo clippy -- -D warnings -A missing-docs
+        entry: cargo clippy --all-targets -- -D warnings -A missing-docs
         language: system
         types: [rust]
         pass_filenames: false
@@ -36,8 +36,11 @@ repos:
         name: file size check
         entry: scripts/check-file-size.sh
         language: script
-        pass_filenames: false
-        stages: [pre-commit]
+        types: [rust]
+        # The hook reads the files it is HANDED. With pass_filenames off it fell
+        # back to the index, so `pre-commit run --all-files` checked nothing and
+        # still reported Passed (hank #83).
+        pass_filenames: true
 
       - id: mdbook-build
         name: mdbook build

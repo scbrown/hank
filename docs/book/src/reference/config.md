@@ -88,9 +88,65 @@ pattern = '\b[A-Z]+-[0-9]+\b'          # Predicate: the regex
 # gate = '\bTODO\b'                    # optional: only test captures matching this
 # applies_to = ["src/**"]              # optional path globs; empty = any path
 # message = "keep ticket refs in commits, not comments"  # optional override
+
+# What the usage spool records about each guard decision.
+[hank.metrics]
+# "off" (default) | "relative" (repo-relative) | "absolute".
+record_paths = "off"
 ```
 
 An unrecognized `mode` is a config **error**, not a silently inert guard.
+
+## Auditing guard decisions (`[hank.metrics]`)
+
+A guard record carries `result`, `mode`, `ext`, `agent`, `tenant` and `ts`. That
+is enough to count denies and not enough to review one: a record without a
+subject cannot confirm a rule is scoped correctly, cannot show a false positive,
+and cannot support an incident timeline. `ext` is a lossy proxy — six denies on
+`.json` tells an operator nothing actionable.
+
+`record_paths` adds the subject:
+
+| Value | Records | Use when |
+| --- | --- | --- |
+| `off` (default) | no path | The deployment treats paths as sensitive. |
+| `relative` | `src/auth.rs` | The useful setting for a fleet — identifies the file without disclosing where the checkout lives. |
+| `absolute` | `/srv/repo/src/auth.rs` | One host, several checkouts, where a relative path is ambiguous. |
+
+It defaults to `off` because paths are more sensitive than extensions: a
+deployment opts **in**, and recording is never switched on beneath one.
+
+The **rule id** is recorded whatever `record_paths` says. It names what actually
+fired — the matching `deny_paths` glob, `allow_paths` when a path matched no
+allow pattern, the exceeded ceiling, or the governed rule's name — and it is the
+field that makes a false positive diagnosable, since a wrongly-scoped rule and a
+correctly-scoped one are otherwise indistinguishable. A rule id is a name the
+operator wrote, not user content, so it carries none of the sensitivity that
+argues for gating paths.
+
+Both fields are recorded for **allow** as well as deny, under the same knob.
+Scope that can only be inferred from the absence of denies cannot be verified at
+all; confirming a rule is scoped correctly needs what it let through as much as
+what it stopped.
+
+```json
+{"kind":"guard","result":"deny","mode":"enforce","ext":"yaml",
+ "path":".beads/config.yaml","rule":"deny_paths:.beads/**",
+ "agent":"mathis","tenant":"worker","ts":1785544543}
+```
+
+Both fields are **omitted** rather than blanked when they have nothing to say
+(recording off, or a clean allow with no deciding rule), so a reader never has to
+tell "recorded as empty" from "not recorded".
+
+`hank status` reports the setting in force, so an operator can confirm from
+outside the process that recording is actually on — a control believed active and
+silently inert reads exactly like a quiet week.
+
+```console
+$ hank status
+  audit       : record_paths=relative
+```
 
 ## Projected governed policy (Phase 4, `quipu` feature)
 

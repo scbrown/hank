@@ -53,6 +53,99 @@ hank verify --file src/auth.rs --buffer /tmp/edited.rs
 hank promote --commit HEAD
 ```
 
+## `hank refs`
+
+Definition sites of a symbol, by name, from the same graph `callers`, `impact`
+and `communities` read — so every language this build has a grammar for is
+searched, not just Rust. (Grammars beyond Rust need the `langs-extra` feature;
+`hank status` lists what a given binary can parse.)
+
+```console
+$ hank refs derive_agents
+quipu.py:1 derive_agents (function) [TreeSitter]
+```
+
+A zero result says **which** kind of nothing it is, because the two are not the
+same fact:
+
+```console
+$ hank refs no_such_symbol           # a populated graph, name genuinely absent
+no definition found for no_such_symbol (searched 412 symbol(s))
+
+$ hank refs anything ./docs          # nothing here was parseable at all
+no definition found for anything (nothing parseable under ./docs — the graph is
+empty, so this is not evidence the symbol is absent)
+```
+
+Under `--json` the same distinction is `count` against `searched_symbols`, and
+the answer carries its `tier` whether or not it found anything (FR-3):
+
+```json
+{
+  "symbol": "derive_agents",
+  "count": 1,
+  "definitions": [
+    {
+      "file": "quipu.py",
+      "name": "derive_agents",
+      "kind": "function",
+      "start_line": 1,
+      "end_line": 2,
+      "tier": "treesitter"
+    }
+  ],
+  "searched_symbols": 412,
+  "tier": "treesitter"
+}
+```
+
+### Resolving by position
+
+Name lookup over-connects on common names — `build`, `new`, `write`. When you
+are reading code you know *where* you are, not which of the twelve it is, so
+point at it instead (FR-4):
+
+```console
+$ hank refs build                 # by name: ambiguous
+a.rs:3 build (function) [TreeSitter]
+a.rs:7 build (function) [TreeSitter]
+
+$ hank refs --at a.rs:7           # by position: the one you pointed at
+a.rs:7 build (function) [TreeSitter]
+```
+
+`--at FILE:LINE` resolves to the **innermost symbol enclosing that line** and
+answers with that symbol alone — it does not re-expand to every symbol sharing
+its name, which would restore the ambiguity the position was given to remove.
+`FILE` is relative to the search path; with `--at`, the positional argument is
+the search path rather than a symbol name.
+
+A **column is refused, not ignored**:
+
+```console
+$ hank refs --at a.rs:3:9
+error: --at takes FILE:LINE, not FILE:LINE:COL (got column `9`). The tree-sitter
+tier resolves to the innermost symbol on a LINE; column-precise resolution needs
+the LSP tier (FR-2), which is not built. Retry as `a.rs:3`.
+```
+
+Accepting the column and answering for the line would serve a line-precise
+answer to a column-precise question — an approximation presented as the finer
+tier, which FR-3 forbids. Two symbols on one line are not separable at the
+tree-sitter tier, and you are told so rather than handed a guess.
+
+A position that resolves to nothing explains which kind of nothing it is,
+rather than borrowing the vocabulary of "no such symbol":
+
+```console
+$ hank refs --at a.rs:3
+no symbol encloses a.rs:3 — it falls between definitions (a blank line, an
+import, a top-level comment). `a.rs` defines: one:1-1, two:5-5
+```
+
+`refs` answers "where is this **defined**". For "what **reaches** this", use
+`hank callers`; for the transitive form, `hank impact`.
+
 ## `hank verify`
 
 Checks a *proposed* buffer against the graph Hank already holds and returns a

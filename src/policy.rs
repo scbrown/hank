@@ -195,6 +195,11 @@ pub struct Violation {
     pub kind: ViolationKind,
     /// Model-facing explanation: what was exceeded, by how much, what to do.
     pub message: String,
+    /// Stable id of what actually fired, for the audit record (hank #77): the
+    /// matching `deny_paths` glob, `allow_paths` when nothing matched, or the
+    /// exceeded ceiling. `kind` says which CLASS denied; this says which rule —
+    /// the field that tells a wrongly-scoped rule from a correct one.
+    pub rule: String,
 }
 
 /// The size of an edit's transitive impact, as measured against the graph.
@@ -223,6 +228,7 @@ impl Scope {
                      pattern `{pattern}`). This path is outside your capability scope — do not \
                      retry it; if the change genuinely belongs there, ask for a wider scope."
                 ),
+                rule: format!("deny_paths:{pattern}"),
             });
         }
 
@@ -237,6 +243,10 @@ impl Scope {
                  (allowed: {}). Make the change inside your scope, or ask for a wider one.",
                 self.allow_paths.join(", ")
             ),
+            // No single pattern matched, so the allow LIST is the rule that
+            // fired. Naming the list (not a pattern) keeps the record honest
+            // about why: nothing matched, rather than something did.
+            rule: "allow_paths".to_string(),
         })
     }
 
@@ -254,14 +264,21 @@ impl Scope {
         }
 
         let mut exceeded = Vec::new();
+        // Which ceiling(s) fired, for the audit record. A list, not one name:
+        // an edit can breach both, and reporting only the first would send an
+        // operator to widen one ceiling and hit the other.
+        let mut fired = Vec::new();
         if let (true, Some(max)) = (symbols_over, self.max_impacted_symbols) {
             exceeded.push(format!("{} symbols (ceiling {max})", radius.symbols));
+            fired.push("max_impacted_symbols");
         }
         if let (true, Some(max)) = (files_over, self.max_impacted_files) {
             exceeded.push(format!("{} files (ceiling {max})", radius.files));
+            fired.push("max_impacted_files");
         }
 
         Some(Violation {
+            rule: fired.join("+"),
             kind: ViolationKind::BlastRadiusExceeded,
             message: format!(
                 "hank: editing `{rel}` reaches {} — beyond the blast radius allowed for tenant \
