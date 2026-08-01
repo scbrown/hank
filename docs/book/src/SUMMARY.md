@@ -29,6 +29,7 @@
 - [Specification](design/specification.md)
 - [Vision](design/vision.md)
 - [Policy edit hooks](design/policy-edit-hooks.md)
+- [Governance Plane](design/governance-plane.md)
 - [Governed Relations](design/governed-relations.md)
 - [Workflow-Gated Edits](design/workflow-gated-edits.md)
 
