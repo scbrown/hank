@@ -117,7 +117,7 @@ pub fn decode_text_rules(sparql_json: &str) -> Result<Vec<TextRule>> {
         // The IRI tail is the stable rule name; verdicts cite it.
         let iri = required("s")?;
         let name = iri.rsplit('/').next().unwrap_or(&iri).to_string();
-        out.push(TextRule {
+        let rule = TextRule {
             name,
             label: get("label"),
             pattern: required("regex")?,
@@ -125,9 +125,69 @@ pub fn decode_text_rules(sparql_json: &str) -> Result<Vec<TextRule>> {
             class: get("class"),
             exempt_path_regex: get("exempt"),
             rationale: get("rationale"),
-        });
+        };
+
+        // ONE ENTITY IS ONE RULE. The query carries four OPTIONALs, and SPARQL
+        // returns the CROSS PRODUCT of their bindings — so an entity with two
+        // `rdfs:comment` values comes back as two rows and became two identical
+        // rules. Measured on the live catalogue: 7 pattern entities projected as
+        // 11 rules, 4 of them duplicates, purely because somebody had added a
+        // second rationale to four of them.
+        //
+        // The cost lands on the model, twice over: the same violation is
+        // reported twice for one edit, and the two copies carry DIFFERENT
+        // rationales — for one of them, the second comment explained an
+        // exemption, so the advisory argued with itself. An agent reading a
+        // guard that contradicts itself learns to discount the guard.
+        //
+        // Multi-valued rdfs:comment is perfectly legal RDF and the catalogue is
+        // right to have it. Collapsing it belongs HERE, in the decoder, not in a
+        // convention nobody can enforce on graph authors.
+        match out.iter_mut().find(|r: &&mut TextRule| r.name == rule.name) {
+            None => out.push(rule),
+            Some(existing) => {
+                // A REQUIRED field that disagrees is not a duplicate to merge —
+                // it is two different rules wearing one name, and picking either
+                // one silently is how a guard enforces something nobody wrote.
+                // Refuse, loudly, the same as an unknown tier.
+                if existing.pattern != rule.pattern || existing.tier != rule.tier {
+                    return Err(Error::Projection(format!(
+                        "text-rule `{}` has conflicting definitions in the graph \
+                         (regex or enforcementTier differ across its rows) — \
+                         refusing to guess which one governs",
+                        rule.name
+                    )));
+                }
+                // Optionals: keep every DISTINCT value rather than picking one.
+                // Dropping a rationale would lose the author's reasoning, and
+                // choosing between them by row order would be arbitrary and
+                // unstable across graph writes.
+                merge_optional(&mut existing.rationale, rule.rationale);
+                merge_optional(&mut existing.label, rule.label);
+                merge_optional(&mut existing.class, rule.class);
+                merge_optional(&mut existing.exempt_path_regex, rule.exempt_path_regex);
+            }
+        }
     }
     Ok(out)
+}
+
+/// Fold an additional optional binding into one a previous row already supplied.
+///
+/// Distinct values are joined rather than replaced: these are explanatory
+/// strings, and the whole reason a second one exists is that somebody had more
+/// to say. Identical values collapse, so the common case stays clean.
+fn merge_optional(existing: &mut Option<String>, incoming: Option<String>) {
+    let Some(add) = incoming else { return };
+    match existing {
+        None => *existing = Some(add),
+        Some(have) => {
+            if !have.split(" — ").any(|part| part == add) {
+                have.push_str(" — ");
+                have.push_str(&add);
+            }
+        }
+    }
 }
 
 /// The `results.bindings` array of a W3C SPARQL-results body, or a projection

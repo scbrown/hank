@@ -142,3 +142,105 @@ fn a_failed_refresh_goes_stale_but_keeps_last_known_policies() {
     assert_eq!(reg.freshness(), Freshness::Stale);
     assert_eq!(reg.policies().len(), 2);
 }
+
+// --- one entity is one rule (the OPTIONAL cross-product) ----------------------
+
+/// A pattern entity returned TWICE because it carries two `rdfs:comment`s.
+/// SPARQL returns the cross product of the query's OPTIONALs, so this is what
+/// the live catalogue actually sends — not a contrived shape.
+fn two_comments_json() -> String {
+    let row = |comment: &str| {
+        serde_json::json!({
+            "s": { "type": "uri", "value": "http://example.invalid/ontology/pattern_demo" },
+            "regex": { "type": "literal", "value": "\\bwidget\\b" },
+            "tier": { "type": "literal", "value": "block" },
+            "class": { "type": "literal", "value": "hostname" },
+            "rationale": { "type": "literal", "value": comment }
+        })
+    };
+    serde_json::json!({
+        "head": { "vars": ["s", "regex", "tier", "class", "rationale"] },
+        "results": { "bindings": [row("the reason"), row("the exemption note")] }
+    })
+    .to_string()
+}
+
+#[test]
+fn one_entity_with_two_comments_is_one_rule() {
+    // Measured on the live catalogue before this fix: 7 pattern entities
+    // projected as 11 rules. The duplicates fired twice for one edit, and the
+    // two copies carried different rationales — an advisory arguing with itself.
+    let rules = decode_text_rules(&two_comments_json()).unwrap();
+    assert_eq!(rules.len(), 1, "the OPTIONAL cross product produced duplicates");
+    assert_eq!(rules[0].name, "pattern_demo");
+}
+
+#[test]
+fn merging_keeps_every_distinct_rationale() {
+    // Dropping one would lose the author's reasoning, and picking by row order
+    // would be arbitrary AND unstable across graph writes.
+    let rules = decode_text_rules(&two_comments_json()).unwrap();
+    let rationale = rules[0].rationale.as_deref().unwrap();
+    assert!(rationale.contains("the reason"));
+    assert!(rationale.contains("the exemption note"));
+}
+
+#[test]
+fn an_identical_repeated_optional_does_not_duplicate_itself() {
+    let row = serde_json::json!({
+        "s": { "type": "uri", "value": "http://example.invalid/ontology/pattern_demo" },
+        "regex": { "type": "literal", "value": "\\bwidget\\b" },
+        "tier": { "type": "literal", "value": "warn" },
+        "rationale": { "type": "literal", "value": "same" }
+    });
+    let body = serde_json::json!({
+        "head": { "vars": ["s", "regex", "tier", "rationale"] },
+        "results": { "bindings": [row.clone(), row] }
+    })
+    .to_string();
+    let rules = decode_text_rules(&body).unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].rationale.as_deref(), Some("same"));
+}
+
+#[test]
+fn a_conflicting_required_field_is_refused_not_merged() {
+    // Two different regexes under one name are two rules wearing one name.
+    // Picking either silently is how a guard enforces something nobody wrote.
+    let mk = |regex: &str| {
+        serde_json::json!({
+            "s": { "type": "uri", "value": "http://example.invalid/ontology/pattern_demo" },
+            "regex": { "type": "literal", "value": regex },
+            "tier": { "type": "literal", "value": "block" }
+        })
+    };
+    let body = serde_json::json!({
+        "head": { "vars": ["s", "regex", "tier"] },
+        "results": { "bindings": [mk("\\bone\\b"), mk("\\btwo\\b")] }
+    })
+    .to_string();
+    let err = decode_text_rules(&body).unwrap_err();
+    assert!(
+        format!("{err}").contains("conflicting definitions"),
+        "a conflicting rule must refuse loudly, got: {err}"
+    );
+}
+
+#[test]
+fn distinct_entities_are_still_distinct_rules() {
+    // The dedup keys on the entity, never on the pattern: two entities may
+    // legitimately share a regex while differing in tier or exemptions.
+    let mk = |name: &str| {
+        serde_json::json!({
+            "s": { "type": "uri", "value": format!("http://example.invalid/ontology/{name}") },
+            "regex": { "type": "literal", "value": "\\bwidget\\b" },
+            "tier": { "type": "literal", "value": "warn" }
+        })
+    };
+    let body = serde_json::json!({
+        "head": { "vars": ["s", "regex", "tier"] },
+        "results": { "bindings": [mk("pattern_a"), mk("pattern_b")] }
+    })
+    .to_string();
+    assert_eq!(decode_text_rules(&body).unwrap().len(), 2);
+}
