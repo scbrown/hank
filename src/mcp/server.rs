@@ -361,7 +361,7 @@ impl HankMcpServer {
         &self,
         Parameters(req): Parameters<PromoteRequest>,
     ) -> Result<CallToolResult, McpError> {
-        handlers::promote(self, req)
+        handlers::promote(self, &req)
     }
 
     #[tool(

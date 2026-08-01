@@ -39,7 +39,7 @@ fn an_edit_updates_the_overlay_and_freshness_transitions_recomputing_then_fresh(
 
     // Fast tier: overlay reflects the edit, and the file is RECOMPUTING (the
     // frontier has not been recomputed yet).
-    h.tree_sitter(&[edited.clone()]);
+    h.tree_sitter(std::slice::from_ref(&edited));
     assert!(
         registry.read().unwrap().view("dev").has_symbol("added"),
         "overlay must reflect the on-disk edit after the fast tier"

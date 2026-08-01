@@ -2,6 +2,13 @@
 //! planes, and the audit record. Child module of `pre_edit` (`super::*` reaches
 //! its private `guard_inner`/`Decision`); size-exempt (`_test.rs`).
 
+//! Test names here shout the invariant they pin — `is_NEVER_observable`,
+//! `daemon_EXPECTED_but_DOWN`, `is_DOWN_not_UP`. That capitalisation is the
+//! same emphasis the prose uses throughout this repo, and it is load-bearing in
+//! a test name: it says which word the assertion turns on. Allowed explicitly,
+//! and scoped to tests, so the lint stays live everywhere else rather than
+//! being switched off crate-wide (hank #83).
+#![allow(non_snake_case)]
 use super::*;
 
 /// A repo where `leaf` is called from three other files.

@@ -238,6 +238,13 @@ fn render(rel: &str, per_symbol: &[(String, usize)], files: &BTreeSet<String>) -
 }
 
 #[cfg(test)]
+// Test names here shout the invariant they pin — `is_NEVER_observable`,
+// `daemon_EXPECTED_but_DOWN`, `is_DOWN_not_UP`. That capitalisation is the same
+// emphasis the prose and comments use throughout this repo, and it is load-
+// bearing in a test name: it says which word the assertion turns on. Allowed
+// explicitly, and scoped to tests, so the lint stays live everywhere else
+// rather than being switched off crate-wide (hank #83).
+#[allow(non_snake_case)]
 mod tests {
     use super::*;
 

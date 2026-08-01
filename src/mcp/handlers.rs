@@ -15,17 +15,17 @@ use super::*;
 /// Body of `hank_promote`.
 pub(super) fn promote(
     server: &HankMcpServer,
-    req: PromoteRequest,
+    req: &PromoteRequest,
 ) -> Result<CallToolResult, McpError> {
     #[cfg(not(feature = "quipu"))]
     {
         // Both arguments go unread on the refusal path; the method took `self`
         // implicitly before the body moved here, so `server` joins `req` in the
         // existing discard rather than becoming an `_server` in the signature.
-        let _ = (&req, server);
-        return Err(internal(crate::errors::Error::Config(
+        let _ = (req, server);
+        Err(internal(crate::errors::Error::Config(
             "hank_promote needs the `quipu` feature; this server was built without it".to_string(),
-        )));
+        )))
     }
     #[cfg(feature = "quipu")]
     {
@@ -37,6 +37,7 @@ pub(super) fn promote(
 
         let endpoint = req
             .endpoint
+            .clone()
             .filter(|e| !e.is_empty())
             .or_else(|| Some(config.quipu.endpoint.clone()).filter(|e| !e.is_empty()))
             .ok_or_else(|| {

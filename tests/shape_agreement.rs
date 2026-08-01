@@ -70,7 +70,7 @@ fn rudof_refuses_the_violating_fixture() {
 }
 
 /// The agreement assertion proper. Ignored by default: requires a reachable
-/// quipu (`QUIPU_URL`, e.g. http://quipu.svc). A verdict MISMATCH here is
+/// quipu (`QUIPU_URL`, e.g. <http://quipu.svc>). A verdict MISMATCH here is
 /// shape drift between the engines — fix the shapes sync before promoting.
 #[test]
 #[ignore = "needs live quipu: QUIPU_URL=... cargo test --test shape_agreement -- --ignored"]

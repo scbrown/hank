@@ -32,8 +32,11 @@ test *args="":
     cargo test {{args}}
 
 # Run the linter (matches CI: deny warnings, allow missing-docs)
+# --all-targets so TESTS are linted too. Without it the lint gate skipped every
+# test target, and the lints hiding there were real: a spawned daemon never
+# reaped on the timeout path, and bool `assert_eq!`s (hank #83).
 lint:
-    cargo clippy -- -D warnings -A missing-docs
+    cargo clippy --all-targets -- -D warnings -A missing-docs
 
 # Format code
 fmt:
