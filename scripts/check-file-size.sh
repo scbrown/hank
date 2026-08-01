@@ -1,9 +1,28 @@
 #!/usr/bin/env bash
+# Keep source files small (CLAUDE.md; docs/hank-spec.md §7.2).
+#
+# Takes its file list from ARGUMENTS when given, and falls back to the staged
+# set otherwise. That fallback used to be the ONLY source, which made the
+# control inert in the place it was most often run: `pre-commit run --all-files`
+# leaves the index empty, so the loop body never executed and the hook reported
+# "Passed" having examined nothing — while four source files sat over the hard
+# limit (hank #83). Reading arguments means `--all-files` checks all files and a
+# real commit still checks exactly what is being committed, since pre-commit
+# passes the staged set.
 set -euo pipefail
 WARN_LIMIT=400
 ERROR_LIMIT=500
+
+if [ "$#" -gt 0 ]; then
+    files=("$@")
+else
+    mapfile -t files < <(git diff --cached --name-only --diff-filter=ACM)
+fi
+
 errors=0; warnings=0
-for file in $(git diff --cached --name-only --diff-filter=ACM | grep '\.rs$'); do
+for file in "${files[@]}"; do
+    [[ "$file" == *.rs ]] || continue
+    [ -f "$file" ] || continue
     # Tests are exempt (CLAUDE.md). The name-suffix forms cover in-crate test
     # modules; the `tests/` prefix covers the integration suite, where a file is
     # named for the BINARY it drives (`tests/cli.rs`) and so matches neither
