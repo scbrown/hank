@@ -268,8 +268,52 @@ pattern = '\b[A-Z]+-[0-9]+\b'          # Predicate: the regex
 # gate = '\bTODO\b'                    # optional: only test captures matching this
 # applies_to = ["src/**"]              # optional path globs; empty = any path
 # message = "keep ticket refs in commits, not comments"  # optional override
+
+# What the usage spool records about each guard decision.
+[hank.metrics]
+# "off" (default) | "relative" (repo-relative) | "absolute".
+record_paths = "off"
 </code></pre>
 <p>An unrecognized <code>mode</code> is a config <strong>error</strong>, not a silently inert guard.</p>
+<h2 id="auditing-guard-decisions-hankmetrics"><a class="header" href="#auditing-guard-decisions-hankmetrics">Auditing guard decisions (<code>[hank.metrics]</code>)</a></h2>
+<p>A guard record carries <code>result</code>, <code>mode</code>, <code>ext</code>, <code>agent</code>, <code>tenant</code> and <code>ts</code>. That
+is enough to count denies and not enough to review one: a record without a
+subject cannot confirm a rule is scoped correctly, cannot show a false positive,
+and cannot support an incident timeline. <code>ext</code> is a lossy proxy — six denies on
+<code>.json</code> tells an operator nothing actionable.</p>
+<p><code>record_paths</code> adds the subject:</p>
+<div class="table-wrapper"><table><thead><tr><th>Value</th><th>Records</th><th>Use when</th></tr></thead><tbody>
+<tr><td><code>off</code> (default)</td><td>no path</td><td>The deployment treats paths as sensitive.</td></tr>
+<tr><td><code>relative</code></td><td><code>src/auth.rs</code></td><td>The useful setting for a fleet — identifies the file without disclosing where the checkout lives.</td></tr>
+<tr><td><code>absolute</code></td><td><code>/srv/repo/src/auth.rs</code></td><td>One host, several checkouts, where a relative path is ambiguous.</td></tr>
+</tbody></table>
+</div>
+<p>It defaults to <code>off</code> because paths are more sensitive than extensions: a
+deployment opts <strong>in</strong>, and recording is never switched on beneath one.</p>
+<p>The <strong>rule id</strong> is recorded whatever <code>record_paths</code> says. It names what actually
+fired — the matching <code>deny_paths</code> glob, <code>allow_paths</code> when a path matched no
+allow pattern, the exceeded ceiling, or the governed rule's name — and it is the
+field that makes a false positive diagnosable, since a wrongly-scoped rule and a
+correctly-scoped one are otherwise indistinguishable. A rule id is a name the
+operator wrote, not user content, so it carries none of the sensitivity that
+argues for gating paths.</p>
+<p>Both fields are recorded for <strong>allow</strong> as well as deny, under the same knob.
+Scope that can only be inferred from the absence of denies cannot be verified at
+all; confirming a rule is scoped correctly needs what it let through as much as
+what it stopped.</p>
+<pre><code class="language-json">{"kind":"guard","result":"deny","mode":"enforce","ext":"yaml",
+ "path":".beads/config.yaml","rule":"deny_paths:.beads/**",
+ "agent":"mathis","tenant":"worker","ts":1785544543}
+</code></pre>
+<p>Both fields are <strong>omitted</strong> rather than blanked when they have nothing to say
+(recording off, or a clean allow with no deciding rule), so a reader never has to
+tell "recorded as empty" from "not recorded".</p>
+<p><code>hank status</code> reports the setting in force, so an operator can confirm from
+outside the process that recording is actually on — a control believed active and
+silently inert reads exactly like a quiet week.</p>
+<pre><code class="language-console">$ hank status
+  audit       : record_paths=relative
+</code></pre>
 <h2 id="projected-governed-policy-phase-4-quipu-feature"><a class="header" href="#projected-governed-policy-phase-4-quipu-feature">Projected governed policy (Phase 4, <code>quipu</code> feature)</a></h2>
 <p>With the <code>quipu</code> feature and <code>[hank.quipu] enabled = true</code> plus an <code>endpoint</code>,
 the guard also fetches quipu's <code>boundary:"action"</code> structural policies and

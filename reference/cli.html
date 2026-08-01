@@ -228,6 +228,76 @@ hank communities src --json         # symbol clusters, largest-first
 hank verify --file src/auth.rs --buffer /tmp/edited.rs
 hank promote --commit HEAD
 </code></pre>
+<h2 id="hank-refs"><a class="header" href="#hank-refs"><code>hank refs</code></a></h2>
+<p>Definition sites of a symbol, by name, from the same graph <code>callers</code>, <code>impact</code>
+and <code>communities</code> read — so every language this build has a grammar for is
+searched, not just Rust. (Grammars beyond Rust need the <code>langs-extra</code> feature;
+<code>hank status</code> lists what a given binary can parse.)</p>
+<pre><code class="language-console">$ hank refs derive_agents
+quipu.py:1 derive_agents (function) [TreeSitter]
+</code></pre>
+<p>A zero result says <strong>which</strong> kind of nothing it is, because the two are not the
+same fact:</p>
+<pre><code class="language-console">$ hank refs no_such_symbol           # a populated graph, name genuinely absent
+no definition found for no_such_symbol (searched 412 symbol(s))
+
+$ hank refs anything ./docs          # nothing here was parseable at all
+no definition found for anything (nothing parseable under ./docs — the graph is
+empty, so this is not evidence the symbol is absent)
+</code></pre>
+<p>Under <code>--json</code> the same distinction is <code>count</code> against <code>searched_symbols</code>, and
+the answer carries its <code>tier</code> whether or not it found anything (FR-3):</p>
+<pre><code class="language-json">{
+  "symbol": "derive_agents",
+  "count": 1,
+  "definitions": [
+    {
+      "file": "quipu.py",
+      "name": "derive_agents",
+      "kind": "function",
+      "start_line": 1,
+      "end_line": 2,
+      "tier": "treesitter"
+    }
+  ],
+  "searched_symbols": 412,
+  "tier": "treesitter"
+}
+</code></pre>
+<h3 id="resolving-by-position"><a class="header" href="#resolving-by-position">Resolving by position</a></h3>
+<p>Name lookup over-connects on common names — <code>build</code>, <code>new</code>, <code>write</code>. When you
+are reading code you know <em>where</em> you are, not which of the twelve it is, so
+point at it instead (FR-4):</p>
+<pre><code class="language-console">$ hank refs build                 # by name: ambiguous
+a.rs:3 build (function) [TreeSitter]
+a.rs:7 build (function) [TreeSitter]
+
+$ hank refs --at a.rs:7           # by position: the one you pointed at
+a.rs:7 build (function) [TreeSitter]
+</code></pre>
+<p><code>--at FILE:LINE</code> resolves to the <strong>innermost symbol enclosing that line</strong> and
+answers with that symbol alone — it does not re-expand to every symbol sharing
+its name, which would restore the ambiguity the position was given to remove.
+<code>FILE</code> is relative to the search path; with <code>--at</code>, the positional argument is
+the search path rather than a symbol name.</p>
+<p>A <strong>column is refused, not ignored</strong>:</p>
+<pre><code class="language-console">$ hank refs --at a.rs:3:9
+error: --at takes FILE:LINE, not FILE:LINE:COL (got column `9`). The tree-sitter
+tier resolves to the innermost symbol on a LINE; column-precise resolution needs
+the LSP tier (FR-2), which is not built. Retry as `a.rs:3`.
+</code></pre>
+<p>Accepting the column and answering for the line would serve a line-precise
+answer to a column-precise question — an approximation presented as the finer
+tier, which FR-3 forbids. Two symbols on one line are not separable at the
+tree-sitter tier, and you are told so rather than handed a guess.</p>
+<p>A position that resolves to nothing explains which kind of nothing it is,
+rather than borrowing the vocabulary of "no such symbol":</p>
+<pre><code class="language-console">$ hank refs --at a.rs:3
+no symbol encloses a.rs:3 — it falls between definitions (a blank line, an
+import, a top-level comment). `a.rs` defines: one:1-1, two:5-5
+</code></pre>
+<p><code>refs</code> answers "where is this <strong>defined</strong>". For "what <strong>reaches</strong> this", use
+<code>hank callers</code>; for the transitive form, <code>hank impact</code>.</p>
 <h2 id="hank-verify"><a class="header" href="#hank-verify"><code>hank verify</code></a></h2>
 <p>Checks a <em>proposed</em> buffer against the graph Hank already holds and returns a
 boolean verdict plus violations (FR-23/FR-24). Exits <strong>non-zero</strong> when the buffer

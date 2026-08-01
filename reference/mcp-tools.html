@@ -198,7 +198,7 @@ hank serve --http     # streamable-HTTP at http://127.0.0.1:3040/mcp
 <div class="table-wrapper"><table><thead><tr><th>Tool</th><th>Purpose</th></tr></thead><tbody>
 <tr><td><code>hank_status</code></td><td>Base ref, tenant, available tiers, Quipu settings</td></tr>
 <tr><td><code>hank_symbols</code></td><td>Symbol tree for a file</td></tr>
-<tr><td><code>hank_references</code></td><td>Definition site(s) of a symbol by name</td></tr>
+<tr><td><code>hank_references</code></td><td>Definition site(s) of a symbol, by name or by position</td></tr>
 <tr><td><code>hank_analyze</code></td><td>Files/symbols summary for a subtree</td></tr>
 <tr><td><code>hank_callers</code></td><td>Direct callers of a symbol (who calls it)</td></tr>
 <tr><td><code>hank_callees</code></td><td>Direct callees of a symbol (what it calls)</td></tr>
@@ -209,6 +209,24 @@ hank serve --http     # streamable-HTTP at http://127.0.0.1:3040/mcp
 <tr><td><code>hank_promote</code></td><td>Promote a subtree's facts to Quipu — SHACL-validate, then write (needs the <code>quipu</code> feature)</td></tr>
 </tbody></table>
 </div>
+<h2 id="hank_references"><a class="header" href="#hank_references"><code>hank_references</code></a></h2>
+<p>Give it <code>symbol</code> <strong>or</strong> a position (<code>at_file</code> + <code>at_line</code>), not both concerns at
+once.</p>
+<p>Names over-connect: a real tree has twelve <code>build</code>s, and asking by name gets all
+twelve. When you are reading code you know <em>where</em> you are, so point at it:</p>
+<pre><code class="language-json">{ "at_file": "src/beta.rs", "at_line": 7 }
+</code></pre>
+<p>The position resolves to the innermost symbol enclosing that line, and the reply
+holds <strong>that symbol alone</strong> — it does not re-expand to every symbol sharing its
+name, which would restore the ambiguity the position was given to remove.</p>
+<p><code>at_line</code> is a <strong>line, not a (line, column)</strong>. The tree-sitter extractor records
+lines, so a column would be accepted and silently ignored — an approximation
+served as the finer tier, which FR-3 forbids. Column precision arrives with the
+LSP tier (FR-2). Passing only one of <code>at_file</code>/<code>at_line</code> is an error rather than
+a quiet downgrade to a name lookup, since that would answer "which one is here?"
+with "all of them".</p>
+<p>Position requests always take the transient build, never the resident daemon:
+<code>/references</code> does not carry the node spans a position needs.</p>
 <h2 id="hank_verify"><a class="header" href="#hank_verify"><code>hank_verify</code></a></h2>
 <p>Pass the full proposed contents of a file; get back <code>ok</code> plus any violations.
 Only violations the edit <em>introduces</em> are reported — the file's current contents

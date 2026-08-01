@@ -619,6 +619,76 @@ hank communities src --json         # symbol clusters, largest-first
 hank verify --file src/auth.rs --buffer /tmp/edited.rs
 hank promote --commit HEAD
 </code></pre>
+<h2 id="hank-refs"><a class="header" href="#hank-refs"><code>hank refs</code></a></h2>
+<p>Definition sites of a symbol, by name, from the same graph <code>callers</code>, <code>impact</code>
+and <code>communities</code> read — so every language this build has a grammar for is
+searched, not just Rust. (Grammars beyond Rust need the <code>langs-extra</code> feature;
+<code>hank status</code> lists what a given binary can parse.)</p>
+<pre><code class="language-console">$ hank refs derive_agents
+quipu.py:1 derive_agents (function) [TreeSitter]
+</code></pre>
+<p>A zero result says <strong>which</strong> kind of nothing it is, because the two are not the
+same fact:</p>
+<pre><code class="language-console">$ hank refs no_such_symbol           # a populated graph, name genuinely absent
+no definition found for no_such_symbol (searched 412 symbol(s))
+
+$ hank refs anything ./docs          # nothing here was parseable at all
+no definition found for anything (nothing parseable under ./docs — the graph is
+empty, so this is not evidence the symbol is absent)
+</code></pre>
+<p>Under <code>--json</code> the same distinction is <code>count</code> against <code>searched_symbols</code>, and
+the answer carries its <code>tier</code> whether or not it found anything (FR-3):</p>
+<pre><code class="language-json">{
+  "symbol": "derive_agents",
+  "count": 1,
+  "definitions": [
+    {
+      "file": "quipu.py",
+      "name": "derive_agents",
+      "kind": "function",
+      "start_line": 1,
+      "end_line": 2,
+      "tier": "treesitter"
+    }
+  ],
+  "searched_symbols": 412,
+  "tier": "treesitter"
+}
+</code></pre>
+<h3 id="resolving-by-position"><a class="header" href="#resolving-by-position">Resolving by position</a></h3>
+<p>Name lookup over-connects on common names — <code>build</code>, <code>new</code>, <code>write</code>. When you
+are reading code you know <em>where</em> you are, not which of the twelve it is, so
+point at it instead (FR-4):</p>
+<pre><code class="language-console">$ hank refs build                 # by name: ambiguous
+a.rs:3 build (function) [TreeSitter]
+a.rs:7 build (function) [TreeSitter]
+
+$ hank refs --at a.rs:7           # by position: the one you pointed at
+a.rs:7 build (function) [TreeSitter]
+</code></pre>
+<p><code>--at FILE:LINE</code> resolves to the <strong>innermost symbol enclosing that line</strong> and
+answers with that symbol alone — it does not re-expand to every symbol sharing
+its name, which would restore the ambiguity the position was given to remove.
+<code>FILE</code> is relative to the search path; with <code>--at</code>, the positional argument is
+the search path rather than a symbol name.</p>
+<p>A <strong>column is refused, not ignored</strong>:</p>
+<pre><code class="language-console">$ hank refs --at a.rs:3:9
+error: --at takes FILE:LINE, not FILE:LINE:COL (got column `9`). The tree-sitter
+tier resolves to the innermost symbol on a LINE; column-precise resolution needs
+the LSP tier (FR-2), which is not built. Retry as `a.rs:3`.
+</code></pre>
+<p>Accepting the column and answering for the line would serve a line-precise
+answer to a column-precise question — an approximation presented as the finer
+tier, which FR-3 forbids. Two symbols on one line are not separable at the
+tree-sitter tier, and you are told so rather than handed a guess.</p>
+<p>A position that resolves to nothing explains which kind of nothing it is,
+rather than borrowing the vocabulary of "no such symbol":</p>
+<pre><code class="language-console">$ hank refs --at a.rs:3
+no symbol encloses a.rs:3 — it falls between definitions (a blank line, an
+import, a top-level comment). `a.rs` defines: one:1-1, two:5-5
+</code></pre>
+<p><code>refs</code> answers "where is this <strong>defined</strong>". For "what <strong>reaches</strong> this", use
+<code>hank callers</code>; for the transitive form, <code>hank impact</code>.</p>
 <h2 id="hank-verify"><a class="header" href="#hank-verify"><code>hank verify</code></a></h2>
 <p>Checks a <em>proposed</em> buffer against the graph Hank already holds and returns a
 boolean verdict plus violations (FR-23/FR-24). Exits <strong>non-zero</strong> when the buffer
@@ -747,8 +817,52 @@ pattern = '\b[A-Z]+-[0-9]+\b'          # Predicate: the regex
 # gate = '\bTODO\b'                    # optional: only test captures matching this
 # applies_to = ["src/**"]              # optional path globs; empty = any path
 # message = "keep ticket refs in commits, not comments"  # optional override
+
+# What the usage spool records about each guard decision.
+[hank.metrics]
+# "off" (default) | "relative" (repo-relative) | "absolute".
+record_paths = "off"
 </code></pre>
 <p>An unrecognized <code>mode</code> is a config <strong>error</strong>, not a silently inert guard.</p>
+<h2 id="auditing-guard-decisions-hankmetrics"><a class="header" href="#auditing-guard-decisions-hankmetrics">Auditing guard decisions (<code>[hank.metrics]</code>)</a></h2>
+<p>A guard record carries <code>result</code>, <code>mode</code>, <code>ext</code>, <code>agent</code>, <code>tenant</code> and <code>ts</code>. That
+is enough to count denies and not enough to review one: a record without a
+subject cannot confirm a rule is scoped correctly, cannot show a false positive,
+and cannot support an incident timeline. <code>ext</code> is a lossy proxy — six denies on
+<code>.json</code> tells an operator nothing actionable.</p>
+<p><code>record_paths</code> adds the subject:</p>
+<div class="table-wrapper"><table><thead><tr><th>Value</th><th>Records</th><th>Use when</th></tr></thead><tbody>
+<tr><td><code>off</code> (default)</td><td>no path</td><td>The deployment treats paths as sensitive.</td></tr>
+<tr><td><code>relative</code></td><td><code>src/auth.rs</code></td><td>The useful setting for a fleet — identifies the file without disclosing where the checkout lives.</td></tr>
+<tr><td><code>absolute</code></td><td><code>/srv/repo/src/auth.rs</code></td><td>One host, several checkouts, where a relative path is ambiguous.</td></tr>
+</tbody></table>
+</div>
+<p>It defaults to <code>off</code> because paths are more sensitive than extensions: a
+deployment opts <strong>in</strong>, and recording is never switched on beneath one.</p>
+<p>The <strong>rule id</strong> is recorded whatever <code>record_paths</code> says. It names what actually
+fired — the matching <code>deny_paths</code> glob, <code>allow_paths</code> when a path matched no
+allow pattern, the exceeded ceiling, or the governed rule's name — and it is the
+field that makes a false positive diagnosable, since a wrongly-scoped rule and a
+correctly-scoped one are otherwise indistinguishable. A rule id is a name the
+operator wrote, not user content, so it carries none of the sensitivity that
+argues for gating paths.</p>
+<p>Both fields are recorded for <strong>allow</strong> as well as deny, under the same knob.
+Scope that can only be inferred from the absence of denies cannot be verified at
+all; confirming a rule is scoped correctly needs what it let through as much as
+what it stopped.</p>
+<pre><code class="language-json">{"kind":"guard","result":"deny","mode":"enforce","ext":"yaml",
+ "path":".beads/config.yaml","rule":"deny_paths:.beads/**",
+ "agent":"mathis","tenant":"worker","ts":1785544543}
+</code></pre>
+<p>Both fields are <strong>omitted</strong> rather than blanked when they have nothing to say
+(recording off, or a clean allow with no deciding rule), so a reader never has to
+tell "recorded as empty" from "not recorded".</p>
+<p><code>hank status</code> reports the setting in force, so an operator can confirm from
+outside the process that recording is actually on — a control believed active and
+silently inert reads exactly like a quiet week.</p>
+<pre><code class="language-console">$ hank status
+  audit       : record_paths=relative
+</code></pre>
 <h2 id="projected-governed-policy-phase-4-quipu-feature"><a class="header" href="#projected-governed-policy-phase-4-quipu-feature">Projected governed policy (Phase 4, <code>quipu</code> feature)</a></h2>
 <p>With the <code>quipu</code> feature and <code>[hank.quipu] enabled = true</code> plus an <code>endpoint</code>,
 the guard also fetches quipu's <code>boundary:"action"</code> structural policies and
@@ -773,7 +887,7 @@ hank serve --http     # streamable-HTTP at http://127.0.0.1:3040/mcp
 <div class="table-wrapper"><table><thead><tr><th>Tool</th><th>Purpose</th></tr></thead><tbody>
 <tr><td><code>hank_status</code></td><td>Base ref, tenant, available tiers, Quipu settings</td></tr>
 <tr><td><code>hank_symbols</code></td><td>Symbol tree for a file</td></tr>
-<tr><td><code>hank_references</code></td><td>Definition site(s) of a symbol by name</td></tr>
+<tr><td><code>hank_references</code></td><td>Definition site(s) of a symbol, by name or by position</td></tr>
 <tr><td><code>hank_analyze</code></td><td>Files/symbols summary for a subtree</td></tr>
 <tr><td><code>hank_callers</code></td><td>Direct callers of a symbol (who calls it)</td></tr>
 <tr><td><code>hank_callees</code></td><td>Direct callees of a symbol (what it calls)</td></tr>
@@ -784,6 +898,24 @@ hank serve --http     # streamable-HTTP at http://127.0.0.1:3040/mcp
 <tr><td><code>hank_promote</code></td><td>Promote a subtree's facts to Quipu — SHACL-validate, then write (needs the <code>quipu</code> feature)</td></tr>
 </tbody></table>
 </div>
+<h2 id="hank_references"><a class="header" href="#hank_references"><code>hank_references</code></a></h2>
+<p>Give it <code>symbol</code> <strong>or</strong> a position (<code>at_file</code> + <code>at_line</code>), not both concerns at
+once.</p>
+<p>Names over-connect: a real tree has twelve <code>build</code>s, and asking by name gets all
+twelve. When you are reading code you know <em>where</em> you are, so point at it:</p>
+<pre><code class="language-json">{ "at_file": "src/beta.rs", "at_line": 7 }
+</code></pre>
+<p>The position resolves to the innermost symbol enclosing that line, and the reply
+holds <strong>that symbol alone</strong> — it does not re-expand to every symbol sharing its
+name, which would restore the ambiguity the position was given to remove.</p>
+<p><code>at_line</code> is a <strong>line, not a (line, column)</strong>. The tree-sitter extractor records
+lines, so a column would be accepted and silently ignored — an approximation
+served as the finer tier, which FR-3 forbids. Column precision arrives with the
+LSP tier (FR-2). Passing only one of <code>at_file</code>/<code>at_line</code> is an error rather than
+a quiet downgrade to a name lookup, since that would answer "which one is here?"
+with "all of them".</p>
+<p>Position requests always take the transient build, never the resident daemon:
+<code>/references</code> does not carry the node spans a position needs.</p>
 <h2 id="hank_verify"><a class="header" href="#hank_verify"><code>hank_verify</code></a></h2>
 <p>Pass the full proposed contents of a file; get back <code>ok</code> plus any violations.
 Only violations the edit <em>introduces</em> are reported — the file's current contents
