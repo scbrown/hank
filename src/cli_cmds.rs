@@ -58,7 +58,10 @@ pub(crate) fn communities(json: bool, quiet: bool, path: &Path) -> anyhow::Resul
                         "kind": m.kind,
                         "file": m.file,
                         "start_line": m.start_line,
-                        "tier": m.tier,
+                        // See the note in `cli::refs`: the wire form is
+                        // "treesitter", not the derive's "tree_sitter". This
+                        // document already tags "treesitter" at the top level.
+                        "tier": m.tier.as_str(),
                     })).collect::<Vec<_>>(),
                 })
             })

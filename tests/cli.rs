@@ -48,12 +48,17 @@ fn refs_finds_definition() {
         // "no definition found for target", which also contains "target". So the
         // test passed whether or not refs resolved anything: gutting refs() to push
         // no hits left it green (aegis-fo30). `a.rs:1` (the resolved location) and
-        // "(Function)" (the resolved kind) appear ONLY when a definition is found,
+        // "(function)" (the resolved kind) appear ONLY when a definition is found,
         // and the explicit not() pins that the not-found path is NOT what satisfied
         // the test.
+        //
+        // The kind reads "(function)" rather than "(Function)" since refs began
+        // answering from the graph (hank #76): the node stores the LOWERCASE kind
+        // form — the one the daemon and MCP already serve — instead of the Debug
+        // rendering of the extractor enum. One spelling across every surface.
         .stdout(
             predicate::str::contains("a.rs:1")
-                .and(predicate::str::contains("(Function)"))
+                .and(predicate::str::contains("(function)"))
                 .and(predicate::str::contains("no definition found").not()),
         );
 }
@@ -79,14 +84,81 @@ fn refs_json_contains_the_resolved_definition() {
 }
 
 #[test]
-fn refs_json_is_empty_array_when_absent() {
+fn refs_json_absent_answer_is_tagged_and_says_what_it_searched() {
+    // Was `refs_json_is_empty_array_when_absent`, asserting a bare `[]`. That
+    // shape is exactly the FR-3 empty-case hole `not_found` closed for
+    // callers/impact/dataflow: a top-level array has nowhere to hang a tier, so
+    // hank's most common answer — "nothing" — was the one answer it served
+    // untagged. The absent result is still a served fact and carries its tier.
     let dir = project_with("a.rs", "fn other() {}\n");
     Command::cargo_bin("hank")
         .unwrap()
         .args(["refs", "missing", dir.path().to_str().unwrap(), "--json"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("[]"));
+        .stdout(
+            predicate::str::contains("\"count\": 0")
+                .and(predicate::str::contains("\"tier\": \"treesitter\""))
+                // The discriminator hank #76 turned on: a zero count over a
+                // NON-zero searched set means "the name is absent". Over a zero
+                // searched set it would mean "nothing here was parseable", and
+                // reporting those as the same answer is what made refs confidently
+                // wrong on every non-Rust tree.
+                .and(predicate::str::contains("\"searched_symbols\": 1")),
+        );
+}
+
+#[test]
+#[cfg(feature = "langs-extra")] // needs the python grammar compiled in
+fn refs_resolves_a_python_definition_the_way_callers_does() {
+    // hank #76, the regression that matters. `refs` walked `rust_files()` and
+    // parsed every hit as "rust", so on a Python tree it searched ZERO files and
+    // printed "no definition found" — while `callers`, over the same tree and the
+    // same symbol, answered from the multi-language graph and listed call sites.
+    // The reported failure was that pair of contradictory answers, so the test
+    // asserts the pair: both commands, one fixture, both resolving.
+    let dir = project_with(
+        "quipu.py",
+        "def derive_agents(cfg):\n    return cfg\n\ndef consume():\n    return derive_agents({})\n",
+    );
+    let path = dir.path().to_str().unwrap();
+
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["refs", "derive_agents", path])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("quipu.py:1")
+                .and(predicate::str::contains("no definition found").not()),
+        );
+
+    // The command that always worked, pinned alongside it: if these two ever
+    // disagree about whether a symbol exists again, this test fails.
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["callers", "derive_agents", path])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("consume"));
+}
+
+#[test]
+fn refs_does_not_report_an_unparseable_tree_as_an_absent_symbol() {
+    // The other half of hank #76: "no definition found" over an EMPTY graph is not
+    // evidence the symbol is absent — it is evidence hank read nothing. A tree with
+    // no source files hank can parse must say so, or an agent routed here reads
+    // "this symbol does not exist" from what is really "I could not look".
+    let dir = project_with("notes.md", "# nothing parseable here\n");
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["refs", "anything", dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("the graph is empty")
+                .and(predicate::str::contains("not evidence")),
+        );
 }
 
 #[test]

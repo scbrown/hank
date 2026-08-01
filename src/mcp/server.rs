@@ -140,31 +140,32 @@ impl HankMcpServer {
             .path
             .as_ref()
             .map_or_else(|| self.root.clone(), |p| self.root.join(p));
-        let mut definitions = Vec::new();
-        for file in rust_files(&base) {
-            let Ok(source) = std::fs::read_to_string(&file) else {
-                continue;
-            };
-            let Ok(symbols) = extract_symbols(&source, "rust") else {
-                continue;
-            };
-            for symbol in symbols {
-                if symbol.name == req.symbol {
-                    let rel = file.strip_prefix(&self.root).unwrap_or(&file);
-                    definitions.push(RefItem {
-                        file: rel.display().to_string(),
-                        name: symbol.name,
-                        kind: symbol.kind.as_str().to_string(),
-                        start_line: symbol.start_line,
-                        tier: symbol.tier.as_str().to_string(),
-                    });
-                }
-            }
-        }
+        // Build the multi-language graph, exactly as the resident path above
+        // resolves against one. This walked `rust_files` and parsed every hit as
+        // `"rust"`, so a `path`-scoped request (which always lands here, daemon
+        // or not) over a Python tree searched ZERO files and answered "no
+        // definitions" — the CLI-side hank #76 bug, same cause, second surface.
+        let graph = match CodeGraph::build(&base) {
+            Ok(graph) => graph,
+            Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
+        };
+        let definitions: Vec<RefItem> = graph
+            .definitions(&req.symbol)
+            .into_iter()
+            .map(|symbol| RefItem {
+                file: symbol.file.clone(),
+                name: symbol.name.clone(),
+                kind: symbol.kind.clone(),
+                start_line: symbol.start_line,
+                tier: symbol.tier.as_str().to_string(),
+            })
+            .collect();
         let response = ReferencesResponse {
             symbol: req.symbol.clone(),
             count: definitions.len(),
             definitions,
+            searched_symbols: Some(graph.stats().0),
+            tier: crate::types::Tier::TreeSitter.as_str().to_string(),
         };
         json_result(&response)
     }

@@ -17,8 +17,8 @@ use tracing_subscriber::EnvFilter;
 
 use crate::cli_cmds;
 use crate::config::HankConfig;
-use crate::extract::{extract_symbols, rust_files};
-use crate::types::{Symbol, Tier};
+use crate::extract::extract_symbols;
+use crate::types::Tier;
 
 /// Hank — live, per-tenant code structure for the Bobbin × Quipu stack.
 #[derive(Debug, Parser)]
@@ -493,41 +493,74 @@ impl Cli {
     }
 
     /// Find definitions of `symbol` by name under `path`.
+    ///
+    /// Reads the SAME graph `callers`/`impact` read, deliberately. This walked
+    /// `rust_files` and parsed every hit as `"rust"`, so on a Python (or Go,
+    /// or TypeScript) tree it scanned ZERO files and printed "no definition
+    /// found" — while `hank callers` on the same symbol in the same tree
+    /// answered from the multi-language graph and listed call sites (hank #76).
+    /// That is the `from_sources` "parse each file as the language it IS" bug
+    /// surviving in the one command whose name advertises symbol lookup, and it
+    /// failed in the worst direction: a confident "this symbol does not exist"
+    /// rather than an error.
     fn refs(&self, symbol: &str, path: &Path) -> anyhow::Result<()> {
-        let mut hits: Vec<(PathBuf, Symbol)> = Vec::new();
-        for file in rust_files(path) {
-            let source = std::fs::read_to_string(&file)?;
-            for found in extract_symbols(&source, "rust")? {
-                if found.name == symbol {
-                    hits.push((file.clone(), found));
-                }
-            }
-        }
+        let graph = crate::graph::CodeGraph::build(path)?;
+        let hits = graph.definitions(symbol);
+        let (nodes, _) = graph.stats();
 
         if self.json {
             let rows: Vec<_> = hits
                 .iter()
-                .map(|(file, sym)| {
+                .map(|sym| {
                     serde_json::json!({
-                        "file": file.display().to_string(),
+                        "file": sym.file,
                         "name": sym.name,
                         "kind": sym.kind,
                         "start_line": sym.start_line,
                         "end_line": sym.end_line,
-                        "tier": sym.tier,
+                        // `as_str()`, not the raw serde form: `Tier`'s derive
+                        // renames to snake_case ("tree_sitter") while every
+                        // other served surface — MCP, the daemon wire,
+                        // `not_found` — spells it "treesitter" (the documented
+                        // wire/ontology form). Emitting both spellings in ONE
+                        // document made a consumer's tier check position-
+                        // dependent.
+                        "tier": sym.tier.as_str(),
                     })
                 })
                 .collect();
-            println!("{}", serde_json::to_string_pretty(&rows)?);
+            // The empty answer carries its tier too (FR-3) — the hole
+            // `cli_cmds::not_found` closed for callers/impact/dataflow, closed
+            // here. `searched` is the honest half of a zero result: 0 symbols
+            // searched means NOTHING here was parseable, which is a different
+            // fact from "the name is absent from a graph that has 4000 symbols"
+            // and must not be reported as the same one.
+            let out = serde_json::json!({
+                "symbol": symbol,
+                "count": rows.len(),
+                "definitions": rows,
+                "searched_symbols": nodes,
+                "tier": "treesitter",
+            });
+            println!("{}", serde_json::to_string_pretty(&out)?);
         } else if hits.is_empty() {
             if !self.quiet {
-                println!("no definition found for {symbol}");
+                if nodes == 0 {
+                    println!(
+                        "no definition found for {symbol} \
+                         (nothing parseable under {} — the graph is empty, \
+                         so this is not evidence the symbol is absent)",
+                        path.display()
+                    );
+                } else {
+                    println!("no definition found for {symbol} (searched {nodes} symbol(s))");
+                }
             }
         } else {
-            for (file, sym) in &hits {
+            for sym in &hits {
                 println!(
-                    "{}:{} {} ({:?}) [{:?}]",
-                    file.display(),
+                    "{}:{} {} ({}) [{:?}]",
+                    sym.file,
                     sym.start_line,
                     sym.name.cyan(),
                     sym.kind,

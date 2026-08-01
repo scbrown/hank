@@ -53,6 +53,55 @@ hank verify --file src/auth.rs --buffer /tmp/edited.rs
 hank promote --commit HEAD
 ```
 
+## `hank refs`
+
+Definition sites of a symbol, by name, from the same graph `callers`, `impact`
+and `communities` read — so every language this build has a grammar for is
+searched, not just Rust. (Grammars beyond Rust need the `langs-extra` feature;
+`hank status` lists what a given binary can parse.)
+
+```console
+$ hank refs derive_agents
+quipu.py:1 derive_agents (function) [TreeSitter]
+```
+
+A zero result says **which** kind of nothing it is, because the two are not the
+same fact:
+
+```console
+$ hank refs no_such_symbol           # a populated graph, name genuinely absent
+no definition found for no_such_symbol (searched 412 symbol(s))
+
+$ hank refs anything ./docs          # nothing here was parseable at all
+no definition found for anything (nothing parseable under ./docs — the graph is
+empty, so this is not evidence the symbol is absent)
+```
+
+Under `--json` the same distinction is `count` against `searched_symbols`, and
+the answer carries its `tier` whether or not it found anything (FR-3):
+
+```json
+{
+  "symbol": "derive_agents",
+  "count": 1,
+  "definitions": [
+    {
+      "file": "quipu.py",
+      "name": "derive_agents",
+      "kind": "function",
+      "start_line": 1,
+      "end_line": 2,
+      "tier": "treesitter"
+    }
+  ],
+  "searched_symbols": 412,
+  "tier": "treesitter"
+}
+```
+
+`refs` answers "where is this **defined**". For "what **reaches** this", use
+`hank callers`; for the transitive form, `hank impact`.
+
 ## `hank verify`
 
 Checks a *proposed* buffer against the graph Hank already holds and returns a

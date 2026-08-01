@@ -283,7 +283,10 @@ mod tests {
         .to_string();
 
         let text = advisory_for(&payload, dir.path(), None).expect("expected an advisory");
-        assert!(text.contains("leaf"), "advises on the edited symbol: {text}");
+        assert!(
+            text.contains("leaf"),
+            "advises on the edited symbol: {text}"
+        );
         assert!(
             !text.contains("other"),
             "must NOT cry wolf on the untouched symbol: {text}"
@@ -294,11 +297,7 @@ mod tests {
     fn no_advice_when_edit_is_outside_every_symbol() {
         // A top-of-file comment edit touches no symbol body — the cry-wolf case.
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("a.rs"),
-            "// header updated\nfn leaf() {}\n",
-        )
-        .unwrap();
+        std::fs::write(dir.path().join("a.rs"), "// header updated\nfn leaf() {}\n").unwrap();
         std::fs::write(dir.path().join("b.rs"), "fn m() { leaf(); }\n").unwrap();
 
         let payload = serde_json::json!({
@@ -320,10 +319,16 @@ mod tests {
     #[test]
     fn edited_line_spans_locates_edit_and_falls_back() {
         let src = "aaa\nbbb\nccc\n";
-        let ti = ToolInput { new_string: Some("bbb".into()), ..Default::default() };
+        let ti = ToolInput {
+            new_string: Some("bbb".into()),
+            ..Default::default()
+        };
         assert_eq!(edited_line_spans(&ti, src), Some(vec![(2, 2)]));
         // Deletion → None (unlocatable post-hoc).
-        let ti = ToolInput { new_string: Some(String::new()), ..Default::default() };
+        let ti = ToolInput {
+            new_string: Some(String::new()),
+            ..Default::default()
+        };
         assert_eq!(edited_line_spans(&ti, src), None);
         // No diff info (Write) → None → whole-file fallback.
         assert_eq!(edited_line_spans(&ToolInput::default(), src), None);

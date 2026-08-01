@@ -169,6 +169,11 @@ pub(super) fn references(
                     tier: reply.tier.clone(),
                 })
                 .collect(),
+            // The daemon reply has no graph size to pass through; see
+            // `ReferencesResponse::searched_symbols` for why that is omitted
+            // rather than zeroed.
+            searched_symbols: None,
+            tier: reply.tier.clone(),
         }),
         Err(reason) => {
             eprintln!("hank mcp: daemon references query failed, transient fallback: {reason}");

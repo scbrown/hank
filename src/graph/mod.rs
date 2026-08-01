@@ -48,6 +48,11 @@ pub struct SymbolNode {
     pub file: String,
     /// 1-based definition line.
     pub start_line: usize,
+    /// 1-based last line of the definition. Carried so a graph-backed answer can
+    /// report the symbol's EXTENT, not just where it starts — `refs` served this
+    /// from its own file walk before it read the graph (hank #76), and a lookup
+    /// that reads the graph must not have to drop a field to do so.
+    pub end_line: usize,
     /// Provenance tier.
     pub tier: Tier,
 }
@@ -199,6 +204,7 @@ impl CodeGraph {
                     kind: symbol.kind.as_str().to_string(),
                     file: rel.clone(),
                     start_line: symbol.start_line,
+                    end_line: symbol.end_line,
                     tier: symbol.tier,
                 });
                 language_of.insert(idx, language);

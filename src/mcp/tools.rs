@@ -88,6 +88,23 @@ pub struct ReferencesResponse {
     pub count: usize,
     /// The definition sites.
     pub definitions: Vec<RefItem>,
+    /// How many symbols the answer was searched against, when that is known. A
+    /// `count` of 0 over `searched_symbols: 0` means NOTHING under the queried
+    /// path was parseable — which is not the same fact as "the name is absent
+    /// from a populated graph", and a caller must be able to tell them apart
+    /// before reporting "this symbol does not exist" (hank #76).
+    ///
+    /// OMITTED, not zeroed, when the answer came from the resident daemon: the
+    /// `/references` reply carries `found` but no graph size, and a fabricated
+    /// `0` there would assert "nothing was parseable" about a fully populated
+    /// resident graph — the exact confident-wrong-answer this field exists to
+    /// prevent. Same rule as the FR-3 freshness half: omit rather than fake.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub searched_symbols: Option<usize>,
+    /// Provenance tier of the answer (FR-3), carried at the top level so the
+    /// EMPTY result is tagged too — a zero-definition reply has no `RefItem` to
+    /// hang a tier on, which is the same hole `not_found` closed on the CLI side.
+    pub tier: String,
 }
 
 /// Response for `hank_analyze`.

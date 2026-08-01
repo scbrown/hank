@@ -340,3 +340,56 @@ async fn status_advertises_only_implemented_tiers() {
         "status advertised a tier with no implementation: {payload}"
     );
 }
+
+#[tokio::test]
+async fn references_declares_its_tier_at_the_top_level() {
+    // The empty-answer hole, on the references surface. `ReferencesResponse`
+    // tagged each `RefItem` and nothing else, so the one reply with no items —
+    // "this symbol has no definitions" — was served with no tier at all. That is
+    // the answer most likely to be acted on ("it does not exist"), and it was the
+    // only one FR-3 did not cover.
+    let dir = fixture();
+    let payload = served(
+        server(&dir)
+            .hank_references(Parameters(ReferencesRequest {
+                symbol: "definitely_not_here".into(),
+                path: None,
+            }))
+            .await,
+    );
+    assert_eq!(payload["count"], 0, "fixture has no such symbol: {payload}");
+    assert_top_level_tier(&payload, "hank_references");
+}
+
+#[tokio::test]
+#[cfg(feature = "langs-extra")] // needs the python grammar compiled in
+async fn references_resolves_a_non_rust_definition_on_the_transient_path() {
+    // hank #76 on the MCP surface. The transient fallback walked `rust_files()`
+    // and parsed every hit as "rust" — so this path answered "no definitions" for
+    // every Python/Go/TypeScript symbol in the tree. A `path`-scoped request ALWAYS
+    // lands here (it never consults the daemon, by design), so this was not merely
+    // the no-daemon case: it was every scoped reference query.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("quipu.py"),
+        "def derive_agents(cfg):\n    return cfg\n",
+    )
+    .unwrap();
+    let s = HankMcpServer::new(dir.path().to_path_buf(), None, None);
+
+    let payload = served(
+        s.hank_references(Parameters(ReferencesRequest {
+            symbol: "derive_agents".into(),
+            // Scoped on purpose: pins the TRANSIENT path, not the resident one.
+            path: Some(".".into()),
+        }))
+        .await,
+    );
+
+    assert_eq!(payload["count"], 1, "python definition missed: {payload}");
+    assert_eq!(payload["definitions"][0]["file"], "quipu.py");
+    assert_eq!(payload["definitions"][0]["start_line"], 1);
+    // The searched-set size is knowable on this path, so it is served — the
+    // discriminator between "absent name" and "nothing was parseable".
+    assert_eq!(payload["searched_symbols"], 1, "{payload}");
+}
