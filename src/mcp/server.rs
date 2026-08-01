@@ -125,15 +125,19 @@ impl HankMcpServer {
         &self,
         Parameters(req): Parameters<ReferencesRequest>,
     ) -> Result<CallToolResult, McpError> {
-        // Stage 4: same cutover shape as the stage-3c graph tools — resident
-        // daemon when usable and unscoped, transient fallback otherwise. The
-        // saving is largest here: the transient path below re-extracts EVERY
-        // file per query.
-        if req.path.is_none() {
-            if let Some(response) =
-                super::resident::references(self.config.as_deref(), &self.root, &req.symbol)
-            {
-                return json_result(&response);
+        // A position-based request (FR-4, hank #8) needs the node SPANS, which
+        // the daemon's `/references` reply does not carry — so it takes the
+        // transient path, like a `path`-scoped one. Slower, and correct;
+        // answering it from a name lookup would hand back every same-named
+        // symbol, which is the ambiguity the position was given to resolve.
+        let by_position = req.at_file.is_some() || req.at_line.is_some();
+        if req.path.is_none() && !by_position {
+            if let Some(symbol) = req.symbol.as_deref() {
+                if let Some(response) =
+                    super::resident::references(self.config.as_deref(), &self.root, symbol)
+                {
+                    return json_result(&response);
+                }
             }
         }
         let base = req
@@ -149,19 +153,49 @@ impl HankMcpServer {
             Ok(graph) => graph,
             Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
         };
-        let definitions: Vec<RefItem> = graph
-            .definitions(&req.symbol)
-            .into_iter()
-            .map(|symbol| RefItem {
-                file: symbol.file.clone(),
-                name: symbol.name.clone(),
-                kind: symbol.kind.clone(),
-                start_line: symbol.start_line,
-                tier: symbol.tier.as_str().to_string(),
-            })
-            .collect();
+        let to_item = |symbol: &crate::graph::SymbolNode| RefItem {
+            file: symbol.file.clone(),
+            name: symbol.name.clone(),
+            kind: symbol.kind.clone(),
+            start_line: symbol.start_line,
+            tier: symbol.tier.as_str().to_string(),
+        };
+        let (queried, definitions): (String, Vec<RefItem>) =
+            match (&req.symbol, &req.at_file, req.at_line) {
+                // Position wins when given: it is the more specific request.
+                (_, Some(file), Some(line)) => {
+                    let hit = graph.symbol_at(file, line);
+                    (
+                        hit.map_or_else(|| format!("{file}:{line}"), |n| n.name.clone()),
+                        hit.into_iter().map(to_item).collect(),
+                    )
+                }
+                // Half a position is not a position. Refuse rather than quietly
+                // dropping to a name lookup the caller did not ask for — a silent
+                // downgrade would answer a "which one is here" question with "all
+                // of them", the exact over-connection this parameter exists to cut.
+                (_, Some(_), None) | (_, None, Some(_)) => {
+                    return Err(McpError::invalid_params(
+                        "at_file and at_line go together: give both for a position-based lookup, \
+                     or neither and use `symbol`."
+                            .to_string(),
+                        None,
+                    ));
+                }
+                (Some(name), None, None) => (
+                    name.clone(),
+                    graph.definitions(name).into_iter().map(to_item).collect(),
+                ),
+                (None, None, None) => {
+                    return Err(McpError::invalid_params(
+                        "give `symbol`, or `at_file` + `at_line` to resolve by position."
+                            .to_string(),
+                        None,
+                    ));
+                }
+            };
         let response = ReferencesResponse {
-            symbol: req.symbol.clone(),
+            symbol: queried,
             count: definitions.len(),
             definitions,
             searched_symbols: Some(graph.stats().0),

@@ -252,8 +252,10 @@ async fn every_fact_serving_response_carries_a_tier() {
             "hank_references",
             served(
                 s.hank_references(Parameters(ReferencesRequest {
-                    symbol: "a".into(),
+                    symbol: Some("a".into()),
                     path: None,
+                    at_file: None,
+                    at_line: None,
                 }))
                 .await,
             ),
@@ -352,8 +354,10 @@ async fn references_declares_its_tier_at_the_top_level() {
     let payload = served(
         server(&dir)
             .hank_references(Parameters(ReferencesRequest {
-                symbol: "definitely_not_here".into(),
+                symbol: Some("definitely_not_here".into()),
                 path: None,
+                at_file: None,
+                at_line: None,
             }))
             .await,
     );
@@ -379,8 +383,10 @@ async fn references_resolves_a_non_rust_definition_on_the_transient_path() {
 
     let payload = served(
         s.hank_references(Parameters(ReferencesRequest {
-            symbol: "derive_agents".into(),
+            symbol: Some("derive_agents".into()),
             // Scoped on purpose: pins the TRANSIENT path, not the resident one.
+            at_file: None,
+            at_line: None,
             path: Some(".".into()),
         }))
         .await,
@@ -392,4 +398,63 @@ async fn references_resolves_a_non_rust_definition_on_the_transient_path() {
     // The searched-set size is knowable on this path, so it is served — the
     // discriminator between "absent name" and "nothing was parseable".
     assert_eq!(payload["searched_symbols"], 1, "{payload}");
+}
+
+#[tokio::test]
+async fn references_by_position_answers_with_the_one_symbol_pointed_at() {
+    // hank #8 / FR-4 on the agent-facing surface. `x.rs` in `fixture()` defines
+    // `a` and `b`; a real tree has twelve `build`s, and an agent reading code
+    // knows WHERE it is, not which one. Position must answer with that symbol —
+    // resolving it to a name and looking the name up would hand back the whole
+    // name class, which is the ambiguity the position was given to remove.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("x.rs"),
+        "struct Alpha;\nimpl Alpha {\n    fn build() {}\n}\nstruct Beta;\nimpl Beta {\n    fn build() {}\n}\n",
+    )
+    .unwrap();
+    let s = HankMcpServer::new(dir.path().to_path_buf(), None, None);
+
+    // By name: ambiguous, both sites.
+    let by_name = served(
+        s.hank_references(Parameters(ReferencesRequest {
+            symbol: Some("build".into()),
+            path: Some(".".into()),
+            at_file: None,
+            at_line: None,
+        }))
+        .await,
+    );
+    assert_eq!(by_name["count"], 2, "name is ambiguous here: {by_name}");
+
+    // By position: exactly the one enclosing that line.
+    let by_pos = served(
+        s.hank_references(Parameters(ReferencesRequest {
+            symbol: None,
+            path: Some(".".into()),
+            at_file: Some("x.rs".into()),
+            at_line: Some(7),
+        }))
+        .await,
+    );
+    assert_eq!(by_pos["count"], 1, "position must disambiguate: {by_pos}");
+    assert_eq!(by_pos["definitions"][0]["start_line"], 7, "{by_pos}");
+    assert_top_level_tier(&by_pos, "hank_references");
+}
+
+#[tokio::test]
+async fn references_refuses_half_a_position_rather_than_downgrading_to_a_name() {
+    // `at_file` without `at_line` is not a position. Falling back to a name
+    // lookup would answer "which one is here?" with "all of them" — a silent
+    // downgrade to the very over-connection the parameter exists to cut.
+    let dir = fixture();
+    let err = server(&dir)
+        .hank_references(Parameters(ReferencesRequest {
+            symbol: Some("a".into()),
+            path: Some(".".into()),
+            at_file: Some("x.rs".into()),
+            at_line: None,
+        }))
+        .await;
+    assert!(err.is_err(), "half a position must be refused, not guessed");
 }

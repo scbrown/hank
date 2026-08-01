@@ -17,15 +17,36 @@ pub struct SymbolsRequest {
 /// Request for `hank_references` — definition sites of a symbol by name.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ReferencesRequest {
-    /// The symbol name to locate.
-    #[schemars(description = "Symbol name to locate, e.g. 'authenticate'")]
-    pub symbol: String,
+    /// The symbol name to locate. Optional so a caller can name the symbol by
+    /// POSITION instead (`at_file` + `at_line`, FR-4 / hank #8).
+    #[schemars(
+        description = "Symbol name to locate, e.g. 'authenticate'. Give this OR at_file+at_line."
+    )]
+    pub symbol: Option<String>,
 
     /// Directory to search (relative to the root; defaults to the whole root).
     #[schemars(
         description = "Directory to search, relative to the root. Omit to search everything."
     )]
     pub path: Option<String>,
+
+    /// File of a position-based lookup, relative to the search path.
+    #[schemars(
+        description = "With at_line: resolve the symbol AT this file/line instead of by name. \
+                       Use when a name is ambiguous ('build', 'new') and you know where you are. \
+                       Answers with the one symbol enclosing that line, not every symbol sharing \
+                       its name."
+    )]
+    pub at_file: Option<String>,
+
+    /// 1-based line of a position-based lookup.
+    ///
+    /// LINE, not (line, column): the tree-sitter extractor records lines, so a
+    /// column would be accepted and silently ignored — the FR-3 shape where an
+    /// approximation is served as the finer tier. Column precision arrives with
+    /// the LSP tier (FR-2).
+    #[schemars(description = "1-based line for a position-based lookup. Requires at_file.")]
+    pub at_line: Option<usize>,
 }
 
 /// Request for `hank_analyze` — a structural summary of a subtree.

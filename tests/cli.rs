@@ -845,3 +845,84 @@ fn promote_refuses_dir_name_identity_and_accepts_origin() {
         .stderr(predicate::str::contains("status 400"));
     server.join().unwrap();
 }
+
+#[test]
+fn refs_at_a_position_resolves_one_symbol_where_the_name_resolves_many() {
+    // hank #8 / FR-4. Name lookup over-connects on `build`, `new`, `write` — the
+    // reason the position form exists. A caller reading code knows WHERE it is,
+    // not which of the twelve same-named symbols it is, so pointing must answer
+    // with the one pointed at and not re-expand to the whole name class.
+    let dir = project_with(
+        "a.rs",
+        "struct Alpha;\nimpl Alpha {\n    fn build() -> Self { Alpha }\n}\n\
+         struct Beta;\nimpl Beta {\n    fn build() -> Self { Beta }\n}\n",
+    );
+    let path = dir.path().to_str().unwrap();
+
+    // The name alone cannot separate them.
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["refs", "build", path])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("a.rs:3").and(predicate::str::contains("a.rs:7")));
+
+    // The position can — and answers with exactly one.
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["refs", "--at", "a.rs:7", path])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("a.rs:7").and(predicate::str::contains("a.rs:3").not()));
+}
+
+#[test]
+fn refs_at_refuses_a_column_rather_than_resolving_it_as_a_line() {
+    // FR-3, in the parser. The extractor records LINES, so accepting
+    // `a.rs:3:9` and answering for line 3 would serve a line-precise answer to
+    // a column-precise question — an approximation presented as the finer tier.
+    // Refusing names the missing tier instead, and says what to retry.
+    let dir = project_with("a.rs", "fn one() {}\nfn two() {}\nfn three() {}\n");
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["refs", "--at", "a.rs:3:9", dir.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("FILE:LINE:COL")
+                .and(predicate::str::contains("LSP tier"))
+                .and(predicate::str::contains("a.rs:3")),
+        );
+}
+
+#[test]
+fn refs_at_a_line_between_definitions_explains_instead_of_answering_absent() {
+    // A position that resolves to nothing must not borrow the vocabulary of "no
+    // such symbol" — that is the hank #76 confident-wrong-answer shape. It says
+    // the line falls between definitions, and lists what the file does define.
+    let dir = project_with("a.rs", "fn one() {}\n\n\n\nfn two() {}\n");
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["refs", "--at", "a.rs:3", dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("no symbol encloses a.rs:3")
+                .and(predicate::str::contains("between definitions"))
+                .and(predicate::str::contains("one"))
+                .and(predicate::str::contains("two")),
+        );
+}
+
+#[test]
+fn refs_at_an_unparseable_file_says_so_rather_than_reporting_no_definitions() {
+    let dir = project_with("a.rs", "fn one() {}\n");
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["refs", "--at", "nope.rs:1", dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "no symbols in the graph for `nope.rs`",
+        ));
+}

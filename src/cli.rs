@@ -103,11 +103,20 @@ enum Commands {
     },
     /// Find the definition sites of a symbol by name.
     Refs {
-        /// Symbol name to locate.
-        symbol: String,
+        /// Symbol name to locate. With --at this slot is the search PATH
+        /// instead: a name is redundant once a position names the symbol.
+        symbol: Option<String>,
         /// Directory to search (defaults to the current directory).
         #[arg(default_value = ".")]
         path: PathBuf,
+        /// Resolve the symbol at a POSITION instead of by name: `FILE:LINE`,
+        /// relative to the search path. Disambiguates common names — `build`,
+        /// `new` — by pointing at the one you mean. The tree-sitter tier
+        /// resolves to the innermost symbol enclosing that LINE; column
+        /// precision needs the LSP tier (FR-2), so a column is refused rather
+        /// than silently ignored.
+        #[arg(long, value_name = "FILE:LINE")]
+        at: Option<String>,
     },
     /// Direct callers and callees of a symbol.
     Callers {
@@ -315,7 +324,9 @@ impl Cli {
         }
         match &self.command {
             Commands::Analyze { path, at } => self.analyze(path, at.as_deref()),
-            Commands::Refs { symbol, path } => self.refs(symbol, path),
+            Commands::Refs { symbol, path, at } => {
+                self.refs(symbol.as_deref(), path, at.as_deref())
+            }
             Commands::Watch { path } => self.watch(path).await,
             Commands::Status => self.status(),
             Commands::Hook { event } => match event {

@@ -113,10 +113,38 @@ impl Cli {
     /// surviving in the one command whose name advertises symbol lookup, and it
     /// failed in the worst direction: a confident "this symbol does not exist"
     /// rather than an error.
-    pub(super) fn refs(&self, symbol: &str, path: &Path) -> anyhow::Result<()> {
-        let graph = crate::graph::CodeGraph::build(path)?;
-        let hits = graph.definitions(symbol);
+    pub(super) fn refs(
+        &self,
+        symbol: Option<&str>,
+        path: &Path,
+        at: Option<&str>,
+    ) -> anyhow::Result<()> {
+        // With `--at`, the lone positional is the search PATH, not a symbol: a
+        // name is redundant once a position names the symbol, and reading it as
+        // one would reject the natural `hank refs --at a.rs:3 .` as a conflict.
+        let root = match (at, symbol) {
+            (Some(_), Some(positional)) => PathBuf::from(positional),
+            _ => path.to_path_buf(),
+        };
+        let graph = crate::graph::CodeGraph::build(&root)?;
         let (nodes, _) = graph.stats();
+
+        // `--at FILE:LINE` names the symbol by POSITION (FR-4, hank #8), and
+        // answers with THAT symbol — not with every symbol sharing its name.
+        // Resolving the position to a name and then looking the name up would
+        // hand back all twelve `build`s again, which is the exact
+        // over-connection the position form exists to cut through.
+        let (symbol, hits) = match (symbol, at) {
+            (_, Some(at)) => match self.resolve_at(&graph, at, nodes)? {
+                Some(node) => (node.name.clone(), vec![node]),
+                None => return Ok(()),
+            },
+            (Some(name), None) => (name.to_string(), graph.definitions(name)),
+            (None, None) => {
+                anyhow::bail!("give a symbol name or --at FILE:LINE");
+            }
+        };
+        let symbol = symbol.as_str();
 
         if self.json {
             let rows: Vec<_> = hits
@@ -240,5 +268,78 @@ impl Cli {
             std::process::exit(2);
         }
         Ok(())
+    }
+
+    /// Resolve `--at FILE:LINE` to the name of the symbol enclosing that line.
+    ///
+    /// `Ok(None)` means "said why, nothing to report" — the caller returns
+    /// quietly. Every miss is EXPLAINED rather than silently answered as an
+    /// absent symbol, because a position that resolves to nothing is exactly the
+    /// confident-wrong-answer shape hank #76 was about: "no definitions" reads
+    /// as "this does not exist" when the truth is "I could not find what you
+    /// pointed at".
+    fn resolve_at<'g>(
+        &self,
+        graph: &'g crate::graph::CodeGraph,
+        at: &str,
+        nodes: usize,
+    ) -> anyhow::Result<Option<&'g crate::graph::SymbolNode>> {
+        // Split from the RIGHT, but count first: `rsplit_once(':')` alone reads
+        // `a.rs:3:9` as file `a.rs:3` line `9`, silently accepting a column by
+        // folding it into the filename — the failure mode the refusal below
+        // exists to prevent, hidden in the parser.
+        let parts: Vec<&str> = at.rsplitn(3, ':').collect();
+        let (file, line_part) = match parts.as_slice() {
+            // A column is REFUSED, not ignored. The extractor records lines, so
+            // resolving `file:12:7` as line 12 would serve line precision under
+            // a column-precise request — the FR-3 rule against presenting an
+            // approximation as the finer tier.
+            [col, line_part, file] if col.chars().all(|c| c.is_ascii_digit()) => {
+                anyhow::bail!(
+                    "--at takes FILE:LINE, not FILE:LINE:COL (got column `{col}`). The \
+                     tree-sitter tier resolves to the innermost symbol on a LINE; \
+                     column-precise resolution needs the LSP tier (FR-2), which is not \
+                     built. Retry as `{file}:{line_part}`."
+                );
+            }
+            [line_part, file] => (*file, *line_part),
+            _ => anyhow::bail!("--at wants FILE:LINE, got `{at}`"),
+        };
+        let line: usize = line_part
+            .parse()
+            .map_err(|_| anyhow::anyhow!("--at wants a line number, got `{line_part}`"))?;
+
+        if let Some(node) = graph.symbol_at(file, line) {
+            return Ok(Some(node));
+        }
+
+        // Nothing encloses that line. Separate the three reasons, because they
+        // call for different fixes.
+        if !self.quiet {
+            let in_file = graph.file_symbols(file);
+            if nodes == 0 {
+                println!(
+                    "nothing parseable under this path — the graph is empty, so `{at}` \
+                     resolves to nothing for that reason, not because the line is blank"
+                );
+            } else if in_file.is_empty() {
+                println!(
+                    "no symbols in the graph for `{file}` (is the path relative to the \
+                     search root, and does this build have a grammar for it?) — searched \
+                     {nodes} symbol(s)"
+                );
+            } else {
+                let near: Vec<String> = in_file
+                    .iter()
+                    .map(|s| format!("{}:{}-{}", s.name, s.start_line, s.end_line))
+                    .collect();
+                println!(
+                    "no symbol encloses {file}:{line} — it falls between definitions \
+                     (a blank line, an import, a top-level comment). `{file}` defines: {}",
+                    near.join(", ")
+                );
+            }
+        }
+        Ok(None)
     }
 }
