@@ -33,6 +33,8 @@ pub struct HankConfig {
     pub quipu: QuipuConfig,
     /// Capability-scoped edit policy for the pre-edit guard (§5.8/FR-25).
     pub policy: crate::policy::PolicyConfig,
+    /// What the usage spool records about a guard decision (hank #77).
+    pub metrics: crate::audit::MetricsConfig,
 }
 
 impl Default for HankConfig {
@@ -50,6 +52,7 @@ impl Default for HankConfig {
             serve: ServeConfig::default(),
             quipu: QuipuConfig::default(),
             policy: crate::policy::PolicyConfig::default(),
+            metrics: crate::audit::MetricsConfig::default(),
         }
     }
 }

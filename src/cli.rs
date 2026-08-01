@@ -651,6 +651,11 @@ impl Cli {
                 "tiers": Tier::served(),
                 "quipu": { "enabled": config.quipu.enabled, "branch_model": config.quipu.branch_model },
                 "policy": policy,
+                // Whether guard records will carry their subject (hank #77). An
+                // operator has to be able to confirm this from OUTSIDE the
+                // process: "recording is on" believed but untrue looks exactly
+                // like "nothing was denied" in the spool.
+                "metrics": { "record_paths": config.metrics.record_paths },
                 // The signed rule set (aegis-hac0) does not exist yet; report its
                 // ABSENCE explicitly rather than omitting it, so the day it lands
                 // the surface is already here and its absence was never silent.
@@ -671,6 +676,14 @@ impl Cli {
             println!(
                 "  quipu       : enabled={} branch_model={}",
                 config.quipu.enabled, config.quipu.branch_model
+            );
+            println!(
+                "  audit       : record_paths={}",
+                match config.metrics.record_paths {
+                    crate::audit::PathRecording::Off => "off (guard records carry no path)",
+                    crate::audit::PathRecording::Relative => "relative",
+                    crate::audit::PathRecording::Absolute => "absolute",
+                }
             );
             print_policy_status(&policy);
         }

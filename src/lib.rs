@@ -11,6 +11,7 @@
 //! (`mcp` feature), CPG/dataflow (`cpg`), LSP precision (`lsp`), and Quipu
 //! promotion (`quipu`) land in subsequent phases.
 
+pub mod audit;
 pub mod change;
 pub mod cli;
 mod cli_cmds;

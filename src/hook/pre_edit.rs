@@ -49,10 +49,45 @@ pub fn run_pre_edit(tenant: Option<&str>, config_override: Option<&Path>) -> any
     Ok(())
 }
 
+/// A guard outcome plus the identity of what produced it.
+///
+/// [`Outcome`] is what the harness sees; this is what the AUDIT record sees.
+/// They are separate because the model-facing text and the operator-facing
+/// record answer different questions: the model needs to know what to do
+/// instead, the operator needs to know which rule fired so a false positive can
+/// be told from a correct deny (hank #77).
+#[derive(Debug, Clone)]
+struct Decision {
+    outcome: Outcome,
+    /// Stable id of the deciding rule, when one rule decided. `None` for a plain
+    /// allow, where nothing fired and there is nothing to name.
+    rule: Option<String>,
+}
+
+impl From<Outcome> for Decision {
+    fn from(outcome: Outcome) -> Self {
+        Self {
+            outcome,
+            rule: None,
+        }
+    }
+}
+
+impl Decision {
+    /// A decision attributed to `rule`.
+    fn ruled(outcome: Outcome, rule: impl Into<String>) -> Self {
+        Self {
+            outcome,
+            rule: Some(rule.into()),
+        }
+    }
+}
+
 /// Decide an edit, and SPOOL the decision (aegis-0nng): one `guard` metrics
-/// line per invocation — result, duration, extension — through the
-/// fail-silent spool, after the outcome is already fixed. Measurement rides
-/// behind the decision; it can never lean on it.
+/// line per invocation — result, duration, extension, and (hank #77) the target
+/// path and the rule that fired — through the fail-silent spool, after the
+/// outcome is already fixed. Measurement rides behind the decision; it can
+/// never lean on it.
 #[must_use]
 pub fn guard(
     input_json: &str,
@@ -61,47 +96,76 @@ pub fn guard(
     config_override: Option<&Path>,
 ) -> Outcome {
     let started = Instant::now();
-    let outcome = guard_inner(input_json, default_root, tenant, config_override);
-    let result = match &outcome {
+    let decision = guard_inner(input_json, default_root, tenant, config_override);
+    let result = match &decision.outcome {
         Outcome::Allow => "allow",
         Outcome::Deny(_) => "deny",
         Outcome::Notify(_) => "notify",
     };
-    let ext = HookInput::parse(input_json)
-        .and_then(|i| i.tool_input.file_path)
+    let input = HookInput::parse(input_json);
+    let file_path = input.as_ref().and_then(|i| i.tool_input.file_path.clone());
+    let ext = file_path
+        .as_ref()
         .and_then(|f| {
-            Path::new(&f)
+            Path::new(f)
                 .extension()
                 .and_then(OsStr::to_str)
                 .map(str::to_string)
         })
         .unwrap_or_default();
+    // Resolve the config against the PAYLOAD's root, the way `guard_inner` does
+    // — not against the process CWD. The record must describe the decision that
+    // was actually made: config resolved from a different root can report a
+    // `mode` the deciding code never saw, which is worst precisely where the
+    // mode matters (an agent invoking the hook from outside the repo it edits
+    // spooled `mode: off` for a decision made under `enforce`). One root, one
+    // config, one record.
+    let root = input
+        .as_ref()
+        .map_or_else(|| default_root.to_path_buf(), |i| i.root(default_root));
+    let config = HankConfig::resolve(config_override, &root).ok();
     // The MODE rides every guard line (soak hygiene): the enforce-flip gate is
     // "zero false positives measured over ambient ADVISE traffic", and the
     // first live window was unusable because operator test bursts under an
     // enforce config were indistinguishable from fleet lines. The mode is the
     // filter that makes the soak evidence clean.
-    let mode =
-        HankConfig::resolve(config_override, default_root).map_or("?", |c| match c.policy.mode {
-            Mode::Off => "off",
-            Mode::Advise => "advise",
-            Mode::Enforce => "enforce",
-        });
-    crate::metrics::emit(
-        "guard",
-        &[
-            ("result", result.into()),
-            ("mode", mode.into()),
-            (
-                "duration_ms",
-                u64::try_from(started.elapsed().as_millis())
-                    .unwrap_or(u64::MAX)
-                    .into(),
-            ),
-            ("ext", ext.into()),
-        ],
-    );
-    outcome
+    let mode = config.as_ref().map_or("?", |c| c.policy.mode.as_str());
+
+    let mut fields: Vec<(&str, serde_json::Value)> = vec![
+        ("result", result.into()),
+        ("mode", mode.into()),
+        (
+            "duration_ms",
+            u64::try_from(started.elapsed().as_millis())
+                .unwrap_or(u64::MAX)
+                .into(),
+        ),
+        ("ext", ext.into()),
+    ];
+
+    // The SUBJECT of the decision (hank #77). Recorded for allow as well as
+    // deny, deliberately and under the same knob: scope that can only be
+    // inferred from the absence of denies cannot be verified at all, and an
+    // operator confirming a rule is scoped correctly needs to see what it let
+    // through as much as what it stopped.
+    //
+    // Both fields are omitted rather than blanked when they have nothing to say,
+    // so a reader never has to distinguish "recorded as empty" from "not
+    // recorded" — the same reason the spool never writes a placeholder tier.
+    if let (Some(config), Some(file_path)) = (config.as_ref(), file_path.as_ref()) {
+        let file = PathBuf::from(file_path);
+        let rel = relative(&file, &root);
+        if let Some(recorded) = crate::audit::record_path(config.metrics.record_paths, &rel, &file)
+        {
+            fields.push(("path", recorded.into()));
+        }
+    }
+    if let Some(rule) = decision.rule {
+        fields.push(("rule", rule.into()));
+    }
+
+    crate::metrics::emit("guard", &fields);
+    decision.outcome
 }
 
 /// The decision itself. Pure apart from reading the repo, so it is directly
@@ -112,16 +176,16 @@ fn guard_inner(
     default_root: &Path,
     tenant: Option<&str>,
     config_override: Option<&Path>,
-) -> Outcome {
+) -> Decision {
     let started = Instant::now();
 
     // An unparseable payload is an ALLOW: the guard only speaks up about edits
     // it genuinely understands.
     let Some(input) = HookInput::parse(input_json) else {
-        return Outcome::Allow;
+        return Outcome::Allow.into();
     };
     let Some(file_path) = input.tool_input.file_path.clone() else {
-        return Outcome::Allow;
+        return Outcome::Allow.into();
     };
     let root = input.root(default_root);
 
@@ -130,7 +194,7 @@ fn guard_inner(
     // never a silent revert to the ambient config the operator meant to bypass.
     let config = match HankConfig::resolve(config_override, &root) {
         Ok(config) => config,
-        Err(e) => return fail_open(&input, "config", &format!("unreadable config ({e})")),
+        Err(e) => return fail_open(&input, "config", &format!("unreadable config ({e})")).into(),
     };
 
     let file = PathBuf::from(&file_path);
@@ -141,8 +205,8 @@ fn guard_inner(
     // Evaluate them before the tenant-scope gate so they apply even to an
     // unconstrained tenant. A rule Deny/Notify short-circuits the scope checks —
     // one guard decision per edit.
-    if let Some(outcome) = rule_check(&config, &input, &rel) {
-        return outcome;
+    if let Some(decision) = rule_check(&config, &input, &rel) {
+        return decision;
     }
 
     // Governed policies projected from quipu (Phase 4), evaluated where the
@@ -153,13 +217,13 @@ fn guard_inner(
     // endpoint), and behind the `quipu` feature so a default build carries
     // none of it.
     #[cfg(feature = "quipu")]
-    if let Some(outcome) = governed_check(&config, &input, &root, &rel) {
-        return outcome;
+    if let Some(decision) = governed_check(&config, &input, &root, &rel) {
+        return decision;
     }
 
     // No scope for this tenant — mode is off, or the tenant is unconstrained.
     let (Some(tenant), Some(scope)) = (tenant, config.policy.scope_for(tenant)) else {
-        return Outcome::Allow;
+        return Outcome::Allow.into();
     };
 
     // A scope whose globs do not compile is misconfigured; say so rather than
@@ -177,13 +241,17 @@ fn guard_inner(
                 "scope for tenant `{tenant}` has malformed path globs: {}",
                 detail.join(", ")
             ),
-        );
+        )
+        .into();
     }
 
     // 1. Path scope — cheap, no graph needed, so it runs even under a blown
     //    deadline. This is the check that must never be skipped.
     if let Some(violation) = scope.check_path(&rel, tenant) {
-        return decide(config.policy.mode, violation.message);
+        return Decision::ruled(
+            decide(config.policy.mode, violation.message),
+            violation.rule,
+        );
     }
 
     // 2. Blast radius — expensive. Bounded by whatever remains of the budget.
@@ -191,7 +259,7 @@ fn guard_inner(
         .checked_sub(started.elapsed())
         .unwrap_or_default();
     if scope.max_impacted_symbols.is_none() && scope.max_impacted_files.is_none() {
-        return Outcome::Allow; // Nothing to measure against.
+        return Outcome::Allow.into(); // Nothing to measure against.
     }
 
     // Size the edit against the RESIDENT daemon when one is expected and usable,
@@ -221,19 +289,25 @@ fn guard_inner(
         eprintln!("hank: blast radius UNMEASURED for `{rel}`: {reason}");
         let kind = format!("unmeasured-{}-{rel}", reply.kind);
         if first_notice_for_session(input.session_id.as_deref(), &kind) {
-            return Outcome::Notify(format!(
-                "hank: blast-radius rules were NOT EVALUATED for `{rel}` — \
-                 {reason}. The edit is allowed (the guard fails open), but \
-                 tenant `{tenant}`'s ceilings did not apply to it. Treat this \
-                 file as UNGUARDED by blast radius, not as within limits."
-            ));
+            return Decision::ruled(
+                Outcome::Notify(format!(
+                    "hank: blast-radius rules were NOT EVALUATED for `{rel}` — \
+                     {reason}. The edit is allowed (the guard fails open), but \
+                     tenant `{tenant}`'s ceilings did not apply to it. Treat this \
+                     file as UNGUARDED by blast radius, not as within limits."
+                )),
+                "unmeasured",
+            );
         }
-        return Outcome::Allow;
+        return Outcome::Allow.into();
     };
 
     let verdict = match scope.check_blast(radius, &rel, tenant) {
-        Some(violation) => decide(config.policy.mode, violation.message),
-        None => Outcome::Allow,
+        Some(violation) => Decision::ruled(
+            decide(config.policy.mode, violation.message),
+            violation.rule,
+        ),
+        None => Outcome::Allow.into(),
     };
 
     // DAEMON EXPECTED BUT DOWN — the cheapest-bypass scenario the daemon exists to
@@ -245,14 +319,15 @@ fn guard_inner(
     // still guarded, by the transient rebuild.
     if let Some(reason) = daemon_absent {
         eprintln!("hank: resident guard daemon EXPECTED but unusable: {reason}");
-        if matches!(verdict, Outcome::Allow)
+        if matches!(verdict.outcome, Outcome::Allow)
             && first_notice_for_session(input.session_id.as_deref(), "daemon-absent")
         {
             return Outcome::Notify(format!(
                 "hank: the resident guard daemon is DOWN ({reason}). This edit was guarded by a \
                  transient rebuild and ALLOWED — but the daemon a caller could kill to bypass \
                  the guard on every edit is not running. Restart it."
-            ));
+            ))
+            .into();
         }
     }
     verdict
@@ -324,7 +399,7 @@ fn blast_reply(
 /// `new_string`s of an `Edit`/`MultiEdit`), so an agent is answerable for what it
 /// writes, not for pre-existing debt elsewhere in the file — the same "size the
 /// touched region" discipline the blast-radius path uses.
-fn rule_check(config: &HankConfig, input: &HookInput, rel: &str) -> Option<Outcome> {
+fn rule_check(config: &HankConfig, input: &HookInput, rel: &str) -> Option<Decision> {
     // Mode::Off disarms the whole guard, rules included.
     if config.policy.mode == Mode::Off {
         return None;
@@ -342,11 +417,14 @@ fn rule_check(config: &HankConfig, input: &HookInput, rel: &str) -> Option<Outco
             .iter()
             .map(|(name, why)| format!("`{name}` ({why})"))
             .collect();
-        return Some(fail_open(
-            input,
-            "rules",
-            &format!("policy rules do not compile: {}", detail.join(", ")),
-        ));
+        return Some(
+            fail_open(
+                input,
+                "rules",
+                &format!("policy rules do not compile: {}", detail.join(", ")),
+            )
+            .into(),
+        );
     }
 
     // Rules are language-specific: a file this build cannot parse simply has no
@@ -366,7 +444,21 @@ fn rule_check(config: &HankConfig, input: &HookInput, rel: &str) -> Option<Outco
     // is threaded here so a verdict computed against a stale projection is tagged
     // STALE, never silently fresh.
     let message = rule_verdict_message(&violations, Freshness::Fresh);
-    Some(decide(config.policy.mode, message))
+    // Name every rule that fired, not just the first: an edit can break several
+    // at once, and a record that dropped the rest would send an operator to fix
+    // one and hit the next.
+    let fired = fired_rule_ids(violations.iter().map(|v| v.rule.as_str()));
+    Some(Decision::ruled(decide(config.policy.mode, message), fired))
+}
+
+/// Join the ids of the rules that fired into one stable, deduplicated field
+/// value. Sorted so the same set of rules always renders the same string —
+/// a record an operator groups by must not vary with evaluation order.
+fn fired_rule_ids<'a>(ids: impl Iterator<Item = &'a str>) -> String {
+    let mut seen: Vec<&str> = ids.collect();
+    seen.sort_unstable();
+    seen.dedup();
+    seen.join("+")
 }
 
 /// Combine rule violations into one model-facing verdict and DECLARE its freshness
@@ -431,7 +523,7 @@ fn governed_check(
     input: &HookInput,
     root: &Path,
     rel: &str,
-) -> Option<Outcome> {
+) -> Option<Decision> {
     use crate::project::RepoExposure;
 
     if config.policy.mode == Mode::Off || !config.quipu.enabled || config.quipu.endpoint.is_empty()
@@ -442,11 +534,14 @@ fn governed_check(
 
     let mut registry = crate::project::ProjectionRegistry::new(&config.quipu.endpoint);
     if let Err(e) = registry.refresh() {
-        return Some(fail_open(
-            input,
-            "projection",
-            &format!("could not project governed policy from quipu: {e}"),
-        ));
+        return Some(
+            fail_open(
+                input,
+                "projection",
+                &format!("could not project governed policy from quipu: {e}"),
+            )
+            .into(),
+        );
     }
 
     // A projected rule set that does not compile is a broken sync; fail open
@@ -460,11 +555,14 @@ fn governed_check(
             .iter()
             .map(|(name, why)| format!("`{name}` ({why})"))
             .collect();
-        return Some(fail_open(
-            input,
-            "projection-rules",
-            &format!("projected policies do not compile: {}", detail.join(", ")),
-        ));
+        return Some(
+            fail_open(
+                input,
+                "projection-rules",
+                &format!("projected policies do not compile: {}", detail.join(", ")),
+            )
+            .into(),
+        );
     }
 
     let mut messages: Vec<String> = Vec::new();
@@ -534,13 +632,23 @@ fn governed_check(
     );
     let blocks = config.policy.mode == Mode::Enforce && any_blocking;
     let message = rule_verdict_message_from(&messages.join("\n"), registry.freshness());
-    if blocks {
-        Some(Outcome::Deny(message))
-    } else {
-        Some(Outcome::Notify(format!(
-            "hank (governed, not blocking): {message}"
-        )))
+    // The same rule names the `governed` line already reports, carried onto the
+    // `guard` line too (hank #77). Without this a governed deny is the one deny
+    // an operator has to JOIN two spool lines to attribute — and the join is by
+    // timestamp, which is exactly the correlation that failed during the
+    // incident that motivated the issue. Structural violations contribute a
+    // count, not names (their names live only inside composed messages today),
+    // so they are named as such rather than silently omitted.
+    let mut fired: Vec<&str> = text_violations.iter().map(|v| v.rule.as_str()).collect();
+    if structural_count > 0 {
+        fired.push("governed-structural");
     }
+    let outcome = if blocks {
+        Outcome::Deny(message)
+    } else {
+        Outcome::Notify(format!("hank (governed, not blocking): {message}"))
+    };
+    Some(Decision::ruled(outcome, fired_rule_ids(fired.into_iter())))
 }
 
 /// The text plane's decision, PURE: which messages, and whether anything
