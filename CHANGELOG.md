@@ -55,6 +55,7 @@ All notable changes to this project will be documented in this file.
 
 - *(plate)* Fix doc list indentation flagged by clippy([b375280](https://github.com/scbrown/hank/commit/b37528006a2f4aff0121fbfb2e0e322a4319d491))
 - *(pre_bash)* Backtick the module name in the doc header([253131b](https://github.com/scbrown/hank/commit/253131ba72248008704b68276a4e312bcf76d14b))
+
 ## [0.3.1] - 2026-07-23
 
 ### Added
@@ -69,6 +70,7 @@ All notable changes to this project will be documented in this file.
 ### Style
 
 - Rustfmt the provenance + shape-agreement commit — third unformatted direct-to-main push today([b44bf3c](https://github.com/scbrown/hank/commit/b44bf3c7a113b09fd718e4e0b1dd056aa9cf49f7))
+
 ## [0.3.0] - 2026-07-23
 
 ### Added
@@ -134,6 +136,7 @@ All notable changes to this project will be documented in this file.
 ### Design
 
 - *(logo)* Give the feedback-loop lobes goggle eyes (#26)([b1e17dd](https://github.com/scbrown/hank/commit/b1e17dd28688490610c619af2d9ddd321e8320db))
+
 ## [0.2.0] - 2026-07-20
 
 ### Added
@@ -153,6 +156,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - *(release)* V0.2.0 (#37)([3fc8e76](https://github.com/scbrown/hank/commit/3fc8e765ace94e797f25970931ae449faf1fccad))
+
 ## [0.1.0] - 2026-07-20
 
 ### Added
