@@ -2,8 +2,73 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.4.0] - 2026-08-02
 
+### Added
+
+- *(promote)* Chunk oversized promotions so real-world repos fit through /knot (#59)([83f414b](https://github.com/scbrown/hank/commit/83f414be6979122db0e8eab125e291b907db8d6b))
+- *(extract)* Scope-qualified symbol IRIs — same-named symbols in one file stop merging (#64)([5bd0d39](https://github.com/scbrown/hank/commit/5bd0d394d4e3fc72262f0a76de4ea0ccc83553fb))
+- *(promote)* Optional bearer auth on the Quipu write path (QUIPU_AUTH_TOKEN)([b9806fa](https://github.com/scbrown/hank/commit/b9806fa8dcfa5cd8613ce8b1ddff2a112c8115b6))
+- *(promote)* Token-file fallback for the Quipu bearer — reaches pre-flip processes([a2d3cd9](https://github.com/scbrown/hank/commit/a2d3cd9a79e1a5ca6f9ddc10c342e4490285a80f))
+- *(daemon)* Complete the FR-27 query surface — /references, /symbols, /dataflow (hank #1, stage 4) (#65)([a58467b](https://github.com/scbrown/hank/commit/a58467b871beaeac7ed1c0dcd9b73bf83168f234))
+- *(daemon)* Post-edit thin client + graceful shutdown + wire-level SLO test — closes hank #1 (stage 5) (#66)([15756f1](https://github.com/scbrown/hank/commit/15756f15b886d935162930cedb797ec9a0b2f912))
+- *(graph)* Shared read-only base + CoW per-tenant overlays (hank #2, slices 1+2+4) (#67)([67dcbba](https://github.com/scbrown/hank/commit/67dcbba33c9b0e124f43b3f179032243ae7bb29c))
+- *(daemon)* Wire the tenant layer live — /edit feed, tenant-scoped queries, status overlays (hank #2 close) (#68)([fcd6958](https://github.com/scbrown/hank/commit/fcd6958121f056f0fe1fae5014a13f0f408001ef))
+- *(graph)* Frontier-bounded overlay update + overlay-new-name resolution (hank #3, FR-16) (#69)([a298521](https://github.com/scbrown/hank/commit/a2985215ca7035c8f7e5ff0b17b82dfb5280098c))
+- *(graph)* Content-hash structural sharing — base-hit no-op + sharing stats (hank #4, FR-15) (#70)([2a66389](https://github.com/scbrown/hank/commit/2a66389931255b5132547c25e85b0a65b99c12a9))
+- *(watch)* File-watch drives per-tenant overlays via the frontier recompute (hank #5, FR-17) (#71)([00898b7](https://github.com/scbrown/hank/commit/00898b7e84d2e74c755a65cd445e8092511ea930))
+- *(graph)* Overlay lifecycle + eviction + high-fan-in guard — completes Phase 3 (hank #6, FR-18) (#72)([8cb823f](https://github.com/scbrown/hank/commit/8cb823fbc349d93074e3b2ef91d8595dba62d905))
+- *(promote)* Read the committed tree, not the working tree — FR-22 + arbitrary --commit (hank #15 slice) (#73)([12a1529](https://github.com/scbrown/hank/commit/12a1529536671d4813cd2cfe26b4a58ca62e3943))
+- *(refs,audit)* Position-based symbol resolution, graph-backed definitions, audit subjects (#85)([1627c06](https://github.com/scbrown/hank/commit/1627c06e2933832ad448ccd76812fe2bc34546fb))
+- *(status)* The rule plane is a FAILURE SURFACE, not a line of prose([e49b9cb](https://github.com/scbrown/hank/commit/e49b9cb950ee575df90f5df0cc48beaa074068f2))
+- *(metrics)* Make the advise-mode soak ADJUDICABLE — carry repo and exposure([c325e5f](https://github.com/scbrown/hank/commit/c325e5f426af508f901b63a44b0b2d986b0acb54))
+- *(action)* Resolve a command line to (verb, target, class) — or ABSTAIN([4fe96e2](https://github.com/scbrown/hank/commit/4fe96e29eead84a57adf964bcbf1893610caba80))
+- *(project)* Target the aegis:TextRule SUPERTYPE, not one concrete class([8228082](https://github.com/scbrown/hank/commit/82280820dd1910a4b496d414e07e5d4e24c6e20c))
+- *(metrics)* Record the WORK ITEM an action belongs to, read from the tracker's plate([610400e](https://github.com/scbrown/hank/commit/610400e9965de4a2588e718034b1cfa94d62d226))
+- *(hook)* Give the action resolver the input path it never had (hook pre-bash)([562609e](https://github.com/scbrown/hank/commit/562609e0062480d21462a7014a7f14700005a33d))
+
+### Changed
+
+- *(project)* Split the SPARQL out of project.rs — it was over the size limit([d6d1dae](https://github.com/scbrown/hank/commit/d6d1daee31c61371b7c549f68f765bfcf9d71e9f))
+
+### Documentation
+
+- *(spec)* Label the Phase-4 graph-export sections in Appendix D([a45aa7c](https://github.com/scbrown/hank/commit/a45aa7c9f6e07874e36e86bce6427b57a2b5ebd0))
+- Scope game-state & policy harness for NeuralAmplifier (FR-35..FR-39)([9f2f9d1](https://github.com/scbrown/hank/commit/9f2f9d1391c489d62ac2ec228883913ae6b8b1ef))
+- *(design)* Land the governance-plane design doc (#86)([baae03e](https://github.com/scbrown/hank/commit/baae03e369b1853c0c7dede5b25b7dfe547b45de))
+- Design for work-scoped agent governance — one scope, three consumers([5f5378d](https://github.com/scbrown/hank/commit/5f5378dea64ce3ee58b930118cc30d4b0006f404))
+
+### Fixed
+
+- *(hook)* Scope the post-edit advisory to the EDITED symbol, not the whole file (#75)([c1818d3](https://github.com/scbrown/hank/commit/c1818d38517a3b047dbea24b149320026bd4a61f))
+- *(status,project)* Report the rule set that is LOADED, and stop projecting duplicates([74cfd75](https://github.com/scbrown/hank/commit/74cfd75ffd156433c745eba0a36ad4cef9290aed))
+- *(hook)* Grade the EDIT, not the SESSION — exposure follows the file's repo([01960b1](https://github.com/scbrown/hank/commit/01960b10d2155ea7f152cc1a6dcb4fd33d7087b6))
+- *(release)* Release-plz hunted for a tag template this repo has never used([85a24d2](https://github.com/scbrown/hank/commit/85a24d23f25cbe112fc57ef3385e3829aee084a9))
+- *(test)* Gate the rule-plane tests on `quipu` — they were red in 3 of 5 CI legs([9937bf1](https://github.com/scbrown/hank/commit/9937bf116e8e87d2fc6e3aa5dd689e763dbf0c5e))
+- *(ci)* Green up main — fmt, MD040 and a non_snake_case hard error([50e061d](https://github.com/scbrown/hank/commit/50e061de12ccf806403903d4a607ded9b1eacfcf))
+
+### Testing
+
+- *(promote)* Round-trip-validate real export output against the shipped shapes — closes #13, #14 (#74)([f147ead](https://github.com/scbrown/hank/commit/f147ead93a293c465886bb7e9572d5923fc1dc22))
+
+### Style
+
+- *(plate)* Fix doc list indentation flagged by clippy([b375280](https://github.com/scbrown/hank/commit/b37528006a2f4aff0121fbfb2e0e322a4319d491))
+- *(pre_bash)* Backtick the module name in the doc header([253131b](https://github.com/scbrown/hank/commit/253131ba72248008704b68276a4e312bcf76d14b))
+## [0.3.1] - 2026-07-23
+
+### Added
+
+- *(promote)* Write provenance + the rudof<->quipu verdict-agreement test([3dda463](https://github.com/scbrown/hank/commit/3dda4638357bc096a1618993db73174fe1551c61))
+- *(census)* Hank census — count same-file symbol-name collisions at the only layer that can see them([900062a](https://github.com/scbrown/hank/commit/900062a2043e969c47a8a477e5eb5a848c1758f4))
+
+### Release
+
+- V0.3.1 — quipu feature in the shipped binary + stub promote exits non-zero([f7949fd](https://github.com/scbrown/hank/commit/f7949fd00713a3e2a560d3a40ad0a3d29d4855c2))
+
+### Style
+
+- Rustfmt the provenance + shape-agreement commit — third unformatted direct-to-main push today([b44bf3c](https://github.com/scbrown/hank/commit/b44bf3c7a113b09fd718e4e0b1dd056aa9cf49f7))
 ## [0.3.0] - 2026-07-23
 
 ### Added
@@ -59,6 +124,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - *(fmt)* Reformat to satisfy stable rustfmt — CI Format has been red (#54)([f3f23a1](https://github.com/scbrown/hank/commit/f3f23a183f5da201f47a42c21242c582ff6e75b5))
+- *(release)* V0.3.0 — 43 unreleased commits, plus the two gaps that let them pile up([b529984](https://github.com/scbrown/hank/commit/b52998423709d3c26a7f701c06e1c3358595bc44))
 
 ### Testing
 
@@ -68,65 +134,65 @@ All notable changes to this project will be documented in this file.
 ### Design
 
 - *(logo)* Give the feedback-loop lobes goggle eyes (#26)([b1e17dd](https://github.com/scbrown/hank/commit/b1e17dd28688490610c619af2d9ddd321e8320db))
-
 ## [0.2.0] - 2026-07-20
-
-### Fixed
-
-- **The pre-edit policy guard could block every edit in the fleet.** Absence of
-  `hank` failed open (exit `127`), but a `hank` too old to know `hook pre-edit`
-  answered it with the argument parser's error and exit `2` — Claude Code's
-  fail-*closed* channel. Since parsing precedes any Hank code, the guard's own
-  fail-open logic never ran. An unparseable `hank hook …` now degrades to a
-  silent allow; other commands keep exit `2` so typos stay loud. The integration
-  contract also pins a skew-proof invocation, since older binaries cannot be
-  fixed retroactively (#35).
-- **A workspace config silently disarmed the guard.** `HankConfig::load`
-  documented itself as overlaying user then project config but assigned each
-  file wholesale, so a project `.bobbin/config.toml` setting one unrelated key
-  reset `[hank.policy]` to `mode = "off"` — enforcement stopped with no warning,
-  indistinguishable from finding no violations. Config now merges per-key;
-  arrays replace rather than accumulate, so a workspace cannot widen a scope the
-  user config narrowed (#36).
 
 ### Added
 
-- Vision document and full build specification (`docs/vision.md`,
-  `docs/hank-spec.md`).
-- Phase-1 scaffold: `hank` CLI (`analyze`, `refs`, `status`, `completions`,
-  plus phase-gated `callers`/`impact`/`verify`/`promote`), tree-sitter Rust
-  extraction, the tiered fact model, and the shared `[hank]` config table.
-- Phase-1 MCP server (`mcp` feature): `hank serve` over stdio and
-  streamable-HTTP, exposing `hank_status`, `hank_symbols`, `hank_references`,
-  and `hank_analyze` via `rmcp` (Bobbin's registration pattern). The `mcp` arm
-  is in the CI matrix.
-- Phase-2 call graph and blast radius: tree-sitter call-site extraction, an
-  in-memory `CodeGraph` (petgraph) with the `reachable()` primitive (FR-12),
-  the `hank callers` and `hank impact` CLI commands, and the `hank_callers`,
-  `hank_callees`, and `hank_impact` MCP tools.
-- Phase-2 intra-procedural dataflow (Rust-native, resolving §14.1): per-function
-  data-dependence extraction, `DependsOn`/`FlowsInto` flow queries, the
-  `hank dataflow` CLI command, and the `hank_dataflow` MCP tool (eight tools
-  total).
-- Phase-2 exit (FR-11): reconcile the structural blast radius against a
-  caller-supplied co-change set (`src/reconcile.rs`), partitioning files into
-  corroborated / structural-only / co-change-only. Exposed via
-  `hank impact --cochange` (CLI) and the `cochange` parameter on `hank_impact`
-  (MCP). Co-change mining stays in Bobbin. **Phase 2 complete.**
-- Edit-reactive harness integration (spec §5.9 / FR-30, prototype): `hank hook
-  post-edit` reads a Claude Code `PostToolUse` payload on stdin and returns a
-  synchronous cross-file blast-radius advisory as injected context — the agent's
-  edit tool call *is* the change event. Spec §5.9 reworked into an interface
-  model (hook / MCP / HTTP / CLI / optional LSP) with the resident-daemon latency
-  requirement (FR-31).
-- Unified code+docs referential structure (spec §5.10): the concept crystallized
-  — code and docs are one referential graph (real-time for code, asynchronous for
-  docs), distinct from Bobbin's chunking. Adds FR-33 (doc→code reference
-  extraction) and FR-34 (`hank export`).
-- Referential-structure export (FR-34, code side): `hank export --format turtle`
-  emits `CodeModule`/`CodeSymbol` + `definedIn`/`calls` edges as RDF Turtle in the
-  `bobbin:` code ontology (validating against `shapes/code-entities.ttl`) — the
-  governed projection that is the substrate under Phase-4 promotion.
-- Docs published to the `gh-pages` branch via `peaceiris/actions-gh-pages`.
-- Project tooling matched to Bobbin and Quipu: `just` recipes, pre-commit,
-  clippy lint policy, markdownlint/Vale/Prettier, mdBook, CI, and release-plz.
+- *(policy)* Pre-edit blocking guard + per-tenant capability scoping (#20, #21) (#32)([53a2c41](https://github.com/scbrown/hank/commit/53a2c4131a848a133405d83093d0411306fc7b6f))
+- *(verify)* Hank_verify monitor-guided edit verification (#19) (#33)([8a5d5f5](https://github.com/scbrown/hank/commit/8a5d5f544e13dbd02090fe47aa4e44d3c05afbfb))
+
+### CI/CD
+
+- *(release)* Outlast a GitHub API blip instead of stranding the tag (#34)([5b6e690](https://github.com/scbrown/hank/commit/5b6e690fd9dd7a314165c3fa6669d1984282041d))
+
+### Fixed
+
+- *(policy)* A stale hank must not block every edit in the fleet (#35)([e38b5b8](https://github.com/scbrown/hank/commit/e38b5b8288f3fb32da7429a22c47350a6ebbc3f3))
+- *(config)* A workspace config must not silently disarm the guard (#36)([831f6fc](https://github.com/scbrown/hank/commit/831f6fc08afef1cd9c3e4a731099f937698b195d))
+
+### Miscellaneous
+
+- *(release)* V0.2.0 (#37)([3fc8e76](https://github.com/scbrown/hank/commit/3fc8e765ace94e797f25970931ae449faf1fccad))
+## [0.1.0] - 2026-07-20
+
+### Added
+
+- Scaffold Hank — Phase 1 CLI, tooling, docs([ea0f78b](https://github.com/scbrown/hank/commit/ea0f78bd3ae44d5a2a0396dcc77d163438eb83e0))
+- Phase-1 MCP server over rmcp (stdio + streamable-HTTP)([90a0e73](https://github.com/scbrown/hank/commit/90a0e73e55ff45e728e1257fdf4a8ec3df8a7d7d))
+- Phase-2 call graph and blast radius([9951f47](https://github.com/scbrown/hank/commit/9951f479bf8cc16aac9ecb7f9453926cfdd8161e))
+- Phase-2 intra-procedural dataflow (Rust-native)([69bd5f9](https://github.com/scbrown/hank/commit/69bd5f958671a7ca05094ed48dc1b8c3664463e9))
+- Phase-2 exit — co-change reconciliation (FR-11)([90df6b5](https://github.com/scbrown/hank/commit/90df6b54377ffe5ddee2a5e29c42ce7759049aaa))
+- Edit-reactive harness hook + interface-model spec (FR-30/31)([6bd66a2](https://github.com/scbrown/hank/commit/6bd66a253d9893959a2295a1c5cc2df744942bb3))
+- Referential-structure export + code/docs synergy (§5.10, FR-33/34)([d5668ec](https://github.com/scbrown/hank/commit/d5668eccced7d151d077384f98a98cda382a4189))
+- Extract module import edges (bobbin:imports) in export (#23)([f0de144](https://github.com/scbrown/hank/commit/f0de144c60968f4114756176f7778b0e37606558))
+- Git baseline — resolve base_ref to a commit + commit diff (OQ2) (#24)([9be9c49](https://github.com/scbrown/hank/commit/9be9c49241abfb0f13c6d7dad46692031a0de7bc))
+- Live Louvain community detection over the in-memory graph (FR-9) (#27)([fec15ca](https://github.com/scbrown/hank/commit/fec15cabacc1320e4b140f9ad2665fa15e97eae0))
+- Build the base graph from git-tree content at a ref (#12 slice 2, FR-13) (#28)([153b02c](https://github.com/scbrown/hank/commit/153b02ce19be56ab5346666e22011712d923dd90))
+- Hank #5 (file-watch) + #16 (doc→code refs) + #9 grammars (langs-extra) (#29)([5fc6749](https://github.com/scbrown/hank/commit/5fc6749ba0f59da7c57aac3024b216bc07087030))
+
+### CI/CD
+
+- Self-enable GitHub Pages in docs workflow([64d6601](https://github.com/scbrown/hank/commit/64d66014aeb2a3e672f319417f76660b1db6177b))
+- Publish docs via gh-pages branch (contents:write)([d9a2eb3](https://github.com/scbrown/hank/commit/d9a2eb3d6e20c1e81a41a0c7a8f248b55511f359))
+- Publish a release binary on version tags (#31)([a8da3e0](https://github.com/scbrown/hank/commit/a8da3e021ee62e9fb1d75a0f978a492f222b24c9))
+- *(release)* Retry the publish step and assert the asset actually landed([6dddb07](https://github.com/scbrown/hank/commit/6dddb0795bfb6bd4856c36792cd165df45273e9b))
+
+### Changed
+
+- *(graph)* Extract the FR-12 BFS behind an Adjacency trait (Slice 0) (#30)([f336d06](https://github.com/scbrown/hank/commit/f336d06be36071ec5774e72024c3d34282b5d03f))
+
+### Documentation
+
+- Add Hank vision and build specification([41519e9](https://github.com/scbrown/hank/commit/41519e9ef71e0f0db0d98671dab7e7090374b510))
+- Record FR-11 invariant — Hank borrows co-change, never derives it([3a47108](https://github.com/scbrown/hank/commit/3a47108e8e33c169a35190558e6c7627fde68fe0))
+- Note promotion feeds Quipu work-item co-occurrence (quipu#37)([0bb76a2](https://github.com/scbrown/hank/commit/0bb76a29151d5447df21e789927c804957e6327d))
+- Consolidate design + add handoff appendices to the spec([a08ef52](https://github.com/scbrown/hank/commit/a08ef526ba2385bc36ec48bcefa7179552e478bf))
+- *(readme)* Named-competitor comparison + selling points + hank×quipu use-cases; reference the hank CLI (not cargo run)([18e813d](https://github.com/scbrown/hank/commit/18e813df8e091e4a9bb5917b28aed13efb97335a))
+
+### Build
+
+- Add `just install` — put the `hank` binary on PATH (#25)([0abefac](https://github.com/scbrown/hank/commit/0abefac41f485bb269a2ba814967d774877f072e))
+
+### Design
+
+- *(logo)* Reshape the hank into an infinity/feedback-loop([47099e6](https://github.com/scbrown/hank/commit/47099e6801c3894ab99ee46f16d5b90c983ef596))
