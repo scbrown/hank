@@ -115,9 +115,31 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install pre-commit
+      # Both skips are justified ONLY because a dedicated job covers each on the
+      # SAME triggers (hank #84 asked whether this list had outlived its reason):
+      #   cargo-clippy  -> the Clippy matrix above, 5 arms, --all-targets -D warnings
+      #   mdbook-build  -> the `book` job below
+      # `book` exists because that second claim used to be false. The only mdbook
+      # build was docs.yml, which runs on push-to-main behind a `docs/book/**`
+      # path filter and never on pull_request — so a PR could not break the book
+      # in CI, and a broken book was only discovered after merge.
       - run: pre-commit run --all-files
         env:
           SKIP: mdbook-build,cargo-clippy
+
+  book:
+    name: Book builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/mdbook
+          key: ${{ runner.os }}-mdbook-0.4
+      - name: Install mdbook
+        run: command -v mdbook || cargo install mdbook --version "^0.4" --locked
+      - run: mdbook build docs/book
 
   lint-markdown:
     name: Markdown lint
