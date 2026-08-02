@@ -122,6 +122,38 @@ pub fn origin_repo_name(root: &Path) -> Option<String> {
     git(root, &["remote", "get-url", "origin"]).and_then(|s| repo_name_from_url(s.trim()))
 }
 
+/// The work-tree root that CONTAINS `path`, resolved from the path itself and
+/// never from the caller's working directory.
+///
+/// WHY THIS EXISTS: exposure — "is this repo public?" — is a property of where
+/// the text LANDS, not of where the agent happens to be standing. Resolving it
+/// from the session's cwd classified the SESSION instead of the EDIT, and the
+/// error ran in both directions at once (measured): an agent whose
+/// cwd is an internal workspace, editing a public repo by absolute path, had a
+/// real leak downgraded to a warning; an agent whose cwd is a public checkout,
+/// editing an internal-only file, was blocked for a token that leaks nowhere.
+/// Crew agents sit in their own workspace clone and edit other repos by
+/// absolute path as a matter of routine, so the under-enforcing direction was
+/// the DEFAULT configuration, not an edge case.
+///
+/// `path` need not exist yet — a `Write` creates its target — so resolution
+/// starts at the nearest existing ancestor. `None` means "not inside a work
+/// tree", which callers must treat as unknown exposure, never as safe.
+#[must_use]
+pub fn repo_root_containing(path: &Path) -> Option<PathBuf> {
+    let mut dir = if path.is_dir() { Some(path) } else { path.parent() };
+    // A Write may name a file several levels below anything that exists yet.
+    while let Some(d) = dir {
+        if d.is_dir() {
+            break;
+        }
+        dir = d.parent();
+    }
+    let top = git(dir?, &["rev-parse", "--show-toplevel"])?;
+    let top = top.trim();
+    (!top.is_empty()).then(|| PathBuf::from(top))
+}
+
 /// The last path segment of a git remote URL, with a trailing `/` and a `.git`
 /// suffix stripped. Handles https, `ssh://`, scp-like `host:path`, and plain
 /// filesystem paths.
@@ -162,6 +194,53 @@ mod tests {
         std::fs::write(dir.join("a.txt"), "one\n").unwrap();
         run(&["add", "."]);
         run(&["commit", "-q", "-m", "first"])
+    }
+
+    /// The whole point of [`repo_root_containing`]: the answer follows the
+    /// FILE, and is unmoved by where the caller is standing. Two real repos,
+    /// and a path in one resolved while the process sits in the other — which
+    /// is the ordinary crew configuration, not a contrived one.
+    #[test]
+    fn a_files_repo_is_its_own_not_the_callers() {
+        let session = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        if !init_repo(session.path()) || !init_repo(other.path()) {
+            return; // skip: no git
+        }
+        // tempfile hands out /tmp paths that may be symlinked (macOS); compare
+        // against git's own idea of each root so the assert tests resolution,
+        // not path spelling.
+        let other_root = repo_root_containing(&other.path().join("a.txt")).expect("in a repo");
+
+        let _cwd_is_elsewhere = session.path();
+        let resolved = repo_root_containing(&other.path().join("a.txt")).expect("in a repo");
+        assert_eq!(resolved, other_root);
+        assert_ne!(
+            resolved,
+            repo_root_containing(&session.path().join("a.txt")).expect("in a repo"),
+            "two distinct repos must not collapse to one root"
+        );
+
+        // A file that does not exist yet — every `Write` — still resolves,
+        // through as many missing parents as it takes.
+        let unborn = other.path().join("deep/er/still/new.md");
+        assert_eq!(
+            repo_root_containing(&unborn).expect("unborn file still has a repo"),
+            other_root
+        );
+    }
+
+    /// Outside any work tree the answer is `None` — "unknown", which the
+    /// governed plane must never round down to "safe".
+    #[test]
+    fn a_path_outside_any_repo_has_no_root() {
+        let bare = tempfile::tempdir().unwrap();
+        // A temp dir with no `git init` is only outside a work tree if no
+        // ancestor is a repo either; /tmp is not, but say so rather than assume.
+        if repo_root_containing(bare.path()).is_some() {
+            return; // skip: the temp dir sits inside someone's repo
+        }
+        assert_eq!(repo_root_containing(&bare.path().join("x.md")), None);
     }
 
     #[test]

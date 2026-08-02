@@ -200,15 +200,39 @@ pub(super) fn governed_check(
     let mut structural_count = 0usize;
 
     // --- TEXT plane: every file, no grammar required ------------------------
-    let text_violations = crate::textrules::evaluate(registry.text_rules(), &introduced, rel);
+    //
+    // The governed plane judges the ARTIFACT, so both the path it matches path
+    // scopes against and the exposure it grades tiers by come from the repo the
+    // edited FILE belongs to — not from `root`, which is the session's cwd.
+    // When the two coincide (an agent editing the tree it is standing in) this
+    // is identical to the old behaviour; when they diverge it is the difference
+    // between grading the edit and grading the session. See
+    // [`crate::git::repo_root_containing`] for the measured failure.
+    let target = target_file(input, root);
+    let target_root = target.as_deref().and_then(crate::git::repo_root_containing);
+    let target_rel = match (&target, &target_root) {
+        (Some(file), Some(tr)) => relative(file, tr),
+        _ => rel.to_string(),
+    };
+    let text_violations =
+        crate::textrules::evaluate(registry.text_rules(), &introduced, &target_rel);
     if !text_violations.is_empty() {
         // Exposure is resolved ONCE per edit, from the graph, via the governed
         // policy itself — so hank and every other consumer of rule #1 share one
         // definition of "public". Any failure to ask IS the Unknown answer.
-        let exposure = match crate::git::origin_repo_name(root) {
-            Some(repo) => crate::project::fetch_repo_exposure(&config.quipu.endpoint, &repo),
+        let exposure = match &target_root {
+            Some(tr) => match crate::git::origin_repo_name(tr) {
+                Some(repo) => crate::project::fetch_repo_exposure(&config.quipu.endpoint, &repo),
+                None => RepoExposure::Unknown(format!(
+                    "the tree containing this file ({}) has no `origin` remote, \
+                     so its exposure cannot be resolved",
+                    tr.display()
+                )),
+            },
             None => RepoExposure::Unknown(
-                "this tree has no `origin` remote, so its exposure cannot be resolved".into(),
+                "this file is not inside a git work tree, so its exposure cannot \
+                 be resolved"
+                    .into(),
             ),
         };
         let (text_messages, text_blocks) = text_plane(&text_violations, &exposure);
@@ -279,6 +303,20 @@ pub(super) fn governed_check(
         Outcome::Notify(format!("hank (governed, not blocking): {message}"))
     };
     Some(Decision::ruled(outcome, fired_rule_ids(fired.into_iter())))
+}
+
+/// The absolute path of the file this edit actually writes to, which is the
+/// subject the governed plane grades. A relative `file_path` is resolved
+/// against the session root — the only thing it can sensibly mean.
+#[cfg(feature = "quipu")]
+fn target_file(input: &HookInput, root: &Path) -> Option<PathBuf> {
+    let raw = input.tool_input.file_path.as_deref()?;
+    let path = Path::new(raw);
+    Some(if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    })
 }
 
 /// The text plane's decision, PURE: which messages, and whether anything
