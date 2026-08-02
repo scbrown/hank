@@ -45,11 +45,28 @@ SELECT ?name ?language ?query ?pattern ?matchType ?gate ?effect WHERE {
 /// either invent fake Selector atoms in the graph or silently drop the
 /// catalogue — which is exactly what happened: both sides shipped, and the seam
 /// returned 0 rows.
+///
+/// TARGETS THE SUPERTYPE `aegis:TextRule`, NOT `aegis:InternalIdentifierPattern`
+/// (aegis-368cu.4). Bound to the concrete class, this catalogue was exactly one
+/// class wide: any NEW rule kind — a CI-gate rule, an action rule, a scope rule —
+/// projected ZERO ROWS and was SILENTLY ABSENT while the graph listed it and
+/// everyone stopped looking. That is the same seam whose scar is described above,
+/// which is the reason to fix the shape rather than mint new rules under a name
+/// that would lie about what they are.
+///
+/// ORDERING IS LOAD-BEARING, AND IT IS THE GRAPH FIRST. This query returns rows
+/// only because `aegis:InternalIdentifierPattern rdfs:subClassOf aegis:TextRule`
+/// is asserted in quipu AND quipu honours subClassOf on `rdf:type` — both
+/// verified against the live graph before this line changed (the widened query
+/// returns the same 7 rules as the narrow one). Ship this query into a graph
+/// missing that triple and the catalogue silently empties: the projection is
+/// unaware of the difference between "no rules" and "no rules I can see", which
+/// is the failure this whole comment exists to stop recurring.
 pub const TEXT_POLICY_QUERY: &str = "\
 PREFIX aegis: <http://aegis.gastown.local/ontology/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 SELECT ?s ?label ?regex ?class ?tier ?exempt ?rationale WHERE {
-  ?s a aegis:InternalIdentifierPattern ;
+  ?s a aegis:TextRule ;
      aegis:regex ?regex ;
      aegis:enforcementTier ?tier .
   OPTIONAL { ?s rdfs:label ?label }
