@@ -30,6 +30,7 @@ pub mod hook;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 pub mod metrics;
+pub mod plate;
 pub mod policy;
 /// Phase-4 projection: a hot, one-directional cache of quipu's structural policies.
 #[cfg(feature = "quipu")]

@@ -93,6 +93,13 @@ pub fn emit_to(path: &std::path::Path, kind: &str, fields: &[(&str, serde_json::
         if let Ok(tenant) = std::env::var("BOBBIN_ROLE") {
             obj.insert("tenant".into(), tenant.into());
         }
+        // The WORK ITEM this action belongs to (aegis-qdjof). Absent when
+        // UNKNOWN rather than recorded as null or a guess: a record that omits
+        // the field is honestly silent, whereas one asserting the wrong item
+        // would be replayed later as justification for a rule.
+        if let Some(item) = crate::plate::current() {
+            obj.insert("item".into(), item.into());
+        }
         for (k, v) in fields {
             obj.insert((*k).into(), v.clone());
         }
