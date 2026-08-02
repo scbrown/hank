@@ -228,6 +228,39 @@ hank communities src --json         # symbol clusters, largest-first
 hank verify --file src/auth.rs --buffer /tmp/edited.rs
 hank promote --commit HEAD
 </code></pre>
+<h2 id="hank-status"><a class="header" href="#hank-status"><code>hank status</code></a></h2>
+<p>Reports the resolved baseline, the tiers this binary serves, and — the part a
+script gates on — <strong>the state of the policy rule plane</strong>.</p>
+<pre><code class="language-console">$ hank status
+  policy      : mode=advise  scope=none for this tenant
+  rule set    : 7 projected from quipu (0 structural, 7 text) + 0 local
+  rule digest : sha256:3fb9f179b9229755 (unsigned)
+</code></pre>
+<p><code>rule digest</code> answers <em>which</em> rule set is live, not just how many rules there
+are: two hosts showing different digests are enforcing different policy, which
+the counts alone cannot reveal. It is computed over the fields that decide
+enforcement (rule identity, pattern, tier, exemptions), so a rationale typo does
+not churn it. It is <strong>not</strong> a version — there is no signed rule set yet, and
+<code>verification</code> reports <code>unsigned</code> to say so rather than implying provenance
+hank does not have.</p>
+<h3 id="exit-codes"><a class="header" href="#exit-codes">Exit codes</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Code</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>0</code></td><td>Rule plane <code>loaded</code>, <code>empty</code>, or <code>off</code></td></tr>
+<tr><td><code>3</code></td><td>Rule plane <strong><code>degraded</code></strong> — the rules could not be projected</td></tr>
+</tbody></table>
+</div>
+<p>Exit <code>3</code> is the one that matters. In that state the guard <strong>fails open</strong> on
+every edit: nothing is enforced, and before this had an exit code the condition
+printed in red and exited <code>0</code>, so nothing could gate on it and a human had to
+happen to look. <code>empty</code> and <code>off</code> deliberately exit <code>0</code> — a graph with no rules
+is a true, quiet answer, and failing on it would make the code useless in every
+tree that has no governed policy yet.</p>
+<p><code>status</code> retries the projection three times before declaring <code>degraded</code>
+(<code>attempts</code> is reported, so a flap stays visible). The pre-edit hook does <strong>not</strong>
+retry: it runs on every edit across the fleet and its latency ceiling is the
+reason it exists. A status surface that went red once in ten runs from a
+transient blip would be routed around, and then the real red would be invisible
+too.</p>
 <h2 id="hank-refs"><a class="header" href="#hank-refs"><code>hank refs</code></a></h2>
 <p>Definition sites of a symbol, by name, from the same graph <code>callers</code>, <code>impact</code>
 and <code>communities</code> read — so every language this build has a grammar for is
