@@ -953,6 +953,11 @@ fn refs_at_an_unparseable_file_says_so_rather_than_reporting_no_definitions() {
 /// able to OBSERVE that it took effect. Before this, `hank status` printed
 /// COULD NOT TELL in red and exited 0, so nothing could gate on it and a human
 /// had to happen to look. A guard failing open silently is the whole bead.
+// REQUIRES the quipu feature: without it the rule plane is `Off` by design,
+// not `Degraded`, and status exits 0. Ungated, this failed in the `default`,
+// `mcp` and `langs-extra` CI legs — red on main, over a test that was correct.
+// Coverage is kept by the `quipu` and `mcp+quipu` matrix legs.
+#[cfg(feature = "quipu")]
 #[test]
 fn status_exits_nonzero_when_the_rule_plane_is_degraded() {
     let dir = tempfile::tempdir().unwrap();
@@ -981,6 +986,11 @@ fn status_exits_nonzero_when_the_rule_plane_is_degraded() {
 /// The two produce the SAME number of enforced rules (zero) and mean opposite
 /// things. Collapsing them is how a policy layer goes green-and-dead, which is
 /// the failure this bead exists to make impossible.
+// REQUIRES the quipu feature: without it the rule plane is `Off` by design,
+// not `Degraded`, and status exits 0. Ungated, this failed in the `default`,
+// `mcp` and `langs-extra` CI legs — red on main, over a test that was correct.
+// Coverage is kept by the `quipu` and `mcp+quipu` matrix legs.
+#[cfg(feature = "quipu")]
 #[test]
 fn a_degraded_plane_is_not_an_empty_one() {
     let dir = tempfile::tempdir().unwrap();
