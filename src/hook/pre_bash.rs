@@ -1,4 +1,4 @@
-//! pre_bash — the input path the action resolver never had.
+//! `pre_bash` — the input path the action resolver never had.
 //!
 //! `crate::action::resolve` was written for gap 2 of the trace phase and shipped
 //! **unreachable**: hank supported only `PreEdit`/`PostEdit`, the only live
