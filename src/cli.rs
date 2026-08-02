@@ -258,6 +258,9 @@ enum HookEvent {
     /// Claude Code `PreToolUse` on Edit/Write: deny an edit that exceeds the
     /// tenant's capability scope. Opt-in, and always fails open.
     PreEdit,
+    /// Claude Code `PreToolUse` on Bash: RECORD the action (verb, target,
+    /// `target_class`) for the trace. Never denies, never prints, always exits 0.
+    PreBash,
 }
 
 /// Output formats for `hank export`.
@@ -331,6 +334,7 @@ impl Cli {
             Commands::Status => self.status(),
             Commands::Hook { event } => match event {
                 HookEvent::PostEdit => crate::hook::run_post_edit(self.tenant.as_deref()),
+                HookEvent::PreBash => crate::hook::run_pre_bash(),
                 HookEvent::PreEdit => {
                     crate::hook::run_pre_edit(self.tenant.as_deref(), self.config.as_deref())
                 }
