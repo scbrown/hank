@@ -22,8 +22,8 @@
 //! (exit 101, a non-blocking error to the harness) lets the edit through.
 
 mod measure;
-mod pre_bash;
 mod post_edit;
+mod pre_bash;
 mod pre_edit;
 
 pub use post_edit::{advisory_for, run_post_edit};

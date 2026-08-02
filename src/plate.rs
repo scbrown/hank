@@ -123,7 +123,10 @@ mod tests {
 
     #[test]
     fn reads_a_fresh_plate() {
-        assert_eq!(parse(&doc("abc-1", NOW), NOW, MAX).as_deref(), Some("abc-1"));
+        assert_eq!(
+            parse(&doc("abc-1", NOW), NOW, MAX).as_deref(),
+            Some("abc-1")
+        );
     }
 
     #[test]

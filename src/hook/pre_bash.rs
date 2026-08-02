@@ -101,7 +101,10 @@ mod tests {
     fn non_bash_payloads_yield_nothing() {
         // Both directions: the positive above proves the extractor works, so
         // these Nones mean "correctly declined", not "extractor is broken".
-        assert_eq!(command_of(r#"{"tool_input":{"file_path":"/a/b.rs"}}"#), None);
+        assert_eq!(
+            command_of(r#"{"tool_input":{"file_path":"/a/b.rs"}}"#),
+            None
+        );
         assert_eq!(command_of(r#"{"tool_name":"Bash"}"#), None);
         assert_eq!(command_of("{not json"), None);
         assert_eq!(command_of(""), None);
