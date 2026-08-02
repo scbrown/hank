@@ -22,7 +22,8 @@
 //!   guard     {result: allow|deny|notify, `duration_ms`, ext, mode,
 //!              path?, rule?}                                    every pre-edit
 //!   `fail_open` {`fail_kind`}              the guard degraded, and why-kind
-//!   governed  {rules: [...], structural: n, blocking}         a rule spoke
+//!   governed  {rules: [...], structural: n, blocking, exposure,
+//!              repo}                                            a rule spoke
 //!   command   {cmd}                      DELIBERATE use — the leverage signal
 //! Every line also carries ts (unix secs), agent (`$SHANTY_AGENT`) and tenant
 //! (`$BOBBIN_ROLE`), the two identity envs every st launch exports.

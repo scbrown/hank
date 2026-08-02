@@ -216,25 +216,40 @@ pub(super) fn governed_check(
     };
     let text_violations =
         crate::textrules::evaluate(registry.text_rules(), &introduced, &target_rel);
+    // Carried onto the `governed` metrics line so the advise-mode soak is
+    // ADJUDICABLE. `blocking` alone says an edit WOULD have been denied but not
+    // whether that denial would have been right, and the spool records no path
+    // (audit.record_paths is off by default), so a reviewer had nothing to
+    // judge against. The repo NAME and the exposure verdict are the two facts
+    // that decide it, and neither is a path.
+    let mut exposure_label = "n/a";
+    let mut target_repo: Option<String> = None;
     if !text_violations.is_empty() {
         // Exposure is resolved ONCE per edit, from the graph, via the governed
         // policy itself — so hank and every other consumer of rule #1 share one
         // definition of "public". Any failure to ask IS the Unknown answer.
-        let exposure = match &target_root {
-            Some(tr) => match crate::git::origin_repo_name(tr) {
-                Some(repo) => crate::project::fetch_repo_exposure(&config.quipu.endpoint, &repo),
-                None => RepoExposure::Unknown(format!(
-                    "the tree containing this file ({}) has no `origin` remote, \
-                     so its exposure cannot be resolved",
-                    tr.display()
-                )),
-            },
-            None => RepoExposure::Unknown(
+        let repo = target_root.as_deref().and_then(crate::git::origin_repo_name);
+        let exposure = match (&target_root, &repo) {
+            (Some(_), Some(repo)) => {
+                crate::project::fetch_repo_exposure(&config.quipu.endpoint, repo)
+            }
+            (Some(tr), None) => RepoExposure::Unknown(format!(
+                "the tree containing this file ({}) has no `origin` remote, so \
+                 its exposure cannot be resolved",
+                tr.display()
+            )),
+            (None, _) => RepoExposure::Unknown(
                 "this file is not inside a git work tree, so its exposure cannot \
                  be resolved"
                     .into(),
             ),
         };
+        exposure_label = match exposure {
+            RepoExposure::Public => "public",
+            RepoExposure::Internal => "internal",
+            RepoExposure::Unknown(_) => "unknown",
+        };
+        target_repo = repo;
         let (text_messages, text_blocks) = text_plane(&text_violations, &exposure);
         messages.extend(text_messages);
         any_blocking |= text_blocks;
@@ -282,6 +297,11 @@ pub(super) fn governed_check(
             ),
             ("structural", (structural_count as u64).into()),
             ("blocking", any_blocking.into()),
+            ("exposure", exposure_label.into()),
+            (
+                "repo",
+                target_repo.unwrap_or_else(|| "unresolved".to_string()).into(),
+            ),
         ],
     );
     let blocks = config.policy.mode == Mode::Enforce && any_blocking;
