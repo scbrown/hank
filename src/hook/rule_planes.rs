@@ -228,7 +228,9 @@ pub(super) fn governed_check(
         // Exposure is resolved ONCE per edit, from the graph, via the governed
         // policy itself — so hank and every other consumer of rule #1 share one
         // definition of "public". Any failure to ask IS the Unknown answer.
-        let repo = target_root.as_deref().and_then(crate::git::origin_repo_name);
+        let repo = target_root
+            .as_deref()
+            .and_then(crate::git::origin_repo_name);
         let exposure = match (&target_root, &repo) {
             (Some(_), Some(repo)) => {
                 crate::project::fetch_repo_exposure(&config.quipu.endpoint, repo)
@@ -300,7 +302,9 @@ pub(super) fn governed_check(
             ("exposure", exposure_label.into()),
             (
                 "repo",
-                target_repo.unwrap_or_else(|| "unresolved".to_string()).into(),
+                target_repo
+                    .unwrap_or_else(|| "unresolved".to_string())
+                    .into(),
             ),
         ],
     );

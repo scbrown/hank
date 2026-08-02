@@ -67,7 +67,7 @@ outside any item's scope; advisories on reads only teach people to ignore adviso
 This is the part worth building. Resolving "what is this agent working on, and what does
 that touch" is a single computation, and **three different subsystems want the answer**:
 
-```
+```text
                   ┌──────────────────────────────┐
    work item ───► │  scope resolution            │
    + agent id     │  (item → entities, + prov.)  │
@@ -90,7 +90,7 @@ the agent's *own* tool calls and nothing else. See [Non-goals](#what-this-cannot
 
 Every consulted action emits one record:
 
-```
+```text
 (actor, work_item, verb, target, target_class, blast_radius,
  verdict, rule_id, scope_provenance, outcome, ts)
 ```

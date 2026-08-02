@@ -141,7 +141,11 @@ pub fn origin_repo_name(root: &Path) -> Option<String> {
 /// tree", which callers must treat as unknown exposure, never as safe.
 #[must_use]
 pub fn repo_root_containing(path: &Path) -> Option<PathBuf> {
-    let mut dir = if path.is_dir() { Some(path) } else { path.parent() };
+    let mut dir = if path.is_dir() {
+        Some(path)
+    } else {
+        path.parent()
+    };
     // A Write may name a file several levels below anything that exists yet.
     while let Some(d) = dir {
         if d.is_dir() {

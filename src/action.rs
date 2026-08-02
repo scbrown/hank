@@ -275,7 +275,17 @@ fn repo_name(url: &str) -> Option<String> {
     Some(last.to_string())
 }
 
+// The test names here CAPITALISE the word under test (…an_EXPLICIT_limit,
+// …that_NAME_a_remote), which is this repo's house emphasis and is load-bearing
+// for reading a failure line. rustc's non_snake_case fires on it, and CI runs
+// clippy with `-D warnings`, so it was a hard error on the `mcp` leg — the only
+// leg that compiles this module — and had been for as long as the names existed.
+//
+// ALLOW rather than rename: the capitals are the author's intent, and renaming
+// to satisfy a lint would trade a readable failure line for a green tick. This
+// is the narrowest scope that works (the test module, not the crate).
 #[cfg(test)]
+#[allow(non_snake_case)]
 mod tests {
     use super::*;
 
