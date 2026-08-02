@@ -10,11 +10,28 @@ fn project_with(file: &str, contents: &str) -> tempfile::TempDir {
     dir
 }
 
+/// A config that pins the graph plane OFF, so a test asserts on hank and not on
+/// the machine it runs on.
+///
+/// Without this, `status` falls through to layered discovery and reads the
+/// DEVELOPER'S `~/.config/bobbin/config.toml` — which on every agent host in
+/// this fleet enables quipu against a live endpoint. That was always a test
+/// reading ambient state, and it became a correctness problem when the rule
+/// plane got an exit code (aegis-hac0): the assertion below would then pass or
+/// fail depending on whether a network service happened to answer.
+fn pinned_config(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    let path = dir.path().join("pinned.toml");
+    std::fs::write(&path, "[hank.quipu]\nenabled = false\n").unwrap();
+    path
+}
+
 #[test]
 fn status_json_reports_base_ref() {
+    let dir = tempfile::tempdir().unwrap();
     Command::cargo_bin("hank")
         .unwrap()
-        .args(["status", "--json"])
+        .args(["status", "--json", "--config"])
+        .arg(pinned_config(&dir))
         .assert()
         .success()
         .stdout(predicate::str::contains("\"base_ref\""))
@@ -925,4 +942,76 @@ fn refs_at_an_unparseable_file_says_so_rather_than_reporting_no_definitions() {
         .stdout(predicate::str::contains(
             "no symbols in the graph for `nope.rs`",
         ));
+}
+
+// --- the rule plane is a FAILURE SURFACE, not prose (aegis-hac0) -------------
+
+/// A rule plane that could not be projected must EXIT NON-ZERO.
+///
+/// This is aegis-hac0's second clause made checkable: "adding a token changes
+/// enforcement without a redeploy" is necessary and not sufficient — you must be
+/// able to OBSERVE that it took effect. Before this, `hank status` printed
+/// COULD NOT TELL in red and exited 0, so nothing could gate on it and a human
+/// had to happen to look. A guard failing open silently is the whole bead.
+#[test]
+fn status_exits_nonzero_when_the_rule_plane_is_degraded() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("dead.toml");
+    // A port nothing listens on: the projection cannot succeed, which is the
+    // state the guard fails open in.
+    std::fs::write(
+        &cfg,
+        "[hank.quipu]\nenabled = true\nendpoint = \"http://127.0.0.1:59999\"\n",
+    )
+    .unwrap();
+
+    let assert = Command::cargo_bin("hank")
+        .unwrap()
+        .args(["status", "--config"])
+        .arg(&cfg)
+        .assert()
+        .code(3);
+    // It says the CONSEQUENCE, not just the fault: "could not project" is a fact
+    // about hank; "every edit is sailing through" is what the reader must act on.
+    assert.stdout(predicate::str::contains("FAILING OPEN"));
+}
+
+/// ...and `degraded` is reported as its own state, distinct from `empty`.
+///
+/// The two produce the SAME number of enforced rules (zero) and mean opposite
+/// things. Collapsing them is how a policy layer goes green-and-dead, which is
+/// the failure this bead exists to make impossible.
+#[test]
+fn a_degraded_plane_is_not_an_empty_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let dead = dir.path().join("dead.toml");
+    std::fs::write(
+        &dead,
+        "[hank.quipu]\nenabled = true\nendpoint = \"http://127.0.0.1:59999\"\n",
+    )
+    .unwrap();
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["status", "--json", "--config"])
+        .arg(&dead)
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains("\"state\": \"degraded\""))
+        // and it says how hard it tried, rather than smoothing the flap away
+        .stdout(predicate::str::contains("\"attempts\": 3"))
+        // no rules => no digest. An unknown rule set must not report an identity.
+        .stdout(predicate::str::contains("\"digest\": null"));
+
+    // The graph plane being OFF is a CONFIGURATION, not a fault: exit 0.
+    let off = dir.path().join("off.toml");
+    std::fs::write(&off, "[hank.quipu]\nenabled = false\n").unwrap();
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["status", "--json", "--config"])
+        .arg(&off)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"state\": \"off\""))
+        // ...and it is still honest that nothing is verified.
+        .stdout(predicate::str::contains("\"verification\": \"unsigned\""));
 }

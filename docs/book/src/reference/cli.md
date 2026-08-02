@@ -53,6 +53,47 @@ hank verify --file src/auth.rs --buffer /tmp/edited.rs
 hank promote --commit HEAD
 ```
 
+## `hank status`
+
+Reports the resolved baseline, the tiers this binary serves, and — the part a
+script gates on — **the state of the policy rule plane**.
+
+```console
+$ hank status
+  policy      : mode=advise  scope=none for this tenant
+  rule set    : 7 projected from quipu (0 structural, 7 text) + 0 local
+  rule digest : sha256:3fb9f179b9229755 (unsigned)
+```
+
+`rule digest` answers *which* rule set is live, not just how many rules there
+are: two hosts showing different digests are enforcing different policy, which
+the counts alone cannot reveal. It is computed over the fields that decide
+enforcement (rule identity, pattern, tier, exemptions), so a rationale typo does
+not churn it. It is **not** a version — there is no signed rule set yet, and
+`verification` reports `unsigned` to say so rather than implying provenance
+hank does not have.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Rule plane `loaded`, `empty`, or `off` |
+| `3` | Rule plane **`degraded`** — the rules could not be projected |
+
+Exit `3` is the one that matters. In that state the guard **fails open** on
+every edit: nothing is enforced, and before this had an exit code the condition
+printed in red and exited `0`, so nothing could gate on it and a human had to
+happen to look. `empty` and `off` deliberately exit `0` — a graph with no rules
+is a true, quiet answer, and failing on it would make the code useless in every
+tree that has no governed policy yet.
+
+`status` retries the projection three times before declaring `degraded`
+(`attempts` is reported, so a flap stays visible). The pre-edit hook does **not**
+retry: it runs on every edit across the fleet and its latency ceiling is the
+reason it exists. A status surface that went red once in ten runs from a
+transient blip would be routed around, and then the real red would be invisible
+too.
+
 ## `hank refs`
 
 Definition sites of a symbol, by name, from the same graph `callers`, `impact`
