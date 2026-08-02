@@ -33,6 +33,11 @@ pub mod policy;
 /// Phase-4 projection: a hot, one-directional cache of quipu's structural policies.
 #[cfg(feature = "quipu")]
 pub mod project;
+/// The SPARQL `project` sends. Gated with it: queries for a plane this build
+/// does not have are dead weight, and an ungated half of a gated feature is how
+/// a `--features` matrix starts lying about what a binary can do.
+#[cfg(feature = "quipu")]
+pub mod project_queries;
 /// Phase-4 Quipu promotion: SHACL-validate a Turtle projection, then write it.
 #[cfg(feature = "quipu")]
 pub mod promote;

@@ -171,7 +171,11 @@ fn one_entity_with_two_comments_is_one_rule() {
     // projected as 11 rules. The duplicates fired twice for one edit, and the
     // two copies carried different rationales — an advisory arguing with itself.
     let rules = decode_text_rules(&two_comments_json()).unwrap();
-    assert_eq!(rules.len(), 1, "the OPTIONAL cross product produced duplicates");
+    assert_eq!(
+        rules.len(),
+        1,
+        "the OPTIONAL cross product produced duplicates"
+    );
     assert_eq!(rules[0].name, "pattern_demo");
 }
 
