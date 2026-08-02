@@ -33,10 +33,12 @@
 //! guard every later action is attributed to the closed item — plausibly, which
 //! is the dangerous kind of wrong. Two mitigations, and neither is complete on
 //! its own:
-//!   * the publisher rewrites the plate at every point it resolves one, so the
-//!     file tracks reality within a tend cycle;
-//!   * we refuse a plate older than `max_age` as a backstop against a file left
-//!     behind by a dead session.
+//!
+//! * the publisher rewrites the plate at every point it resolves one, so the
+//!   file tracks reality within a tend cycle;
+//! * we refuse a plate older than `max_age` as a backstop against a file left
+//!   behind by a dead session.
+//!
 //! Between a close and the next republish there remains a window in which the
 //! plate is confidently wrong. That window is bounded by the publisher's cadence
 //! and is not closed here; closing it wants a session id on both sides, which
