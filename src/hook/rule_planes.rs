@@ -74,21 +74,55 @@ pub(super) fn rule_check(config: &HankConfig, input: &HookInput, rel: &str) -> O
     // is threaded here so a verdict computed against a stale projection is tagged
     // STALE, never silently fresh.
     let message = rule_verdict_message(&violations, Freshness::Fresh);
-    // Name every rule that fired, not just the first: an edit can break several
-    // at once, and a record that dropped the rest would send an operator to fix
-    // one and hit the next.
-    let fired = fired_rule_ids(violations.iter().map(|v| v.rule.as_str()));
-    Some(Decision::ruled(decide(config.policy.mode, message), fired))
+    // Record every rule that fired, not just the first: an edit can break
+    // several at once, and a record that dropped the rest would send an operator
+    // to fix one and hit the next.
+    let outcome = decide(config.policy.mode, message);
+    let response = crate::trace::Response::of(&outcome);
+    let evaluations = evaluations_for(
+        violations.iter().map(|v| v.rule.as_str()),
+        response,
+        |name| {
+            rules
+                .iter()
+                .find(|r| r.name == name)
+                .map(|r| (r.class, r.verification_point))
+        },
+    );
+    Some(Decision::evaluated(outcome, evaluations))
 }
 
-/// Join the ids of the rules that fired into one stable, deduplicated field
-/// value. Sorted so the same set of rules always renders the same string —
-/// a record an operator groups by must not vary with evaluation order.
-fn fired_rule_ids<'a>(ids: impl Iterator<Item = &'a str>) -> String {
+/// Build one [`ConstraintEvaluation`] per DISTINCT rule that fired, in stable
+/// order, attaching each rule's declared class and verification point via
+/// `placement`.
+///
+/// Sorted and deduplicated for the same reason the `+`-joined field was: an
+/// edit can trip one rule at several sites, and a record whose contents varied
+/// with evaluation order is one an operator cannot group by.
+fn evaluations_for<'a>(
+    ids: impl Iterator<Item = &'a str>,
+    response: crate::trace::Response,
+    placement: impl Fn(
+        &str,
+    ) -> Option<(
+        Option<crate::constraint::ConstraintClass>,
+        Option<crate::constraint::VerificationPoint>,
+    )>,
+) -> Vec<crate::trace::ConstraintEvaluation> {
     let mut seen: Vec<&str> = ids.collect();
     seen.sort_unstable();
     seen.dedup();
-    seen.join("+")
+    seen.into_iter()
+        .map(|name| {
+            let (class, point) = placement(name).unwrap_or((None, None));
+            crate::trace::ConstraintEvaluation::new(
+                name,
+                crate::trace::Outcome::Unsatisfied,
+                response,
+            )
+            .placed(class, point)
+        })
+        .collect()
 }
 
 /// Combine rule violations into one model-facing verdict and DECLARE its freshness
@@ -197,7 +231,7 @@ pub(super) fn governed_check(
 
     let mut messages: Vec<String> = Vec::new();
     let mut any_blocking = false;
-    let mut structural_count = 0usize;
+    let mut structural_violations: Vec<crate::project::ProjectedViolation> = Vec::new();
 
     // --- TEXT plane: every file, no grammar required ------------------------
     //
@@ -276,13 +310,13 @@ pub(super) fn governed_check(
             rel,
             config.policy.mode,
         );
-        structural_count = violations.len();
         for v in &violations {
             if v.blocking {
                 any_blocking = true;
             }
             messages.push(v.message.clone());
         }
+        structural_violations = violations;
     }
 
     if messages.is_empty() {
@@ -308,7 +342,7 @@ pub(super) fn governed_check(
                 }
                 .into(),
             ),
-            ("structural", (structural_count as u64).into()),
+            ("structural", (structural_violations.len() as u64).into()),
             ("blocking", any_blocking.into()),
             ("exposure", exposure_label.into()),
             (
@@ -328,16 +362,40 @@ pub(super) fn governed_check(
     // incident that motivated the issue. Structural violations contribute a
     // count, not names (their names live only inside composed messages today),
     // so they are named as such rather than silently omitted.
-    let mut fired: Vec<&str> = text_violations.iter().map(|v| v.rule.as_str()).collect();
-    if structural_count > 0 {
-        fired.push("governed-structural");
-    }
     let outcome = if blocks {
         Outcome::Deny(message)
     } else {
         Outcome::Notify(format!("hank (governed, not blocking): {message}"))
     };
-    Some(Decision::ruled(outcome, fired_rule_ids(fired.into_iter())))
+    let response = crate::trace::Response::of(&outcome);
+
+    // Text-plane rules have no declared class (the aegis-mqnl catalogue predates
+    // the SARC fields and carries its own `enforcementTier` instead), so they
+    // record with class absent rather than a class inferred from that tier —
+    // the tiers are not the same vocabulary and mapping one onto the other would
+    // assert a placement nobody declared.
+    let mut evaluations = evaluations_for(
+        text_violations.iter().map(|v| v.rule.as_str()),
+        response,
+        |_| None,
+    );
+    // Structural violations now carry their OWN names and declared placement.
+    // They used to reach the spool as the literal string "governed-structural"
+    // plus a count, so an operator could see that three governed rules fired and
+    // not which three — the names lived only inside the composed message. That
+    // is the unattributable-record shape the audit field exists to prevent, and
+    // it survived inside the very field added to fix it.
+    evaluations.extend(evaluations_for(
+        structural_violations.iter().map(|v| v.id.as_str()),
+        response,
+        |name| {
+            structural_violations
+                .iter()
+                .find(|v| v.id == name)
+                .map(|v| (v.class, v.verification_point))
+        },
+    ));
+    Some(Decision::evaluated(outcome, evaluations))
 }
 
 /// The absolute path of the file this edit actually writes to, which is the

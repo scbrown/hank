@@ -684,3 +684,79 @@ fn a_warn_tier_hit_never_blocks_even_in_a_public_repo() {
         "warn tier is advisory everywhere — per-pattern tier is data"
     );
 }
+
+// --- The Σ-derived trace record, through the real guard path ----------------
+
+/// Run the guard and return the record it spools, as JSON.
+///
+/// Goes through `guard_recorded` — the real payload, the real config resolution
+/// and the real decision path — so only the single `metrics::emit` call in
+/// `guard` is outside it. Driving the actual spool would need
+/// `std::env::set_var`, which this crate cannot do: `unsafe_code = "deny"`.
+fn guard_line(policy: &str, new_string: &str) -> serde_json::Value {
+    let dir = wide_repo();
+    write_policy(dir.path(), policy);
+    let payload = rule_edit_payload(dir.path(), new_string);
+    let (_, fields) = guard_recorded(&payload, dir.path(), Some("t"), None);
+    serde_json::Value::Object(
+        fields
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect::<serde_json::Map<_, _>>(),
+    )
+}
+
+#[test]
+fn the_record_carries_the_constraint_set_not_just_a_joined_name() {
+    // SARC I3. The audit checker needs, per constraint: which one, where it was
+    // evaluated, what it concluded and what was done — and none of the four
+    // survive a `+`-joined string of names.
+    let line = guard_line(NO_TICKET_RULE, "fn leaf() {} // see ABC-123");
+    let constraints = line["constraints"]
+        .as_array()
+        .expect("the record carries a constraints array");
+    assert_eq!(constraints.len(), 1);
+    assert_eq!(constraints[0]["id"], "no-ticket-in-comment");
+    assert_eq!(constraints[0]["outcome"], "unsatisfied");
+    assert_eq!(
+        constraints[0]["response"], "blocked",
+        "an enforce-mode deny records as blocked"
+    );
+}
+
+#[test]
+fn the_legacy_rule_field_survives_the_change() {
+    // Live dashboards group on `rule`. Dropping it would silently empty every
+    // panel built on it, so it is DERIVED from the constraint set rather than
+    // removed — and this test is what stops a later cleanup deleting it.
+    let line = guard_line(NO_TICKET_RULE, "fn leaf() {} // see ABC-123");
+    assert_eq!(line["rule"], "no-ticket-in-comment");
+}
+
+#[test]
+fn an_advise_mode_violation_records_warned_not_blocked() {
+    // Outcome and response are separate fields for exactly this: the constraint
+    // was equally unsatisfied under both modes, and only the RESPONSE differed.
+    // A record collapsing them could not tell an advise-mode fleet from an
+    // enforcing one after the fact.
+    let advise = NO_TICKET_RULE.replace("mode = \"enforce\"", "mode = \"advise\"");
+    let line = guard_line(&advise, "fn leaf() {} // see ABC-123");
+    let constraints = line["constraints"].as_array().unwrap();
+    assert_eq!(constraints[0]["outcome"], "unsatisfied");
+    assert_eq!(constraints[0]["response"], "warned");
+    assert_eq!(line["result"], "notify");
+}
+
+#[test]
+fn a_clean_edit_records_no_constraints_field_at_all() {
+    // Absent rather than an empty array: the spool's discipline is that an
+    // omitted field is honestly silent, and an empty array would read as "the
+    // constraints were evaluated and all passed" when in fact none applied.
+    let line = guard_line(NO_TICKET_RULE, "fn leaf() {} // nothing to see");
+    assert_eq!(line["result"], "allow");
+    assert!(
+        line.get("constraints").is_none(),
+        "a clean edit records no constraint set: {line}"
+    );
+    assert!(line.get("rule").is_none());
+}

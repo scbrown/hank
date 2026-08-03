@@ -72,6 +72,26 @@ pub enum Response {
     NoAction,
 }
 
+impl Response {
+    /// The response implied by a guard outcome.
+    ///
+    /// Lives here rather than in the hook so the mapping is stated once: the
+    /// audit checker compares the recorded response against the one the policy
+    /// declared, and a second, drifting copy of this mapping would make the two
+    /// disagree for reasons no reader could locate.
+    #[must_use]
+    pub fn of(outcome: &crate::hook::Outcome) -> Self {
+        match outcome {
+            crate::hook::Outcome::Deny(_) => Self::Blocked,
+            crate::hook::Outcome::Notify(_) => Self::Warned,
+            // An allow after a constraint was evaluated means it did not fire;
+            // `NoAction` is the honest label, and callers that know the
+            // constraint was satisfied record that as the outcome.
+            crate::hook::Outcome::Allow => Self::NoAction,
+        }
+    }
+}
+
 /// One constraint's evaluation, for one action — SARC's `E_i` element.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConstraintEvaluation {

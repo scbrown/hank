@@ -1,8 +1,8 @@
 # SARC Conformance — what hank × quipu still needs
 
-Status: **Phase 1 landed** (quipu `Q-SARC-CLASS` + `Q-SARC-PLACEMENT`, and the
-hank projection that consumes them). Phases 2–3 complete the MVP; Phases 4–6
-are scoped but not started. See [Build order](#build-order) for what each
+Status: **Phase 1 landed**; **Phase 2 in progress** (the Σ-derived trace record
+is in; verdict emission is next). Phase 3 completes the MVP; Phases 4–6 are
+scoped but not started. See [Build order](#build-order) for what each
 phase covers and [Phase 1, as built](#phase-1-as-built) for what shipped.
 
 ## Why this document
@@ -90,11 +90,12 @@ not persisted (`Q-VERDICT-PERSIST`, open). Today the only enforcement record is
 a local, fail-silent JSONL spool.
 
 **G3 — The trace is not derived from Σ.** Violates I3 ([SARC] §3.5: "the trace
-is generated; it is not reconstructed"), and I8 by consequence.
+is generated; it is not reconstructed"), and I8 by consequence. **Partly closed
+in Phase 2** — see [Phase 2, as built](#phase-2-as-built).
 
-`src/metrics.rs` emits `{kind, ts, agent, tenant, item, …}` per event. There is
-no pre/post state, no `constraints_evaluated` set with outcomes, no attribution
-tuple. `docs/work-scoped-governance.md` names this precisely — "records and
+`src/metrics.rs` emitted `{kind, ts, agent, tenant, item, …}` per event. There
+was no pre/post state, no `constraints_evaluated` set with outcomes, no
+attribution tuple. `docs/work-scoped-governance.md` names this precisely — "records and
 rules share one vocabulary" — and phases it. Its phase 1 *is* SARC's I3. It is
 designed, not built.
 
@@ -461,6 +462,57 @@ nothing.
    named explicitly. Records and policies then share one vocabulary — the
    precondition for derive/test/explain in that document *and* for the checker
    in Phase 5.
+
+### Phase 2, as built
+
+The constraint set landed first, because the verdict has nothing honest to say
+until the record can hold it.
+
+`src/trace.rs` defines `ConstraintEvaluation` — SARC's `E_i` element — carrying
+the four things the audit checker's passes need per constraint: **which** one,
+**where** it was evaluated, what it **concluded**, and what was **done** about
+it. `outcome` and `response` are separate fields on purpose: pass (iii) is "does
+the recorded response match the one the policy declared", and a single collapsed
+field makes it unwritable. `Outcome::Unknown` stays distinct from `Unsatisfied`
+for the same reason it does in SARC — collapsing them makes an unevaluated check
+indistinguishable from a passing one.
+
+`Response::NoAction` is representable and distinct from `Logged`. A constraint
+that fired and drew no response is a real state — a soft rule under a runtime
+with nowhere to put it, which is exactly where the stack sits before Phase 3 —
+and rounding it to `Logged` would read as a deliberate choice.
+
+**What this replaced, and what it recovered.** `Decision` carried a `+`-joined
+string of rule ids. It answered "what fired" and could not answer "was each
+evaluated at a point compatible with its class", so two rules firing identically
+at different points produced byte-identical records. Worse, the *governed*
+plane never carried names at all: structural violations reached the spool as the
+literal string `"governed-structural"` plus a count, so an operator could see
+that three governed rules fired and not which three. The names existed only
+inside the composed model-facing message. That is the unattributable-record
+shape the audit field was added to prevent, surviving inside the very field
+added to prevent it. `ProjectedViolation` now carries its id, class and point,
+and the record names every rule.
+
+The old `rule` field is **derived** from the constraint set rather than removed:
+live dashboards group on it, and dropping it would silently empty every panel
+built on it. That migration is a separate change from the one adding structure.
+
+**A testing note worth keeping.** Driving the real spool from a test needs
+`std::env::set_var`, which now requires `unsafe` — and this crate sets
+`unsafe_code = "deny"`. Rather than weaken that, `guard` was split into
+`guard_recorded` (decide + compose the record) and a two-line `guard` (emit +
+return). The whole record composition is now under test through the real
+decision path, and exactly one line — the `emit` call, which `metrics.rs` covers
+directly — sits outside it.
+
+**Still open in Phase 2:** verdict emission (G2) and the attribution tuple. `α`
+remains partial by design — hank can supply `tool`, `executor` and `C_eval`
+honestly, but the principal chain `P` and intersected authority `auth` need
+multi-tenancy quipu does not have. They are absent from the record rather than
+filled with the single agent id, because a one-element chain asserted where a
+real chain belongs reads as "this action had one principal" to exactly the
+auditor the field exists for.
 
 ### Phase 3 — Make the PAA a real enforcement point
 

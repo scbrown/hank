@@ -1,0 +1,70 @@
+//! [`Decision`] — a guard outcome plus the constraint evaluations that produced
+//! it. Split from `pre_edit` for size; the type is the seam between deciding and
+//! recording.
+
+use super::Outcome;
+
+/// A guard outcome plus the identity of what produced it.
+///
+/// [`Outcome`] is what the harness sees; this is what the AUDIT record sees.
+/// They are separate because the model-facing text and the operator-facing
+/// record answer different questions: the model needs to know what to do
+/// instead, the operator needs to know which rule fired so a false positive can
+/// be told from a correct deny (hank #77).
+#[derive(Debug, Clone)]
+pub(super) struct Decision {
+    pub(super) outcome: Outcome,
+    /// The constraints evaluated for this action and what each concluded — SARC
+    /// I3's `E_i` (`crate::trace`). Empty for a plain allow, where nothing was
+    /// evaluated and there is nothing to record.
+    ///
+    /// This replaced a `+`-joined string of rule ids. The string answered "what
+    /// fired" and could not answer "was each evaluated at a point compatible
+    /// with its class", which is pass (ii) of the audit checker: two rules that
+    /// fired identically at different points produced byte-identical records.
+    /// The old field is still DERIVED from this set for the spool, so live
+    /// dashboards grouping on it keep working.
+    pub(super) constraints: Vec<crate::trace::ConstraintEvaluation>,
+}
+
+impl From<Outcome> for Decision {
+    fn from(outcome: Outcome) -> Self {
+        Self {
+            outcome,
+            constraints: Vec::new(),
+        }
+    }
+}
+
+impl Decision {
+    /// A decision attributed to one or more evaluated constraints.
+    pub(super) fn evaluated(
+        outcome: Outcome,
+        constraints: Vec<crate::trace::ConstraintEvaluation>,
+    ) -> Self {
+        Self {
+            outcome,
+            constraints,
+        }
+    }
+
+    /// A decision attributed to a single rule id, with the response inferred
+    /// from the outcome it produced.
+    ///
+    /// The convenience form for the capability-scope checks, which have no
+    /// declared class or verification point to carry: they are hank's own
+    /// path/blast-radius rules rather than projected quipu policies. Recording
+    /// them with `class: None` is honest — they are constraints hank enforces
+    /// and nobody declared a class for.
+    pub(super) fn ruled(outcome: Outcome, rule: impl Into<String>) -> Self {
+        let response = crate::trace::Response::of(&outcome);
+        Self::evaluated(
+            outcome,
+            vec![crate::trace::ConstraintEvaluation::new(
+                rule,
+                crate::trace::Outcome::Unsatisfied,
+                response,
+            )],
+        )
+    }
+}

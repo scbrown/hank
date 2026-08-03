@@ -15,6 +15,11 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+#[path = "decision.rs"]
+mod decision;
+
+use decision::Decision;
+
 use super::measure::{measure_within, relative};
 use super::{deny_envelope, first_notice_for_session, system_message, HookInput};
 use crate::config::HankConfig;
@@ -49,40 +54,6 @@ pub fn run_pre_edit(tenant: Option<&str>, config_override: Option<&Path>) -> any
     Ok(())
 }
 
-/// A guard outcome plus the identity of what produced it.
-///
-/// [`Outcome`] is what the harness sees; this is what the AUDIT record sees.
-/// They are separate because the model-facing text and the operator-facing
-/// record answer different questions: the model needs to know what to do
-/// instead, the operator needs to know which rule fired so a false positive can
-/// be told from a correct deny (hank #77).
-#[derive(Debug, Clone)]
-struct Decision {
-    outcome: Outcome,
-    /// Stable id of the deciding rule, when one rule decided. `None` for a plain
-    /// allow, where nothing fired and there is nothing to name.
-    rule: Option<String>,
-}
-
-impl From<Outcome> for Decision {
-    fn from(outcome: Outcome) -> Self {
-        Self {
-            outcome,
-            rule: None,
-        }
-    }
-}
-
-impl Decision {
-    /// A decision attributed to `rule`.
-    fn ruled(outcome: Outcome, rule: impl Into<String>) -> Self {
-        Self {
-            outcome,
-            rule: Some(rule.into()),
-        }
-    }
-}
-
 /// Decide an edit, and SPOOL the decision (aegis-0nng): one `guard` metrics
 /// line per invocation — result, duration, extension, and (hank #77) the target
 /// path and the rule that fired — through the fail-silent spool, after the
@@ -95,6 +66,27 @@ pub fn guard(
     tenant: Option<&str>,
     config_override: Option<&Path>,
 ) -> Outcome {
+    let (outcome, fields) = guard_recorded(input_json, default_root, tenant, config_override);
+    crate::metrics::emit("guard", &fields);
+    outcome
+}
+
+/// The guard, returning its outcome AND the record it would spool.
+///
+/// Split from [`guard`] so the record is testable. The alternative — driving the
+/// real spool from a test — needs `$HANK_METRICS_PATH` set at runtime, and this
+/// crate denies `unsafe_code`, which `std::env::set_var` now requires. Splitting
+/// here leaves exactly one untested line in [`guard`] (the `emit` call itself,
+/// which `crate::metrics` covers directly) and puts the whole of the record
+/// composition — the part with the fields, the conditionals and the omissions —
+/// under test through the real decision path.
+#[must_use]
+fn guard_recorded(
+    input_json: &str,
+    default_root: &Path,
+    tenant: Option<&str>,
+    config_override: Option<&Path>,
+) -> (Outcome, Vec<(&'static str, serde_json::Value)>) {
     let started = Instant::now();
     let decision = guard_inner(input_json, default_root, tenant, config_override);
     let result = match &decision.outcome {
@@ -160,12 +152,20 @@ pub fn guard(
             fields.push(("path", recorded.into()));
         }
     }
-    if let Some(rule) = decision.rule {
+    // The Σ-derived constraint set (SARC I3): which constraints were evaluated,
+    // where, what each concluded, and what was done about it. One array rather
+    // than sibling keys, so a reader never reassembles class-to-id by position.
+    if !decision.constraints.is_empty() {
+        fields.push(("constraints", crate::trace::to_json(&decision.constraints)));
+    }
+    // The pre-existing `rule` field, DERIVED from the same set. Live dashboards
+    // group on it; dropping it would silently empty every panel built on it,
+    // and that migration is a separate change from the one adding the structure.
+    if let Some(rule) = crate::trace::legacy_rule_field(&decision.constraints) {
         fields.push(("rule", rule.into()));
     }
 
-    crate::metrics::emit("guard", &fields);
-    decision.outcome
+    (decision.outcome, fields)
 }
 
 /// The decision itself. Pure apart from reading the repo, so it is directly

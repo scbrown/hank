@@ -136,6 +136,19 @@ pub struct ProjectedViolation {
     /// Whether the governed effect is a blocking one (`deny` / `require-approval`
     /// / `escalate`) rather than advisory (`warn` / `record` / `allow`).
     pub blocking: bool,
+    /// The constraint's stable id.
+    ///
+    /// Carried so the trace record can name it. Before this, structural
+    /// violations reached the spool as the literal string
+    /// `"governed-structural"` and a count — the names existed only inside the
+    /// composed model-facing message, so an operator could see that three
+    /// governed rules fired and not which three. That is the same
+    /// unattributable-record shape the audit field was added to fix.
+    pub id: String,
+    /// The declared class, when quipu declared one.
+    pub class: Option<crate::constraint::ConstraintClass>,
+    /// The declared verification point, when quipu declared one.
+    pub verification_point: Option<crate::constraint::VerificationPoint>,
 }
 
 /// Whether a governed `effect` blocks an edit. Unknown effects are treated as
@@ -220,6 +233,9 @@ pub fn evaluate_projected(
             out.push(ProjectedViolation {
                 message: violation.message,
                 blocking,
+                id: violation.rule,
+                class: policy.rule.class,
+                verification_point: policy.rule.verification_point,
             });
         }
     }
