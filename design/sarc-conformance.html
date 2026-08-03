@@ -182,9 +182,9 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="sarc-conformance--what-hank--quipu-still-needs"><a class="header" href="#sarc-conformance--what-hank--quipu-still-needs">SARC Conformance — what hank × quipu still needs</a></h1>
-<p>Status: <strong>Phase 1 landed</strong> (quipu <code>Q-SARC-CLASS</code> + <code>Q-SARC-PLACEMENT</code>, and the
-hank projection that consumes them). Phases 2–3 complete the MVP; Phases 4–6
-are scoped but not started. See <a href="#build-order">Build order</a> for what each
+<p>Status: <strong>Phase 1 landed</strong>; <strong>Phase 2 in progress</strong> (the Σ-derived trace record
+is in; verdict emission is next). Phase 3 completes the MVP; Phases 4–6 are
+scoped but not started. See <a href="#build-order">Build order</a> for what each
 phase covers and <a href="#phase-1-as-built">Phase 1, as built</a> for what shipped.</p>
 <h2 id="why-this-document"><a class="header" href="#why-this-document">Why this document</a></h2>
 <p>Besanson <a href="#sources">[SARC]</a> proposes that constraints become a first-class
@@ -257,10 +257,11 @@ never becomes a governed fact. Symmetrically, quipu's own write-gate decision is
 not persisted (<code>Q-VERDICT-PERSIST</code>, open). Today the only enforcement record is
 a local, fail-silent JSONL spool.</p>
 <p><strong>G3 — The trace is not derived from Σ.</strong> Violates I3 ([SARC] §3.5: "the trace
-is generated; it is not reconstructed"), and I8 by consequence.</p>
-<p><code>src/metrics.rs</code> emits <code>{kind, ts, agent, tenant, item, …}</code> per event. There is
-no pre/post state, no <code>constraints_evaluated</code> set with outcomes, no attribution
-tuple. <code>docs/work-scoped-governance.md</code> names this precisely — "records and
+is generated; it is not reconstructed"), and I8 by consequence. <strong>Partly closed
+in Phase 2</strong> — see <a href="#phase-2-as-built">Phase 2, as built</a>.</p>
+<p><code>src/metrics.rs</code> emitted <code>{kind, ts, agent, tenant, item, …}</code> per event. There
+was no pre/post state, no <code>constraints_evaluated</code> set with outcomes, no
+attribution tuple. <code>docs/work-scoped-governance.md</code> names this precisely — "records and
 rules share one vocabulary" — and phases it. Its phase 1 <em>is</em> SARC's I3. It is
 designed, not built.</p>
 <p><strong>G4 — The Post-Action Auditor is advisory context, not a constraint site.</strong></p>
@@ -589,6 +590,49 @@ precondition for derive/test/explain in that document <em>and</em> for the check
 in Phase 5.</p>
 </li>
 </ol>
+<h3 id="phase-2-as-built"><a class="header" href="#phase-2-as-built">Phase 2, as built</a></h3>
+<p>The constraint set landed first, because the verdict has nothing honest to say
+until the record can hold it.</p>
+<p><code>src/trace.rs</code> defines <code>ConstraintEvaluation</code> — SARC's <code>E_i</code> element — carrying
+the four things the audit checker's passes need per constraint: <strong>which</strong> one,
+<strong>where</strong> it was evaluated, what it <strong>concluded</strong>, and what was <strong>done</strong> about
+it. <code>outcome</code> and <code>response</code> are separate fields on purpose: pass (iii) is "does
+the recorded response match the one the policy declared", and a single collapsed
+field makes it unwritable. <code>Outcome::Unknown</code> stays distinct from <code>Unsatisfied</code>
+for the same reason it does in SARC — collapsing them makes an unevaluated check
+indistinguishable from a passing one.</p>
+<p><code>Response::NoAction</code> is representable and distinct from <code>Logged</code>. A constraint
+that fired and drew no response is a real state — a soft rule under a runtime
+with nowhere to put it, which is exactly where the stack sits before Phase 3 —
+and rounding it to <code>Logged</code> would read as a deliberate choice.</p>
+<p><strong>What this replaced, and what it recovered.</strong> <code>Decision</code> carried a <code>+</code>-joined
+string of rule ids. It answered "what fired" and could not answer "was each
+evaluated at a point compatible with its class", so two rules firing identically
+at different points produced byte-identical records. Worse, the <em>governed</em>
+plane never carried names at all: structural violations reached the spool as the
+literal string <code>"governed-structural"</code> plus a count, so an operator could see
+that three governed rules fired and not which three. The names existed only
+inside the composed model-facing message. That is the unattributable-record
+shape the audit field was added to prevent, surviving inside the very field
+added to prevent it. <code>ProjectedViolation</code> now carries its id, class and point,
+and the record names every rule.</p>
+<p>The old <code>rule</code> field is <strong>derived</strong> from the constraint set rather than removed:
+live dashboards group on it, and dropping it would silently empty every panel
+built on it. That migration is a separate change from the one adding structure.</p>
+<p><strong>A testing note worth keeping.</strong> Driving the real spool from a test needs
+<code>std::env::set_var</code>, which now requires <code>unsafe</code> — and this crate sets
+<code>unsafe_code = "deny"</code>. Rather than weaken that, <code>guard</code> was split into
+<code>guard_recorded</code> (decide + compose the record) and a two-line <code>guard</code> (emit +
+return). The whole record composition is now under test through the real
+decision path, and exactly one line — the <code>emit</code> call, which <code>metrics.rs</code> covers
+directly — sits outside it.</p>
+<p><strong>Still open in Phase 2:</strong> verdict emission (G2) and the attribution tuple. <code>α</code>
+remains partial by design — hank can supply <code>tool</code>, <code>executor</code> and <code>C_eval</code>
+honestly, but the principal chain <code>P</code> and intersected authority <code>auth</code> need
+multi-tenancy quipu does not have. They are absent from the record rather than
+filled with the single agent id, because a one-element chain asserted where a
+real chain belongs reads as "this action had one principal" to exactly the
+auditor the field exists for.</p>
 <h3 id="phase-3--make-the-paa-a-real-enforcement-point"><a class="header" href="#phase-3--make-the-paa-a-real-enforcement-point">Phase 3 — Make the PAA a real enforcement point</a></h3>
 <p><em>Closes G4.</em></p>
 <p>Give <code>hook/post_edit.rs</code> a constraint-evaluation path alongside its advisory
