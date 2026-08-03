@@ -17,6 +17,8 @@ COMMANDS:
     hook        Harness hook adapter (post-edit advisory / pre-edit guard)
     verify      Verdict on a proposed edit buffer (FR-23/FR-24)
     promote     Promote a commit's structural facts into Quipu    [Phase 4]
+    verifier    Show the verdict-signing public key to register  [quipu feature]
+    verdicts    Drain the local signed-verdict spool into quipu  [quipu feature]
     status      Show base commit, tiers, and configuration
     completions Generate shell completions
     help        Print help
@@ -186,6 +188,25 @@ import, a top-level comment). `a.rs` defines: one:1-1, two:5-5
 
 `refs` answers "where is this **defined**". For "what **reaches** this", use
 `hank callers`; for the transitive form, `hank impact`.
+
+## `hank verifier` and `hank verdicts`
+
+Both require the `quipu` feature. The guard signs a verdict the moment a
+constraint fires and appends it locally; these are the registration and the
+drain. Full field list and the reasoning in
+[The Enforcement Trace](enforcement-trace.md).
+
+```bash
+hank verifier --key-path hank-signing.pk8   # public key to register in quipu
+hank verdicts --to http://localhost:7878    # drain the spool
+```
+
+`hank verifier` is the **deliberate key-creation act** — it mints the signing key
+if absent. The hook path never does: a signing identity materialising from an
+agent's edit is not something that should happen quietly.
+
+`hank verdicts` truncates the spool only when every verdict was accepted, so a
+partial drain leaves the remainder intact rather than losing it.
 
 ## `hank verify`
 

@@ -152,6 +152,13 @@ they do things neither does alone:
 - **Code ↔ intent, linked.** Quipu provenance ties structural facts to the decisions
   and work-items that produced them — *"which decision does this module implement,"
   "what tickets co-occur with this code path."*
+- **A decidable audit.** Every enforcement decision emits a trace record derived
+  from the constraint set itself, plus an ed25519-signed verdict bound to what was
+  actually checked. `quipu audit <trace>` then decides `T ⊨ Σ` mechanically —
+  without access to the model, its prompts, or its developers. See
+  [The Enforcement Trace](docs/book/src/reference/enforcement-trace.md) for the
+  record, and [SARC Conformance](docs/book/src/design/sarc-conformance.md) for what
+  the pair does and does not yet close.
 
 ## 🚀 Quick Start
 
@@ -186,7 +193,12 @@ hank export src --repo myrepo --format turtle
 hank serve
 
 # Edit-reactive: wire `hank hook post-edit` into a Claude Code PostToolUse hook
-# for synchronous blast-radius advisories on every edit (see docs).
+# for synchronous blast-radius advisories on every edit, and `hank hook pre-edit`
+# into PreToolUse to check an edit against the tenant's scope before it lands.
+
+# Governance (quipu feature): the verdict-signing identity, and the spool drain
+hank verifier --key-path hank-signing.pk8   # public key to register in quipu
+hank verdicts --to http://localhost:7878    # promote signed verdicts
 
 # Shell completions
 hank completions bash > hank.bash
@@ -236,6 +248,10 @@ Conventions live in [`AGENTS.md`](AGENTS.md); contribution guidance in
 - [Specification](docs/hank-spec.md) — the full PRD-style build spec.
 - [Vision](docs/vision.md) — Bobbin × Hank × Quipu.
 - [mdBook](docs/book/src/SUMMARY.md) — guides, concepts, and reference.
+- [SARC Conformance](docs/book/src/design/sarc-conformance.md) — the governance
+  map across hank × quipu: what each phase built, and what it did *not* close.
+- [The Enforcement Trace](docs/book/src/reference/enforcement-trace.md) — the
+  record schema, the attribution tuple and its environment, and the verdict spool.
 
 ## License
 
