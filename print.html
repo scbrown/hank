@@ -1970,8 +1970,10 @@ isolation is a known, decided-deferred gap in Quipu (<code>group_id</code> is pr
 only); multi-operator separation is a prerequisite to lift before the plane
 governs across trust boundaries, not a v1 deliverable.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="sarc-conformance--what-hank--quipu-still-needs"><a class="header" href="#sarc-conformance--what-hank--quipu-still-needs">SARC Conformance — what hank × quipu still needs</a></h1>
-<p>Status: <strong>analysis + build order.</strong> Phases 1–3 are the agreed MVP; Phases 4–6
-are scoped but not started. Nothing here is implemented yet.</p>
+<p>Status: <strong>Phase 1 landed</strong> (quipu <code>Q-SARC-CLASS</code> + <code>Q-SARC-PLACEMENT</code>, and the
+hank projection that consumes them). Phases 2–3 complete the MVP; Phases 4–6
+are scoped but not started. See <a href="design/sarc-conformance.html#build-order">Build order</a> for what each
+phase covers and <a href="design/sarc-conformance.html#phase-1-as-built">Phase 1, as built</a> for what shipped.</p>
 <h2 id="why-this-document"><a class="header" href="#why-this-document">Why this document</a></h2>
 <p>Besanson <a href="design/sarc-conformance.html#sources">[SARC]</a> proposes that constraints become a first-class
 specification object alongside state, action space and reward (§3.1):</p>
@@ -2163,6 +2165,55 @@ matching how an unknown <code>matchType</code> is handled — never a silent dro
 than by <code>project::effect_blocks</code> alone. <code>Mode::Advise</code> keeps its ceiling: it
 never blocks, whatever the class.</li>
 </ul>
+<h3 id="phase-1-as-built"><a class="header" href="#phase-1-as-built">Phase 1, as built</a></h3>
+<p>Shipped in quipu (<code>shapes/governance.ttl</code>, <code>src/governance/placement.rs</code>) and
+hank (<code>src/constraint.rs</code>, <code>src/project_decode.rs</code>,
+<code>src/hook/rule_planes.rs</code>). Three things came out differently from the plan
+above, each because building it surfaced something the analysis had not:</p>
+<p><strong>Two fields are unrepresentable rather than validated.</strong> <code>aegis:hostedAtLayer</code>
+has no <code>"prompt"</code> value and <code>aegis:onTimeout</code> has only <code>"deny"</code>. Both started as
+rules the placement pass would enforce; both are better as gaps in the
+vocabulary, because a check that can be configured wrong eventually is, and
+neither of these has a legitimate second value to preserve.</p>
+<p><strong>Multi-valued fields are refused, not resolved.</strong> Asserting
+<code>constraintClass "hard"</code> over an existing <code>"soft"</code> leaves <em>both</em> facts active —
+assertion is not replacement. The first implementation read the last SPARQL row
+and silently picked one, so a re-class would have landed while the old placement
+still validated. This was caught by the write-path test, not by the unit tests
+over the rule table, which is the argument for having both. A policy with two
+classes is now refused as ambiguous, with the retract-in-the-same-transaction
+remedy in the message, and <code>a_clean_re_placement_retracting_the_old_value_lands</code>
+is the recoverability half — refusing ambiguity is only safe if there is a way
+to legitimately move a policy.</p>
+<p><strong>The projection decoder got the same collapse the text decoder already had.</strong>
+<code>POLICY_QUERY</code> gained three OPTIONALs, and SPARQL returns the cross product of
+them: a policy carrying two <code>rdfs:label</code>s comes back as two rows and became two
+identical rules. <code>decode_text_rules</code> already carried a comment recording this
+exact failure on the live catalogue — 7 entities projecting as 11 rules, 4
+duplicates, each reported twice to the model with conflicting rationales.
+<code>decode_policies</code> was exposed to it the whole time and the new fields made it
+likelier, so it now collapses on the policy IRI and refuses rows that disagree
+on a required field. Identity is the IRI, not the label: an unlabelled policy
+falls back to a row-indexed name, so keying on the name would give every row a
+distinct identity and collapse nothing.</p>
+<p>Two behaviour changes worth knowing about when reading a verdict:</p>
+<ul>
+<li><strong>The declared class outranks the governed effect.</strong> A <code>soft</code> policy never
+blocks, even with <code>effect "deny"</code> — that combination is contradictory, quipu's
+placement check now refuses to define it, and honouring what the author
+declared it to <em>be</em> is the only reading that is not a guess. A policy with no
+class (projected from a catalog predating the field) still behaves exactly as
+before: the effect decides.</li>
+<li><strong>A policy declared at the PAA does not fire at the pre-edit gate.</strong> It is
+skipped, not evaluated-and-ignored. Evaluating it there would tell the model
+to fix something its author scoped to after the fact — and until Phase 3 lands
+the post-edit auditor, such a policy is <em>not evaluated at all</em>. That is the
+honest state, and it is visible in the projection rather than hidden.</li>
+</ul>
+<p><code>Mode::Advise</code> remains a ceiling over all of it: an advise-mode deployment never
+blocks, whatever class a projected constraint declares. That is what makes
+staging a new hard constraint safe before anyone has measured its
+false-positive rate.</p>
 <h3 id="phase-2--wire-the-verdict-derive-the-trace"><a class="header" href="#phase-2--wire-the-verdict-derive-the-trace">Phase 2 — Wire the verdict, derive the trace</a></h3>
 <p><em>Closes G2 and G3 — the two gaps that make I8 impossible.</em></p>
 <ol>
