@@ -5,26 +5,26 @@ are scoped but not started. Nothing here is implemented yet.
 
 ## Why this document
 
-Besanson's *SARC: A Governance-by-Architecture Framework for Agentic AI Systems*
-(arXiv:2605.07728) proposes that constraints become a first-class specification
-object alongside state, action space and reward:
+Besanson [\[SARC\]](#sources) proposes that constraints become a first-class
+specification object alongside state, action space and reward (§3.1):
 
 ```text
 c = ⟨src, class, pred, verif, resp⟩  + a declared operating point θ
 ```
 
-compiled into four named enforcement points in the agent loop — a **Pre-Action
-Gate** (PAG), an **Action-Time Monitor** (ATM), a **Post-Action Auditor** (PAA),
-and an **Escalation Router** (ER) — under eight runtime invariants (I1–I8) whose
-joint effect is *specification-trace correspondence*: given a specification Σ
-and a trace T, an auditor can mechanically decide `T ⊨ Σ` without access to the
+compiled into four named enforcement points in the agent loop (§4.1) — a
+**Pre-Action Gate** (PAG), an **Action-Time Monitor** (ATM), a **Post-Action
+Auditor** (PAA), and an **Escalation Router** (ER) — under eight runtime
+invariants I1–I8 (§3.5) whose joint effect is *specification-trace
+correspondence* (Definition 2, §3.6): given a specification Σ and a trace T, an
+auditor can mechanically decide `T ⊨ Σ` in `O(|T|·|C|)` without access to the
 model, its prompts, or its developers.
 
 The stack is already most of the way there, and on the *specification* side it
 is ahead of the paper's own prototype: quipu's `aegis:` governance ontology is
 SHACL-validated and bitemporal, and verdicts are ed25519-signed against a
-human-owned `VerifierRegistration` root of trust — SARC assumes a JSON spec file
-and a Python checker.
+human-owned `VerifierRegistration` root of trust — SARC's reference artifact is
+a JSON spec file and a Python checker (§3.6, §13.4).
 
 What is missing is not the substrate. It is a specific, enumerable set of holes:
 the constraint objects are under-declared, three of the four enforcement points
@@ -43,7 +43,7 @@ and nothing checks correspondence. This document names them and orders the work.
 | Policy-layer reference monitor | quipu pre-commit write gate | `quipu/src/governance/guard.rs` |
 | Verdict as attestation, not claim | ed25519-signed, evidence-hash-bound `aegis:Verdict` | `src/verdict.rs`, `quipu/src/signing.rs` |
 | Root of trust | `aegis:VerifierRegistration`, human-authored | `quipu/shapes/governance.ttl` |
-| Latency budget (SARC §5.1) | `policy.deadline_ms`, fail-open on expiry | `src/policy.rs` |
+| Latency budget ([SARC] §5.1) | `policy.deadline_ms`, fail-open on expiry | `src/policy.rs` |
 | One-directional policy projection | quipu canonical → hank read cache | `src/project.rs`, `src/hook/rule_planes.rs` |
 | Confidence inputs | `tier ∈ {live,lsp,tree-sitter,committed,attested}` + `freshness` | shapes, FR-3 |
 | Layer discipline (SARC I6) | honoured by construction: no rule lives in the prompt | [Governance Plane](governance-plane.md) |
@@ -51,20 +51,24 @@ and nothing checks correspondence. This document names them and orders the work.
 [Governance Plane](governance-plane.md) independently anticipates much of SARC —
 risk × confidence adaptive effect, verdict integrity, the out-of-band verifier,
 the `prevented`/`observed` enforcement gradient. SARC's marginal contribution on
-top of it is **placement discipline** (which constraint class belongs at which
-enforcement point) and **checkable correspondence** (a decidable audit).
+top of it is **placement discipline** ([SARC] §4.2, Table 3: which constraint
+class belongs at which enforcement point) and **checkable correspondence**
+([SARC] §3.6: a decidable audit). SARC is explicit that this is a *specification
+discipline* layered over a policy-as-code substrate rather than a replacement
+for one (§2.1) — which is exactly the relationship quipu's write gate already
+has to hank's projection.
 
 ### The gaps
 
-**G1 — Constraint objects are incomplete.** Violates I2 ("a constraint missing
-any field is not a constraint; it is a comment").
+**G1 — Constraint objects are incomplete.** Violates I2 ([SARC] §3.5: "a
+constraint missing any field is not a constraint; it is a comment").
 
 `aegis:Policy` carries `targets`, `claim`, `boundary ∈ {action,transition}` and
 `effect ∈ {allow,warn,require-approval,deny,escalate,record}`. It does not carry:
 
 - **`class ∈ {hard, soft, escalation}`.** `effect` conflates class with
-  response, so "what kind of constraint is this" is not declarable and SARC's
-  class→placement rules (Table 3) cannot be checked.
+  response, so "what kind of constraint is this" is not declarable and the
+  class→placement rules ([SARC] Table 3) cannot be checked.
 - **an operating point θ** — no false-positive / false-negative tolerance.
 - **a reversibility window τ_rev** and on-timeout behaviour (needed by I4).
 - **a per-constraint latency budget** at its verification point.
@@ -72,7 +76,8 @@ any field is not a constraint; it is a comment").
 - **`src.type`** — `aegis:Directive` supplies optional `authority`/`issuedBy`,
   and the shipped catalog sets neither.
 
-**G2 — The verdict path is built but not wired.** Violates I3 and I8.
+**G2 — The verdict path is built but not wired.** Violates I3 and I8 ([SARC]
+§3.5).
 
 `src/verdict.rs` implements signing and `promote_verdict`, and it is correct —
 it mirrors quipu's scheme exactly so a hank-signed verdict verifies under
@@ -82,7 +87,8 @@ never becomes a governed fact. Symmetrically, quipu's own write-gate decision is
 not persisted (`Q-VERDICT-PERSIST`, open). Today the only enforcement record is
 a local, fail-silent JSONL spool.
 
-**G3 — The trace is not derived from Σ.** Violates I3, and I8 by consequence.
+**G3 — The trace is not derived from Σ.** Violates I3 ([SARC] §3.5: "the trace
+is generated; it is not reconstructed"), and I8 by consequence.
 
 `src/metrics.rs` emits `{kind, ts, agent, tenant, item, …}` per event. There is
 no pre/post state, no `constraints_evaluated` set with outcomes, no attribution
@@ -94,18 +100,20 @@ designed, not built.
 
 `src/hook/post_edit.rs` injects blast-radius context after an edit. It evaluates
 no constraint, emits no verdict, and cannot prevent the *next* action — which is
-what a PAA is for. SARC's soft class has nowhere to live, and `throttle` — the
-declared PAA response responsible for the paper's entire 89.5% soft-overage
-result — is not in quipu's `effect` enum.
+what a PAA is for ([SARC] §4.1). SARC's soft class `C_s` has nowhere to live,
+and `throttle` — the declared PAA response responsible for the paper's entire
+89.5% soft-overage reduction ([SARC] §10.3, Table 6) — is not in quipu's
+`effect` enum.
 
-**G5 — There is no Escalation Router.** Violates I4.
+**G5 — There is no Escalation Router.** Violates I4 ([SARC] §3.5, §5.3).
 
 `require-approval` and `escalate` currently fail closed at the quipu write gate
 *with no channel to grant approval* (`guard.rs::effect_blocks`, and the design
 doc says so plainly). `aegis:Decision` and `aegis:assignsWorkflow` shapes exist;
 there is no runtime router, no operator group, no queue, no τ_rev, no
-default-deny-on-timeout, no capacity model. SARC I4: "escalation without a bound
-is not human oversight; it is deferred autonomy."
+default-deny-on-timeout, no capacity model. [SARC] I4: "escalation without a
+bound is not human oversight; it is deferred autonomy." The queueing model that
+makes `W_q < τ_rev` measurable rather than asserted is §5.3.
 
 **G6 — There is no Action-Time Monitor.**
 
@@ -113,19 +121,20 @@ Nothing observes an action mid-flight. Long-running Bash, MCP tool calls and
 sub-agent runs have no cumulative-budget monitor and no interrupt.
 `src/hook/pre_bash.rs` is deliberately record-only and prints nothing.
 
-**G7 — No attribution tuple, no authority intersection.** Violates I5.
+**G7 — No attribution tuple, no authority intersection.** Violates I5 ([SARC]
+§9.3, §9.6).
 
 SARC's `α = ⟨P, planner, executor, tool, auth, C_eval⟩` has no counterpart. The
 spool carries one flat `agent` + `tenant` + `item`. There is no
 principal-and-agent chain, no authority composition (`all-of` / `any-of`), no
 monotonic narrowing under delegation — and the trace is a **sequence, not a
-tree**, so orchestrator/worker runs are exposed to exactly SARC's
-constraint-laundering and attribution-dilution failure modes. quipu's `group_id`
-is documented as provenance-only, and [Governance Plane](governance-plane.md)
-scopes v1 to a single trust domain. This is the deepest gap and the one with a
+tree**, so orchestrator/worker runs are exposed to exactly the
+constraint-laundering and attribution-dilution failure modes of [SARC] §9.5.
+quipu's `group_id` is documented as provenance-only, and
+[Governance Plane](governance-plane.md) scopes v1 to a single trust domain. This is the deepest gap and the one with a
 real prerequisite.
 
-**G8 — Enforcement completeness is unmeasured.** Violates I7.
+**G8 — Enforcement completeness is unmeasured.** Violates I7 ([SARC] §3.5).
 
 `docs/work-scoped-governance.md` §"What this cannot reach" is an honest,
 explicit list of bypass surfaces: CI pipelines, cron, the far side of a remote
@@ -141,7 +150,7 @@ measured false-positive rate — so the advise→enforce promotion ladder in
 `work-scoped-governance.md` §Evals cannot be walked, and θ (G1) would be
 undeclarable-in-practice even once the field exists.
 
-### Position on SARC's adoption ladder
+### Position on the adoption ladder ([SARC] §13.3)
 
 - **Level 1** (PAG, hard constraints at the tool/policy layer, structured trace
   emission) — substantially met; I3 and I8 outstanding.
@@ -196,7 +205,7 @@ class before class exists.*
 **quipu — `src/governance/placement.rs` (new):** a class↔placement conformance
 pass, run at definition time alongside SHACL. `hard ⇒ verificationPoint ∈ {PAG,
 ATM, tool_layer, policy_layer}`; `soft ⇒ {ATM, PAA}`; `escalation ⇒ {PAG, PAA}`
-and must declare τ_rev. This is SARC Table 3 made mechanical, and it is what
+and must declare τ_rev. This is [SARC] Table 3 made mechanical, and it is what
 "placement discipline" means in practice. Backfill `shapes/policies/treesitter.ttl`
 (`no-ticket-in-comment` → hard/PAG, `todo-needs-ticket` → soft/PAA).
 
@@ -243,7 +252,8 @@ and must declare τ_rev. This is SARC Table 3 made mechanical, and it is what
      attribution, reward_components }
    ```
 
-   This is `work-scoped-governance.md` phase 1 with SARC's `E_i` and `α_i`
+   This is `work-scoped-governance.md` phase 1 with [SARC] §3.6's `E_i` and
+   §9.6's `α_i`
    named explicitly. Records and policies then share one vocabulary — the
    precondition for derive/test/explain in that document *and* for the checker
    in Phase 5.
@@ -256,7 +266,8 @@ Give `hook/post_edit.rs` a constraint-evaluation path alongside its advisory
 context: evaluate `verificationPoint "PAA"` policies against
 `(pre, post, action, obs)`, emit verdicts, and implement the `throttle`
 response — a declared backoff applied to *subsequent* actions once a soft window
-is crossed. This is the single highest-leverage mechanism in SARC's evaluation
+is crossed. This is the single highest-leverage mechanism in the [SARC]
+evaluation
 and the stack has no equivalent.
 
 Soft constraints stay non-blocking by construction. The PAA's "prevents the
@@ -280,17 +291,19 @@ bounded human oversight.*
 - Hank gets a thin ER client at the pre-edit seam. When the router is
   unreachable the escalation-class response is deny, and the fail-open notice
   says so loudly.
-- Emit queue-depth / wait / utilisation metrics, because SARC's operative claim
-  is that `W_q < τ_rev` is a *measurable* property, not an assertion.
+- Emit queue-depth / wait / utilisation metrics, because the operative claim of
+  [SARC] §5.3 is that `W_q < τ_rev` is a *measurable* property of an M/M/c
+  queue, not an assertion.
 
 ### Phase 5 — Audit checker and enforcement inventory
 
 *Closes G8 and G9 — the "auditable by construction" claim itself.*
 
-- `quipu_audit_check(Σ, T)`: four passes per SARC Definition 2 — coverage,
+- `quipu_audit_check(Σ, T)`: four passes per [SARC] Definition 2 (§3.6) —
+  coverage,
   class-placement compatibility, outcome consistency, attribution completeness —
   returning a structured discrepancy report. Deterministic,
-  predicate-language-agnostic, and explicitly **not** an LLM call: SARC §5.1's
+  predicate-language-agnostic, and explicitly **not** an LLM call: [SARC] §5.1's
   design rule, which is the same `O(ℓ_tool)` budget discipline hank already
   applies to its own guard.
 - A dispatch-graph inventory for I7: enumerate every tool-call class the harness
@@ -315,9 +328,9 @@ bounded human oversight.*
   constraint at the deepest layer where it remains decidable, or escalate —
   never silently drop it, which is the constraint-laundering path.
 - Trust-boundary tagging on imported state (Bobbin retrieval results, MCP tool
-  output, sub-agent responses) with a PAA trust predicate. SARC's zero-trust
-  agent gateway, expressed in the existing constraint vocabulary rather than as
-  a separate perimeter layer.
+  output, sub-agent responses) with a PAA trust predicate. The zero-trust agent
+  gateway of [SARC] §9.5, expressed in the existing constraint vocabulary rather
+  than as a separate perimeter layer.
 
 ## Files this touches
 
@@ -357,21 +370,87 @@ Beyond each repo's normal gate:
   case per new constraint class, and a non-vacuity mutation check.
 - **End to end** — a policy authored in quipu, projected into hank, fired at
   pre-edit, promoted back as a signed verdict, and accepted by
-  `quipu_audit_check` against the same Σ. That round trip *is* SARC's
-  decidable-audit property, and it is the acceptance test for Phases 1–2.
+  `quipu_audit_check` against the same Σ. That round trip *is* the
+  decidable-audit property of [SARC] Property 1, and it is the acceptance test
+  for Phases 1–2.
 
 **One caveat travels with any number this produces:** replay measures false
 positives only on traffic that actually happened, and measures no false
 negatives at all. A seeded adversarial corpus gives coverage against known
 attacks and none against novel ones.
 
-## Out of scope
+## Out of scope — and why
 
-The other papers in the source set — the Deloitte/Informatica semantic-layer
-whitepaper, Agent-OM, the LLM-driven KG-construction framework, the
-ontological-grounding work, and the agentic-governance literature review — bear
-on how Σ gets *authored* and kept aligned with its sources, not on runtime
-enforcement. They are relevant to the authoring surface in
-[Governance Plane](governance-plane.md) §Authoring (particularly the "mined"
-modality and the translation layer SARC §6 presupposes but does not specify).
-They are deliberately not addressed here.
+Five of the six sources this analysis was drawn from bear on how Σ gets
+*authored* and kept aligned with its sources, not on how it is enforced at
+runtime. That distinction matters: [SARC] §6 is explicit that the arrow from
+obligation to predicate is an **institutional process, not a technical step**,
+and that the framework "presupposes rather than resolves" it. So the authoring
+work is real, and it is a different piece of work.
+
+Where each one lands, should we pick that thread up:
+
+- **[Raji & Bashir]** surveys the governance requirements Σ has to encode, and
+  is the clearest statement of the principal-agent problem behind G7 — who is
+  the principal, and what is the agent authorized to do on their behalf. Its
+  Singapore MGF summary ("assess and bound the risks upfront", "make humans
+  meaningfully accountable") maps onto the risk map and the ER respectively.
+- **[Informatica/Deloitte]** argues the semantic-layer case Quipu already
+  embodies. Useful as external corroboration for why the governed graph is the
+  right home for policy, not as a source of requirements.
+- **[Agent-OM]** is directly applicable to keeping `aegis:` aligned with
+  external vocabularies as they drift — the maintenance half of the translation
+  layer, and the thing that stops predicates silently decaying away from their
+  source obligations ([SARC] §6, "the translation layer as a governed control
+  surface").
+- **[Peshevski et al.]** is the agent-driven ontology-construction pattern
+  behind the "mined" authoring modality in
+  [Governance Plane](governance-plane.md) §Authoring.
+- **[Olivares-Alarcos et al.]** grounds *explanation* generation in an ontology
+  while keeping the reasoning sound — relevant to making a refusal legible, which
+  is a stated requirement of the recoverability eval in
+  `docs/work-scoped-governance.md` §Evals ("every refusal names the command that
+  satisfies it").
+
+None of them changes the runtime gap list above, which is why they are named
+here rather than folded into it.
+
+## Sources
+
+- **[SARC]** — Besanson, G. (2026). *SARC: A Governance-by-Architecture
+  Framework for Agentic AI Systems: Compiling Regulatory Obligations into
+  Runtime Constraints*. Working paper, Universidad Torcuato Di Tella.
+  [arXiv:2605.07728v1](https://arxiv.org/abs/2605.07728) [cs.SE].
+  Reference artifacts: <https://github.com/besanson/sarc-governance>.
+  All section, table, definition and invariant references in this document are
+  to this paper.
+- **[Raji & Bashir]** — Raji, M. & Bashir, M. (2026). *Towards Agentic AI
+  Governance: A Preliminary Assessment*. AIR-RES 2026, Springer Nature.
+  [arXiv:2607.07612v1](https://arxiv.org/abs/2607.07612).
+- **[Informatica/Deloitte]** — Beierschoder, M., Andrensek, J. & Rebele, T.
+  *Building the Semantic Data Layer for Agentic AI*. Informatica / Deloitte
+  whitepaper (5340en).
+- **[Agent-OM]** — Qiang, Z., Wang, W. & Taylor, K. (2024). *Agent-OM:
+  Leveraging LLM Agents for Ontology Matching*. PVLDB 18(3), 516–529.
+  [doi:10.14778/3712221.3712222](https://doi.org/10.14778/3712221.3712222).
+- **[Peshevski et al.]** — Peshevski, D., Stojanov, R. & Trajanov, D. (2025).
+  *AI Agent-Driven Framework for Automated Product Knowledge Graph Construction
+  in E-Commerce*. [arXiv:2511.11017v1](https://arxiv.org/abs/2511.11017)
+  [cs.AI].
+- **[Olivares-Alarcos et al.]** — Olivares-Alarcos, A., Ahsan, M., Sanjaya, S.,
+  Lin, H.-I. & Alenyà, G. *Ontological grounding for sound and natural robot
+  explanations via large language models*.
+  [arXiv:2602.13800v1](https://arxiv.org/abs/2602.13800).
+
+Internal design documents this analysis builds on, all in-tree:
+
+- [Governance Plane](governance-plane.md) — the verification spine, verdict
+  integrity, risk × confidence, the Hank↔Quipu integration contract.
+- [Policy edit hooks](policy-edit-hooks.md) — evidence locality, the quipu
+  pre-commit gate, the hank projection, and the `Q-*` / `H-*` backlog the
+  `Q-SARC-*` beads extend.
+- [Tiers and Freshness](../concepts/tiers-and-freshness.md) — the confidence
+  inputs SARC's operating point composes over.
+- `docs/work-scoped-governance.md` — the trace taxonomy, the five eval
+  properties, and the per-rule promotion ladder. Out of the book by design;
+  cited by path.
