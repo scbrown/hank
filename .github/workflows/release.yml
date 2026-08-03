@@ -7,6 +7,15 @@ on:
   push:
     tags: ["v*"]
     branches: [main]
+  # Manual re-run of the binary build for an existing tag — e.g. when a tag was
+  # created by release-plz (see the `binary` job's trigger note) or the upload
+  # leg failed after the release already existed.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to attach the binary to (e.g. v0.5.0)"
+        required: true
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,15 +26,72 @@ permissions:
 jobs:
   binary:
     name: Release binary (x86_64-linux-gnu)
-    if: startsWith(github.ref, 'refs/tags/')
+    needs: release-plz
+    # ⚠ A TAG PUSH IS NOT ENOUGH, AND THAT IS NOT A BUG IN THIS FILE.
+    #
+    # Measured on v0.5.0: release-plz created the tag and the GitHub release with
+    # GITHUB_TOKEN, and GitHub DELIBERATELY does not re-trigger workflows from
+    # token-authored tag pushes. So `on: push: tags` never fired, and v0.5.0
+    # shipped with a correct changelog and NO BINARY — the exact "a build with no
+    # release artifact is a tool nobody downstream can install" failure the header
+    # of this file is about. v0.4.0 had its asset only because a human pushed that
+    # tag by hand, which is not a process.
+    #
+    # Sibling quipu hit this first and fixed it the same way: run the artifact
+    # build as a JOB IN THIS WORKFLOW, gated on release-plz having created a
+    # release, rather than on a trigger that cannot fire. The tag-push arm stays
+    # for hand-pushed tags; workflow_dispatch is the escape hatch for a tag that
+    # already exists.
+    if: >-
+      always() &&
+      (startsWith(github.ref, 'refs/tags/') ||
+       github.event_name == 'workflow_dispatch' ||
+       needs.release-plz.outputs.releases_created == 'true')
     # ubuntu-22.04 ships glibc 2.35 — older than every consumer host, so a
     # dynamically-linked binary built here runs on all of them (build on the
     # OLDEST glibc you must support; forward-compat only). Static musl is a
     # follow-up once the C-dep toolchain (musl-tools) is wired in.
     runs-on: ubuntu-22.04
     steps:
+      # fetch-depth: 0 so the tag this run is about is present locally — on the
+      # release-merge path the ref is `main`, not the tag, and the checkout has
+      # to be moved onto the tag before anything is built from it.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Toolchain BEFORE the resolve step: it shells out to `cargo metadata`, and
+      # depending on a runner image happening to preinstall cargo is the kind of
+      # assumption that breaks on an image bump and looks like a tagging bug.
       - uses: dtolnay/rust-toolchain@stable
+
+      - name: Resolve the tag this run is about
+        id: tag
+        run: |
+          set -euo pipefail
+          case "${{ github.event_name }}" in
+            workflow_dispatch) TAG="${{ inputs.tag }}" ;;
+            *)
+              if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+                TAG="${GITHUB_REF_NAME}"
+              else
+                # release-plz has already bumped and committed Cargo.toml in the
+                # commit this run is building, and tags it v<version>. Deriving
+                # the tag from the manifest avoids depending on the shape of the
+                # action's undocumented `releases` JSON output.
+                TAG="v$(cargo metadata --no-deps --format-version 1 \
+                  | jq -r '.packages[] | select(.name == "hank") | .version')"
+              fi ;;
+          esac
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag: ${TAG}"
+
+      # Build FROM THE TAG, not from whatever the trigger ref happened to be. A
+      # binary labelled v0.5.0 that was built from a later main is a mislabelled
+      # artifact, which is worse than a missing one.
+      - name: Check out the tag
+        run: git checkout --detach "refs/tags/${{ steps.tag.outputs.tag }}"
+
       - uses: actions/cache@v4
         with:
           path: |
@@ -47,12 +113,14 @@ jobs:
         run: cargo build --release --features mcp,langs-extra,quipu
 
       - name: Package
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
           bin=target/release/hank
           test -x "$bin" || { echo "no binary at $bin"; exit 1; }
           "$bin" --version
-          tarball="hank-${GITHUB_REF_NAME}-x86_64-linux-gnu.tar.gz"
+          tarball="hank-${TAG}-x86_64-linux-gnu.tar.gz"
           tar -czf "$tarball" -C target/release hank
           sha256sum "$tarball" | tee "$tarball.sha256"
           echo "TARBALL=$tarball" >> "$GITHUB_ENV"
@@ -60,6 +128,7 @@ jobs:
       - name: Publish release + asset
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
           # The API is the flaky part, not the build. v0.1.0's first run built and
@@ -90,16 +159,16 @@ jobs:
             done
           }
           # Create the release if the tag has none yet; either way, attach the asset.
-          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            retry gh release create "${GITHUB_REF_NAME}" \
-              --title "${GITHUB_REF_NAME}" --generate-notes
+          if ! gh release view "${TAG}" >/dev/null 2>&1; then
+            retry gh release create "${TAG}" \
+              --title "${TAG}" --generate-notes
           fi
-          retry gh release upload "${GITHUB_REF_NAME}" \
+          retry gh release upload "${TAG}" \
             "${TARBALL}" "${TARBALL}.sha256" --clobber
           # Assert the effect, not the exit code: the asset must actually be listed.
-          gh release view "${GITHUB_REF_NAME}" --json assets \
+          gh release view "${TAG}" --json assets \
             --jq '.assets[].name' | grep -q "${TARBALL}"
-          echo "published ${TARBALL} on ${GITHUB_REF_NAME}"
+          echo "published ${TARBALL} on ${TAG}"
 
   # Open/refresh the release PR on every main push; merging it tags + releases.
   # This job is WHY releases happen at all: release-plz.toml existed here for
@@ -112,11 +181,17 @@ jobs:
     permissions:
       pull-requests: write
       contents: write
+    # Consumed by `binary` above: on a release-merge push this is how the
+    # artifact build learns a tag was just created, since the tag push itself
+    # cannot trigger anything.
+    outputs:
+      releases_created: ${{ steps.release.outputs.releases_created }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: MarcoIeni/release-plz-action@v0.5
+        id: release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
