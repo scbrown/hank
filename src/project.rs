@@ -40,6 +40,11 @@ pub struct ProjectedPolicy {
     /// whole-run `deadline_ms`, and a per-rule budget only becomes meaningful
     /// once rules can individually exceed it.
     pub latency_budget_ms: Option<u64>,
+    /// The layer quipu CLAIMS this constraint is enforced at (SARC I6).
+    /// A claim, not a fact — [`crate::hosting`] compares it to the layer that
+    /// actually evaluates the rule, and reports when the claim is the stronger
+    /// of the two.
+    pub hosted_at_layer: Option<crate::hosting::HostingLayer>,
 }
 
 /// Fetch and decode the governed text-rule catalogue over HTTP.
@@ -308,6 +313,12 @@ impl ProjectionRegistry {
             fetch_text_rules(&self.endpoint),
         ) {
             (Ok(policies), Ok(text_rules)) => {
+                // I6, at the seam where both halves are known at once: what the
+                // catalog CLAIMS about its hosting layer, against the layer that
+                // will actually evaluate it. Once per refresh rather than per
+                // edit — a metadata defect repeated on every guard line is a
+                // notice people learn to scroll past.
+                report_overclaims(&policies);
                 self.policies = policies;
                 self.text_rules = text_rules;
                 self.freshness = Freshness::Fresh;
@@ -332,6 +343,37 @@ impl ProjectionRegistry {
         self.text_rules = text_rules;
         self.freshness = Freshness::Fresh;
     }
+}
+
+/// Report every policy claiming a hosting layer stronger than the one that will
+/// evaluate it (SARC I6, `H-SARC-I6`).
+///
+/// A LOUD FAIL-OPEN: the mismatch is recorded and the policy is projected
+/// anyway. Refusing to project it would disable a rule that does still work —
+/// trading a documentation defect for an enforcement gap, which is the worse of
+/// the two by a wide margin. The rule then evaluates at the layer that is real,
+/// and the trace records that layer, so the audit checker verifies the claim
+/// against the record instead of taking the claim.
+fn report_overclaims(policies: &[ProjectedPolicy]) {
+    let claims: Vec<(String, Option<crate::hosting::HostingLayer>)> = policies
+        .iter()
+        .map(|p| (p.rule.name.clone(), p.hosted_at_layer))
+        .collect();
+    let notices = crate::hosting::audit_projection(&claims, crate::hosting::HANK_HOSTS_AT);
+    if notices.is_empty() {
+        return;
+    }
+    crate::metrics::emit(
+        "hosting_overclaim",
+        &[
+            (
+                "actual_layer",
+                crate::hosting::HANK_HOSTS_AT.as_str().into(),
+            ),
+            ("count", (notices.len() as u64).into()),
+            ("notices", notices.into()),
+        ],
+    );
 }
 
 /// Fetch and decode quipu's structural policies over HTTP.

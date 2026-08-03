@@ -123,6 +123,11 @@ fn evaluations_for<'a>(
                 response,
             )
             .placed(class, point)
+            // The layer that ACTUALLY evaluated it. Stamped here rather than
+            // copied from the policy's own aegis:hostedAtLayer, because a
+            // record that echoed the claim would let an overclaim survive the
+            // audit by being asserted twice (SARC I6).
+            .hosted_at(crate::hosting::HANK_HOSTS_AT)
         })
         .collect()
 }

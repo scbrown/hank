@@ -26,7 +26,8 @@ pub const POLICY_QUERY: &str = "\
 PREFIX aegis: <http://aegis.gastown.local/ontology/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 SELECT ?policy ?name ?language ?query ?pattern ?matchType ?gate ?effect
-       ?constraintClass ?verificationPoint ?latencyBudgetMs ?backoffFormula WHERE {
+       ?constraintClass ?verificationPoint ?latencyBudgetMs ?backoffFormula
+       ?hostedAtLayer WHERE {
   ?policy a aegis:Policy ;
           aegis:boundary \"action\" ;
           aegis:selector ?sel ;
@@ -43,6 +44,7 @@ SELECT ?policy ?name ?language ?query ?pattern ?matchType ?gate ?effect
   OPTIONAL { ?policy aegis:verificationPoint ?verificationPoint }
   OPTIONAL { ?policy aegis:latencyBudgetMs ?latencyBudgetMs }
   OPTIONAL { ?policy aegis:backoffFormula ?backoffFormula }
+  OPTIONAL { ?policy aegis:hostedAtLayer ?hostedAtLayer }
 }";
 
 /// The SPARQL SELECT that pulls the governed TEXT-rule catalogue

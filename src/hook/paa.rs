@@ -108,7 +108,8 @@ pub(super) fn audit(
             // evaluation reads as a constraint nobody applied.
             audit.constraints.push(
                 ConstraintEvaluation::new(&rule.name, Outcome::Satisfied, Response::Logged)
-                    .placed(rule.class, rule.verification_point),
+                    .placed(rule.class, rule.verification_point)
+                    .hosted_at(crate::hosting::HANK_HOSTS_AT),
             );
             continue;
         }
@@ -147,7 +148,8 @@ pub(super) fn audit(
         }
         audit.constraints.push(
             ConstraintEvaluation::new(&rule.name, Outcome::Unsatisfied, response)
-                .placed(rule.class, rule.verification_point),
+                .placed(rule.class, rule.verification_point)
+                .hosted_at(crate::hosting::HANK_HOSTS_AT),
         );
     }
     audit

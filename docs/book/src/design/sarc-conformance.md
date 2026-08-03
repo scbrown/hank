@@ -313,10 +313,11 @@ sits behind that as a second layer, not above it as a guarantee. Even so, the
 honest ceiling is **"refused on quipu's write path"**: a raw SQL write, or a
 process that opens the store directly, bypasses every check quipu has.
 
-`hostedAtLayer` remains **declared but otherwise unconsumed** — nothing yet
-compares it against where a constraint is actually hosted, so I6 is checked for
-*well-formedness* and not for *truth*. A policy can still claim `tool` while
-being enforced only in hank's orchestration-layer hook.
+`hostedAtLayer` was **declared but otherwise unconsumed** at this point — I6 was
+checked for *well-formedness* and not for *truth*, so a policy could claim `tool`
+while being enforced only in hank's orchestration-layer hook. [Spec
+B](#spec-b--h-sarc-i6-check-the-hosting-layer-against-reality) is now built; see
+[H-SARC-I6, as built](#h-sarc-i6-as-built).
 
 **Multi-valued fields are refused, not resolved.** Asserting
 `constraintClass "hard"` over an existing `"soft"` leaves *both* facts active —
@@ -463,6 +464,34 @@ layer and the real one; the rule still evaluates and still blocks if it is hard.
 A policy declaring `"orchestration"` produces silence. The negative case — no
 declaration at all — also produces silence, since an absent claim overclaims
 nothing.
+
+#### `H-SARC-I6`, as built
+
+`hank/src/hosting.rs`, `quipu/src/governance/audit/passes.rs::hosting`. The spec
+above held up; three things are worth recording about how it landed.
+
+**The check runs twice, on purpose, and they are different checks.** Hank checks
+at the **projection seam** — once per refresh, not per edit, because a metadata
+defect repeated on every guard line is a notice people learn to scroll past. That
+one compares the catalog's claim against `HANK_HOSTS_AT`, a constant rather than
+a configurable: a hook in the agent's loop *is* the orchestration layer, and
+making it settable would let a deployment declare itself into a robustness it
+does not have. Quipu checks at **audit time**, comparing the claim in Σ against
+the layer the trace says actually ran the constraint. The second is the one that
+cannot be fooled by hank being wrong about itself.
+
+**The record must not echo the claim.** `ConstraintEvaluation::hosted_at` is
+stamped from the evaluating code's own constant, never copied from the policy's
+`aegis:hostedAtLayer`. A field that repeated the declaration would let an
+overclaim survive the audit by being asserted twice, which is the failure mode
+the whole check exists to close.
+
+**An unknown layer is a projection error, not a `None`.** The one value quipu's
+vocabulary deliberately omits is `"prompt"`, and silently decoding it to "no
+claim" would turn the single claim I6 forbids into no claim at all. It fails the
+projection the way an unknown `constraintClass` does. On the audit side the same
+value is an *incompleteness* rather than a violation, because there the checker
+may simply be older than the runtime.
 
 ### Phase 2 — Wire the verdict, derive the trace
 

@@ -469,3 +469,78 @@ fn conflicting_rows_for_one_policy_are_refused_not_merged() {
         "got {err:?}"
     );
 }
+
+// ── Hosting layer (H-SARC-I6) ────────────────────────────────────────────────
+
+#[test]
+fn a_declared_hosting_layer_projects() {
+    let policies = decode_policies(&body(vec![policy_row(
+        "secrets-guard",
+        "deny",
+        &[("hostedAtLayer", "tool")],
+    )]))
+    .unwrap();
+    assert_eq!(
+        policies[0].hosted_at_layer,
+        Some(crate::hosting::HostingLayer::Tool)
+    );
+}
+
+#[test]
+fn an_absent_hosting_layer_is_none_not_a_default() {
+    // Defaulting an absent claim to `orchestration` would put a claim in the
+    // record that nobody made, and the I6 check would then be comparing hank's
+    // own guess against hank's own placement — always agreeing, always useless.
+    let policies = decode_policies(&body(vec![policy_row("p", "warn", &[])])).unwrap();
+    assert!(policies[0].hosted_at_layer.is_none());
+}
+
+#[test]
+fn an_unknown_hosting_layer_is_a_projection_error() {
+    // The only value quipu's vocabulary deliberately omits is "prompt", and
+    // silently dropping it to None would turn the one claim I6 forbids into no
+    // claim at all — the exact laundering the field exists to prevent.
+    let err = decode_policies(&body(vec![policy_row(
+        "p",
+        "warn",
+        &[("hostedAtLayer", "prompt")],
+    )]));
+    let Err(crate::errors::Error::Projection(why)) = err else {
+        panic!("expected a projection error, got {err:?}");
+    };
+    assert!(why.contains("prompt"), "{why}");
+}
+
+#[test]
+fn an_overclaiming_policy_still_projects_and_still_blocks() {
+    // The loud FAIL-OPEN. Refusing to project would disable a rule that does
+    // still work, trading a documentation defect for an enforcement gap.
+    let policies = decode_policies(&body(vec![policy_row(
+        "secrets-guard",
+        "deny",
+        &[("hostedAtLayer", "policy"), ("constraintClass", "hard")],
+    )]))
+    .unwrap();
+    assert_eq!(policies.len(), 1, "the overclaim did not drop the rule");
+
+    let violations = evaluate_projected(
+        &policies,
+        "// see ABC-123\n",
+        "rust",
+        "src/a.rs",
+        crate::policy::Mode::Enforce,
+    );
+    assert!(
+        violations[0].blocking,
+        "a hard constraint with a bad layer claim still enforces"
+    );
+    assert!(
+        crate::hosting::overclaims(
+            "secrets-guard",
+            policies[0].hosted_at_layer,
+            crate::hosting::HANK_HOSTS_AT
+        )
+        .is_some(),
+        "and the claim is still reported"
+    );
+}

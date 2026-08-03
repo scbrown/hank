@@ -104,6 +104,12 @@ pub struct ConstraintEvaluation {
     /// Where it was evaluated. Absent when undeclared, for the same reason.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verification_point: Option<VerificationPoint>,
+    /// The layer that ACTUALLY evaluated it — never the layer the policy
+    /// claimed. SARC I6 is checkable only if the record says what happened
+    /// rather than repeating the declaration; a field that echoed the claim
+    /// would let a `tool` overclaim survive the audit by being asserted twice.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hosted_at: Option<crate::hosting::HostingLayer>,
     /// What the predicate concluded.
     pub outcome: Outcome,
     /// What the runtime did about it.
@@ -117,6 +123,7 @@ impl ConstraintEvaluation {
             id: id.into(),
             class: None,
             verification_point: None,
+            hosted_at: None,
             outcome,
             response,
         }
@@ -131,6 +138,17 @@ impl ConstraintEvaluation {
     ) -> Self {
         self.class = class;
         self.verification_point = verification_point;
+        self
+    }
+
+    /// Record the layer that actually evaluated this constraint.
+    ///
+    /// Takes the layer as an argument rather than defaulting it, so no caller
+    /// can claim a layer by forgetting to say one — the same reason
+    /// `Decision::evaluated` takes freshness as a parameter.
+    #[must_use]
+    pub fn hosted_at(mut self, layer: crate::hosting::HostingLayer) -> Self {
+        self.hosted_at = Some(layer);
         self
     }
 }

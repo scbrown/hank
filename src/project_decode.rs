@@ -220,6 +220,16 @@ pub fn decode_policies(sparql_json: &str) -> Result<Vec<ProjectedPolicy>> {
             })?),
         };
         let latency_budget_ms = optional("latencyBudgetMs").and_then(|s| s.parse::<u64>().ok());
+        // The CLAIM about where this is enforced (I6). Unrecognised is an error
+        // for the same reason an unknown class is: the only value quipu's
+        // vocabulary deliberately omits is "prompt", and silently dropping it to
+        // `None` would turn the one claim I6 forbids into no claim at all.
+        let hosted_at_layer = match optional("hostedAtLayer") {
+            None => None,
+            Some(s) => Some(crate::hosting::HostingLayer::parse(&s).ok_or_else(|| {
+                Error::Projection(format!("row {i}: unknown hostedAtLayer `{s}`"))
+            })?),
+        };
 
         let policy = ProjectedPolicy {
             rule: Rule {
@@ -237,6 +247,7 @@ pub fn decode_policies(sparql_json: &str) -> Result<Vec<ProjectedPolicy>> {
             },
             effect,
             latency_budget_ms,
+            hosted_at_layer,
         };
 
         // ONE POLICY IS ONE RULE — the same collapse [`decode_text_rules`]
