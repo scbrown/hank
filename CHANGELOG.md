@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-08-03
+
+### Added
+
+- *(policy)* Project SARC constraint class and placement from quipu([3fcdf7f](https://github.com/scbrown/hank/commit/3fcdf7fa623ecc00ef8759114d154ee7dd9dd483))
+- *(trace)* Σ-derived constraint record, replacing the joined rule string([d24192c](https://github.com/scbrown/hank/commit/d24192cf08b76e58da8d5089d7fbfc169b62408d))
+- *(verdict)* Sign and spool verdicts at the moment a constraint fires([e448616](https://github.com/scbrown/hank/commit/e448616ea4ab9e65055a6d4aa45e50cb342620de))
+- *(paa)* A real Post-Action Auditor, with throttle([03e9d07](https://github.com/scbrown/hank/commit/03e9d070a0ac9f6aa8ed203d99571aff33139e82))
+- *(trace)* The attribution tuple, now that authority exists([eae8763](https://github.com/scbrown/hank/commit/eae8763faae1809a5a6d09f436397df75fbaae47))
+- *(hosting)* Check the claimed hosting layer against reality (H-SARC-I6)([fba8091](https://github.com/scbrown/hank/commit/fba8091643dacdca5ee8b5f896822044b5a4a0c3))
+
+### Documentation
+
+- *(design)* Correct the unrepresentable claim, and spec the two gaps Phase 1 exposed([5edaf0a](https://github.com/scbrown/hank/commit/5edaf0a659dae372f48dd4ab3eb076cfda2d40d8))
+- The enforcement trace as a reference page, and README catch-up([992ba35](https://github.com/scbrown/hank/commit/992ba35a8412395c33f55b50e34d2d870d43b1d5))
+
 ## [0.4.0] - 2026-08-02
 
 ### Added
