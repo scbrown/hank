@@ -1,6 +1,6 @@
 # SARC Conformance — what hank × quipu still needs
 
-Status: **Phases 1–5 landed; Phase 6 substantially landed.** Constraint metadata
+Status: **Phases 1–6 landed.** Constraint metadata
 and placement; the Σ-derived trace record and signed verdict emission; a real
 Post-Action Auditor with `throttle`; an Escalation Router with a bounded
 reversibility window; the `T ⊨ Σ` checker, the dispatch-graph inventory and the
@@ -8,9 +8,11 @@ replay harness; authority intersection over named graphs and the attribution
 tuple.
 
 **Read the "as built" sections, not this line.** Each ends with what its phase
-did *not* close, and three of those matter: there is no Action-Time Monitor at
-all, the escalation queue has no server so `W_q < τ_rev` is unmeasured, and the
-trace is still a sequence rather than a tree. See [Build
+did *not* close, and four of those matter: there is **no Action-Time Monitor at
+all** (G6, untouched); the escalation queue has no server, so §5.3's
+`W_q < τ_rev` is unmeasured; θ is calibratable but not calibrated, because replay
+counts blocks and cannot label false positives; and no trust predicate evaluates
+imported content — the boundary is declared and reported, not closed. See [Build
 order](#build-order) for the phases as originally scoped.
 
 ## Why this document
@@ -216,9 +218,12 @@ As first written, and where each rung now stands:
   (G6), and the escalation queue has no server, so §5.3's `W_q < τ_rev` is
   unmeasured. This rung is half met.
 - **Level 4** (multi-agent) — was "blocked on quipu multi-tenancy", which
-  misdescribed the blocker. Authority intersection and the attribution tuple are
-  built; the trace is still a sequence rather than a tree, so the
-  attribution-dilution defence is reconstructible rather than structural.
+  misdescribed the blocker. Authority intersection, the attribution tuple, the
+  reconstructed dispatch tree, constraint inheritance with a decidability rescue,
+  and trust-boundary declarations are all built. Two things keep this rung from
+  being claimed outright: the trace is emitted as a sequence, so sibling
+  dispatches of the same principal are indistinguishable, and nothing evaluates
+  imported content.
 
 ## Decisions
 
@@ -1010,18 +1015,71 @@ resolved it by precedence would delete the only evidence of it. It is emitted
 only when true: a `false` on every line trains a reader to skip the field, which
 is the opposite of what it is for.
 
+#### The attribution tree — `quipu/src/governance/tree.rs`
+
+`quipu audit tree <trace.jsonl>` reassembles the dispatch forest from the
+principal chains. The trace is still emitted as a **sequence**, so this is
+reconstruction rather than structure, and the output says so in three places
+rather than presenting a tree as a guarantee:
+
+- **Unattributed records are not placed.** Attaching one to whichever root
+  happened to be first would invent an answer to the question the tree exists to
+  answer.
+- **Implied dispatch nodes are flagged.** A chain `[orchestrator, worker]` proves
+  an orchestrator exists; it does not prove the orchestrator's own actions are in
+  the window. "Did nothing" and "was not recorded" are different facts.
+- **Collapsed nodes get a note.** Two dispatches of the same worker by the same
+  caller produce the same chain and land on one node — attribution dilution
+  reappearing at the reader instead of at the record.
+
+#### Constraint inheritance — `quipu/src/governance/inheritance.rs`
+
+`aegis:inheritedByDelegates` declares that a constraint binds the whole subtree
+under a dispatch. `aegis:onUndecidable` admits only `"escalate"` — the same shape
+as `onTimeout` admitting only `"deny"` — which is the **decidability rescue**:
+evaluate at the deepest layer where the constraint still decides, or hand it to a
+human. A constraint that silently stops applying where it cannot be checked is
+one an agent escapes by dispatching into a context where the evidence is absent.
+
+Two findings, at deliberately different severities because one has evidence and
+the other has a question. A constraint that **decided on a target** and is absent
+from a deeper action on the *same* target is a **violation** — it proved it could
+decide there. A constraint evaluated at a dispatch node and never in its subtree
+is an **incompleteness**: that might be laundering and might be a selector that
+matched nothing deeper, and deciding needs the files as they stood. Reporting
+both as violations would make the strong one unfindable.
+
+`is_below` is a strict prefix test. A sibling branch is not a delegation of this
+one, and a shallower action after a deeper one is *returning*, not delegating —
+either read as laundering would flag every parallel run.
+
+#### Trust boundaries — declared on the `ToolClass`
+
+`aegis:importsUntrustedState` and `aegis:untrustedOrigin`, on the dispatch
+inventory rather than on a policy, because the tool class is the thing that
+actually imports. Reported by `quipu audit inventory` whether or not the class is
+governed: `governedAt` says a class's own *actions* traverse a point and says
+nothing about what it *returned*. A class that imports and declares no origin is
+a violation — an import channel nobody can describe is one nobody can weigh.
+
+`shapes/dispatch-inventory.ttl` declares this stack's three real channels: a
+sub-agent's response text, MCP tool output, and retrieved documents.
+
 #### Still open in Phase 6
 
-- **The trace is still a sequence, not a tree.** `P` makes the dispatch
-  *reconstructible* — worker records now name the chain that spawned them — but
-  nothing attaches a worker subtree to its dispatch node, so §9.5's
-  attribution-dilution defence is one reconstruction step away rather than
-  structural.
-- **Constraint inheritance with decidability rescue** is unbuilt. An inherited
-  constraint that becomes undecidable at a deeper layer is currently just not
-  evaluated there, which is the constraint-laundering path the rescue exists to
-  close.
-- **Trust-boundary tagging on imported state** is unbuilt.
+**There is no trust predicate.** The vocabulary now names the channels and the
+inventory reports them on every run, but nothing *evaluates* imported content.
+The PAA judges the file after an edit, not the material the edit was based on,
+and building a predicate over sub-agent responses needs a producer that records
+them — which no part of this stack does today. So the boundary is declared and
+open, not closed; the honest claim is that it is now visible on every run rather
+than absent from the model.
+
+**The trace is emitted as a sequence.** Making it structurally a tree means the
+harness emitting a dispatch id per spawn, which is a change in the harness, not
+in hank. Until then, sibling dispatches of the same principal are
+indistinguishable — and `quipu audit tree` says so per node instead of leaving a
+reader to assume otherwise.
 
 ## Files this touches
 
