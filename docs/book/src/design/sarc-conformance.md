@@ -48,7 +48,7 @@ and nothing checks correspondence. This document names them and orders the work.
 | Latency budget ([SARC] §5.1) | `policy.deadline_ms`, fail-open on expiry | `src/policy.rs` |
 | One-directional policy projection | quipu canonical → hank read cache | `src/project.rs`, `src/hook/rule_planes.rs` |
 | Confidence inputs | `tier ∈ {live,lsp,tree-sitter,committed,attested}` + `freshness` | shapes, FR-3 |
-| Layer discipline (SARC I6) | honoured by construction: no rule lives in the prompt | [Governance Plane](governance-plane.md) |
+| Layer discipline (SARC I6) | no rule lives in the prompt; declared, not yet verified against reality | [Governance Plane](governance-plane.md) |
 
 [Governance Plane](governance-plane.md) independently anticipates much of SARC —
 risk × confidence adaptive effect, verdict integrity, the out-of-band verifier,
@@ -145,7 +145,29 @@ shell, a sibling session's VCS index, a hostile agent. I7 is a property of the
 of governed vs ungoverned tool-call classes, so "which actions traverse an
 enforcement point" is not answerable mechanically.
 
-**G9 — No audit checker, no replay, no calibration.**
+**G9 — The `aegis:` vocabulary is not described, only constrained.**
+
+Found while building Phase 1, not in the original analysis. `shapes/*.ttl`
+contained **zero** `rdfs:domain`, `rdfs:range`, `rdf:Property` or `owl:*Property`
+declarations: every `aegis:` term was defined implicitly, by the SHACL shapes
+that constrain it. A shape says what is *valid*; it does not say what a term
+*means* or what it *relates*. So a reader could learn that `constraintClass` is
+one of three strings and could not learn how it differs from `effect`.
+
+That matters for two consumers the stack already plans on. The authoring surface
+in [Governance Plane](governance-plane.md) §Authoring is composition over a
+catalog — an agent drafting a policy has nothing to read. And aligning `aegis:`
+against an external governance vocabulary (the ontology-matching problem
+[Agent-OM] addresses) needs property descriptions, which is precisely what was
+missing.
+
+It also starved machinery already built: `src/owl.rs` parses `rdfs:domain` /
+`rdfs:range` / `rdfs:subPropertyOf`, and the reasoner materialises domain/range
+inference — fed nothing. Partly closed in Phase 1 by
+`shapes/aegis-properties.ttl` for the SARC fields; the rest of the vocabulary is
+`Q-SARC-VOCAB`.
+
+**G10 — No audit checker, no replay, no calibration.**
 
 Nothing computes `T ⊨ Σ`. There is no spool reader, no replay harness, no
 measured false-positive rate — so the advise→enforce promotion ladder in
@@ -191,14 +213,15 @@ class before class exists.*
   split; `verificationPoint` is the fine placement SARC needs.
   `tool_layer`/`policy_layer` already appear in hank's projected policies.
 - `aegis:hostedAtLayer`, `sh:in ("orchestration" "tool" "policy")`. Deliberately
-  **no `"prompt"` value**, so I6 is unrepresentable by construction rather than
-  checked-and-rejected.
+  **no `"prompt"` value**. See [Phase 1, as built](#phase-1-as-built) for why the
+  omission is defence in depth rather than the guarantee it first looked like.
 - `aegis:OperatingPoint` node shape + `aegis:operatingPoint` on `Policy`:
   `falsePositiveTolerance`, `falseNegativeTolerance`, `threshold`,
   `calibrationBasis`.
 - `aegis:reversibilityWindowSeconds` and `aegis:onTimeout` — the latter
-  `sh:in ("deny")`, one value only, so default-allow-under-load is not
-  expressible. Required on escalation-class policies.
+  `sh:in ("deny")`, one value only, and re-checked by value in `placement.rs`
+  because the shape alone does not bind on every write path. Required on
+  escalation-class policies.
 - `aegis:latencyBudgetMs` on `Policy`.
 - `"throttle"` added to the `aegis:effect` enum, plus `aegis:backoffFormula`.
 - `aegis:sourceType`, `sh:in ("regulatory" "contractual" "ethical" "operational")`,
@@ -237,11 +260,31 @@ hank (`src/constraint.rs`, `src/project_decode.rs`,
 `src/hook/rule_planes.rs`). Three things came out differently from the plan
 above, each because building it surfaced something the analysis had not:
 
-**Two fields are unrepresentable rather than validated.** `aegis:hostedAtLayer`
-has no `"prompt"` value and `aegis:onTimeout` has only `"deny"`. Both started as
-rules the placement pass would enforce; both are better as gaps in the
-vocabulary, because a check that can be configured wrong eventually is, and
-neither of these has a legitimate second value to preserve.
+**Two fields are refused on the write path, and omitted from the vocabulary as
+defence in depth.** `aegis:hostedAtLayer` has no `"prompt"` value and
+`aegis:onTimeout` has only `"deny"`.
+
+This was first described here as making the unsafe settings *unrepresentable*,
+which was an overstatement worth correcting rather than quietly fixing. A
+`sh:in` enum only binds when SHACL runs, and SHACL runs under
+`shacl.validate_on_write` — which **defaults to false** and validates episode
+ingest rather than `Store::transact` generally. A policy written through `/knot`
+or a direct transact could carry `onTimeout "allow"` and nothing would object.
+"The shape rejects it" and "the store cannot hold it" are different claims, and
+shipping the second while only the first was true is the exact failure this
+document catalogues elsewhere.
+
+Both values are therefore re-checked in `placement.rs`, on the path that is
+actually on — before the action-boundary exemption, since a bad `onTimeout`
+fails just as silently on a transition-boundary policy. The vocabulary omission
+sits behind that as a second layer, not above it as a guarantee. Even so, the
+honest ceiling is **"refused on quipu's write path"**: a raw SQL write, or a
+process that opens the store directly, bypasses every check quipu has.
+
+`hostedAtLayer` remains **declared but otherwise unconsumed** — nothing yet
+compares it against where a constraint is actually hosted, so I6 is checked for
+*well-formedness* and not for *truth*. A policy can still claim `tool` while
+being enforced only in hank's orchestration-layer hook.
 
 **Multi-valued fields are refused, not resolved.** Asserting
 `constraintClass "hard"` over an existing `"soft"` leaves *both* facts active —
@@ -266,6 +309,16 @@ on a required field. Identity is the IRI, not the label: an unlabelled policy
 falls back to a row-indexed name, so keying on the name would give every row a
 distinct identity and collapse nothing.
 
+**The vocabulary had no property declarations at all.** Not a SARC gap — a gap
+SARC's fields made visible. `shapes/aegis-properties.ttl` now declares the SARC
+properties with `rdfs:domain` / `rdfs:range` / `rdfs:comment`, and a test checks
+the two files against each other so a field added to the shape without a
+description fails rather than drifting. Domains are declared **one property at a
+time**, not swept in: `rdfs:domain` is an inference rule the reasoner
+materialises, so declaring it on a generically-named field like `aegis:kind`
+would silently type the first unrelated thing in the estate that used the name.
+The `OperatingPoint` fields deliberately carry range and comment only.
+
 Two behaviour changes worth knowing about when reading a verdict:
 
 - **The declared class outranks the governed effect.** A `soft` policy never
@@ -284,6 +337,100 @@ Two behaviour changes worth knowing about when reading a verdict:
 blocks, whatever class a projected constraint declares. That is what makes
 staging a new hard constraint safe before anyone has measured its
 false-positive rate.
+
+### Two gaps Phase 1 exposed — and the spec to close them
+
+Both were found by building, not by analysis, and neither is a SARC gap as such:
+SARC assumes a described vocabulary and takes I6 as a design rule rather than a
+checkable property. They are gaps in *this stack's* ability to back the claims
+it makes.
+
+#### Spec A — `Q-SARC-VOCAB`: describe the rest of the `aegis:` vocabulary
+
+**The gap.** G9. Outside `shapes/aegis-properties.ttl` (SARC fields only), no
+`aegis:` term carries `rdfs:domain`, `rdfs:range` or `rdfs:comment`. Terms are
+defined by the shapes that constrain them, which states validity and not meaning.
+
+**What to produce.** One declaration per property in the `aegis:` namespace,
+in `shapes/aegis-properties.ttl`, each carrying:
+
+- `a owl:DatatypeProperty` or `a owl:ObjectProperty` — literal-valued vs
+  IRI-valued. The distinction is load-bearing for the reasoner, not cosmetic.
+- `rdfs:label` — a human-readable name.
+- `rdfs:range` — the datatype or class. Inert for the reasoner on datatype
+  properties (it types only IRI-valued objects), so this is for readers and
+  matchers.
+- `rdfs:comment` — **what the term means and how it differs from its nearest
+  neighbour.** A comment restating the label is worse than none: it passes the
+  presence check while telling a reader nothing.
+- `rdfs:domain` — **only where the subject class is unambiguous.**
+
+**The domain rule, stated as a rule because it is a trap.** `rdfs:domain` is an
+inference the reasoner *materialises*: declaring it asserts `rdf:type` on every
+subject carrying the property. A generically-named term (`aegis:kind`,
+`aegis:threshold`, `aegis:name`) will eventually be used by something else in
+the estate, and a domain would silently retype it. Declare a domain when the
+property's name is specific enough that no other class could reasonably carry
+it; otherwise range and comment only, and say so in a comment on the omission.
+
+**Sequencing.** Property-at-a-time, in shape-file order, not one sweep. Each
+batch runs the reasoner over a store holding the shipped catalog and asserts the
+inferred types are the intended ones — the materialisation is the risk, so it is
+what the test has to exercise.
+
+**Acceptance.** `every_sarc_property_the_shape_constrains_is_also_described`
+generalises from the SARC field list to every `aegis:` property the shape graph
+mentions; adding a constrained property without a declaration fails the build.
+A second test asserts no declaration carries a `rdfs:comment` that is merely its
+`rdfs:label` restated.
+
+**Why it earns its place.** Two consumers this stack has already committed to.
+The authoring surface ([Governance Plane](governance-plane.md) §Authoring) is
+composition over a catalog, and an agent drafting a policy currently has nothing
+to read about the terms it is composing. And aligning `aegis:` against an
+external governance vocabulary — the ontology-matching problem
+[Agent-OM] addresses, with property descriptions as its primary signal — is not
+attemptable against a vocabulary that has none.
+
+#### Spec B — `H-SARC-I6`: check the hosting layer against reality
+
+**The gap.** `aegis:hostedAtLayer` is declared and unconsumed. Nothing compares
+it against where a constraint is *actually* evaluated, so a policy may claim
+`"tool"` — the layer an agent cannot route around — while being enforced solely
+by hank's orchestration-layer pre-edit hook, which an agent bypasses by writing
+the file another way. I6 is currently checked for well-formedness and not for
+truth, and a false `tool` claim is worse than an honest `orchestration` one
+because it stops people looking.
+
+**What to produce.** A layer-truth check at the projection seam, where both
+halves are known at once:
+
+1. Hank knows what it is. A rule evaluated by `hank hook pre-edit` is hosted at
+   the **orchestration** layer, always — that is what the hook is. This is a
+   constant in `rule_planes.rs`, not a configurable.
+2. On projection, compare each policy's declared `hostedAtLayer` to the layer
+   that will actually evaluate it. A policy declaring `tool` or `policy` while
+   hank is its only evaluator is a **mismatch**.
+3. The response is a loud fail-open, not a block: hank refusing to project a
+   policy because its metadata overclaims would disable a rule that does still
+   work, trading a documentation error for an enforcement gap. Report the
+   mismatch, project the rule, evaluate it at the layer that is real.
+4. Record the layer actually used on the verdict and the trace record
+   (`hosted_at` on `ConstraintEvaluation`), so the audit checker of Phase 5 can
+   verify claim against record rather than taking the claim.
+
+**The asymmetry that makes it worth doing.** Declaring a *weaker* layer than the
+truth is harmless — a `tool`-enforced constraint described as `orchestration`
+understates its own robustness. Declaring a *stronger* one is the failure. The
+check is therefore one-directional: flag when `declared` is more robust than
+`actual`, stay silent otherwise.
+
+**Acceptance.** A projected policy declaring `hostedAtLayer "tool"` and
+evaluated by hank produces a mismatch notice naming the policy, the claimed
+layer and the real one; the rule still evaluates and still blocks if it is hard.
+A policy declaring `"orchestration"` produces silence. The negative case — no
+declaration at all — also produces silence, since an absent claim overclaims
+nothing.
 
 ### Phase 2 — Wire the verdict, derive the trace
 
@@ -354,7 +501,7 @@ bounded human oversight.*
 
 ### Phase 5 — Audit checker and enforcement inventory
 
-*Closes G8 and G9 — the "auditable by construction" claim itself.*
+*Closes G8 and G10 — the "auditable by construction" claim itself.*
 
 - `quipu_audit_check(Σ, T)`: four passes per [SARC] Definition 2 (§3.6) —
   coverage,
