@@ -34,6 +34,8 @@ All notable changes to this project will be documented in this file.
 
 - *(changelog)* Blank lines around version headings — repair CI, second attempt([d6a3875](https://github.com/scbrown/hank/commit/d6a3875ff0fb39c44a8b881c47b5f0d4cb30239e))
 - *(ci)* Close two gates that could pass without checking anything (#84)([971448e](https://github.com/scbrown/hank/commit/971448e51bfcd957447b6d9603dba3dc40b96242))
+- *(changelog)* Regenerate the 0.5.0 section — release-plz dropped 13 commits([2f8e6fd](https://github.com/scbrown/hank/commit/2f8e6fd4ad3005bb471354c30a2f6f10112e2523))
+- *(clippy)* Take a slice in the test envelope helper, for CI's --all-targets([78cc805](https://github.com/scbrown/hank/commit/78cc80507b5b741fcba876c070971aa0ab9bf2b2))
 
 ### Miscellaneous
 
