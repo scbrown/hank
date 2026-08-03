@@ -1970,9 +1970,9 @@ isolation is a known, decided-deferred gap in Quipu (<code>group_id</code> is pr
 only); multi-operator separation is a prerequisite to lift before the plane
 governs across trust boundaries, not a v1 deliverable.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="sarc-conformance--what-hank--quipu-still-needs"><a class="header" href="#sarc-conformance--what-hank--quipu-still-needs">SARC Conformance — what hank × quipu still needs</a></h1>
-<p>Status: <strong>Phase 1 landed</strong>; <strong>Phase 2 in progress</strong> (the Σ-derived trace record
-is in; verdict emission is next). Phase 3 completes the MVP; Phases 4–6 are
-scoped but not started. See <a href="design/sarc-conformance.html#build-order">Build order</a> for what each
+<p>Status: <strong>Phases 1 and 2 landed</strong> (constraint metadata and placement; the
+Σ-derived trace record and signed verdict emission). Phase 3 completes the MVP;
+Phases 4–6 are scoped but not started. See <a href="design/sarc-conformance.html#build-order">Build order</a> for what each
 phase covers and <a href="design/sarc-conformance.html#phase-1-as-built">Phase 1, as built</a> for what shipped.</p>
 <h2 id="why-this-document"><a class="header" href="#why-this-document">Why this document</a></h2>
 <p>Besanson <a href="design/sarc-conformance.html#sources">[SARC]</a> proposes that constraints become a first-class
@@ -2036,7 +2036,7 @@ class→placement rules ([SARC] Table 3) cannot be checked.</li>
 and the shipped catalog sets neither.</li>
 </ul>
 <p><strong>G2 — The verdict path is built but not wired.</strong> Violates I3 and I8 ([SARC]
-§3.5).</p>
+§3.5). <strong>Closed in Phase 2.</strong></p>
 <p><code>src/verdict.rs</code> implements signing and <code>promote_verdict</code>, and it is correct —
 it mirrors quipu's scheme exactly so a hank-signed verdict verifies under
 quipu's root of trust. It has <strong>no caller</strong> outside <code>hank verdict-key</code> in
@@ -2414,7 +2414,49 @@ built on it. That migration is a separate change from the one adding structure.<
 return). The whole record composition is now under test through the real
 decision path, and exactly one line — the <code>emit</code> call, which <code>metrics.rs</code> covers
 directly — sits outside it.</p>
-<p><strong>Still open in Phase 2:</strong> verdict emission (G2) and the attribution tuple. <code>α</code>
+<p><strong>Verdict emission (G2) closed.</strong> <code>src/verdict_spool.rs</code> signs one verdict per
+evaluated constraint at the moment the constraint fires, and appends it locally;
+<code>hank verdicts</code> promotes the spool to quipu. It is a spool and not a direct
+call because the guard runs inside <code>PreToolUse</code> under a <code>deadline_ms</code> that
+defaults to 100 ms, and a <code>/knot</code> round-trip is not that — the projection path
+already records what an unbounded quipu call does here (a wedged quipu held the
+guard for two minutes). Promotion on the edit path would make every agent's
+edit latency a function of quipu's availability, to record a fact nobody needs
+until an audit. Signing is microseconds; the verdict is durable at the moment
+of decision and stays bound to the evidence hash it was signed over, so the
+delay costs nothing.</p>
+<p>Four judgement calls in it worth naming:</p>
+<ul>
+<li><strong>The guard never mints a signing key.</strong> <code>verdict::load_or_generate</code> creates
+one when absent, and a keypair materialising as a side effect of an agent's
+edit should not happen quietly. On the hook path only an <em>existing</em> key signs;
+<code>hank verifier</code> is the deliberate act that creates one.</li>
+<li><strong>The verdict records what the PREDICATE concluded, not what the guard did.</strong>
+A constraint can be unsatisfied while the mode declined to block. Conflating
+them would make an advise-mode fleet indistinguishable from a compliant one in
+the governed record; the response lives in the trace record beside it.</li>
+<li><strong><code>unknown</code> spools nothing.</strong> An unknown verdict asserts "there was no
+evidence", and a constraint hank evaluated had evidence by construction.
+Minting satisfied or unsatisfied for it would be a signed claim about
+something that concluded neither.</li>
+<li><strong>A rejected verdict is retained, never dropped.</strong> The drain truncates only
+when every line was accepted. A rejection is a fact about the verdict — a
+shape violation, an unregistered verifier — and truncating past it would erase
+exactly the record worth investigating.</li>
+</ul>
+<p><strong>Freshness stopped being a lie in two places.</strong> <code>verdict_turtle</code> hardcoded
+<code>aegis:freshness "fresh"</code>, so every verdict hank could have promoted would have
+claimed currency it never checked. It now takes the real value, and <code>Decision</code>
+carries the currency of the policy set that produced it — a parameter rather
+than a defaulted field, because a default would be <code>Fresh</code> and every caller who
+forgot it would rebuild the same defect. The trace record carries it as
+<code>policy_freshness</code>, which is what stops a soak window counting verdicts computed
+against a stale projection as evidence about current policy.</p>
+<p><code>Recomputing</code> maps to <code>stale</code> on the verdict and stays itself on the trace
+record: <code>aegis:freshness</code> admits only fresh/stale and the conservative reading is
+the only one that cannot overstate, while a trace record is diagnostic and the
+distinction is real. Two audiences, two mappings, each stated where it applies.</p>
+<p><strong>Still open in Phase 2:</strong> the attribution tuple. <code>α</code>
 remains partial by design — hank can supply <code>tool</code>, <code>executor</code> and <code>C_eval</code>
 honestly, but the principal chain <code>P</code> and intersected authority <code>auth</code> need
 multi-tenancy quipu does not have. They are absent from the record rather than
