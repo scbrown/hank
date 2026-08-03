@@ -17,6 +17,7 @@ use serde::Serialize;
 
 use std::collections::BTreeSet;
 
+use super::state_tools::{StateGuardRequest, StateIngestRequest, StateWhatIfRequest};
 use super::tools::PromoteRequest;
 #[cfg(feature = "quipu")]
 use super::tools::PromoteResponse;
@@ -53,6 +54,12 @@ pub struct HankMcpServer {
     /// on every config read so `hank serve --config` is not silently ignored
     /// (aegis-ll3p).
     config: Option<PathBuf>,
+    /// The FR-39 board layer this PROCESS holds (see
+    /// [`super::state_handlers`]). Shared across clones of the server, so every
+    /// tool call in one process sees one board — and, necessarily, a board
+    /// ingested into a DIFFERENT process is not this one.
+    #[cfg(feature = "game-state")]
+    board: std::sync::Arc<std::sync::RwLock<crate::state::StateRegistry>>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -65,6 +72,8 @@ impl HankMcpServer {
             root,
             tenant,
             config,
+            #[cfg(feature = "game-state")]
+            board: std::sync::Arc::new(std::sync::RwLock::new(crate::state::StateRegistry::new())),
             tool_router: Self::tool_router(),
         }
     }
@@ -125,83 +134,7 @@ impl HankMcpServer {
         &self,
         Parameters(req): Parameters<ReferencesRequest>,
     ) -> Result<CallToolResult, McpError> {
-        // A position-based request (FR-4, hank #8) needs the node SPANS, which
-        // the daemon's `/references` reply does not carry — so it takes the
-        // transient path, like a `path`-scoped one. Slower, and correct;
-        // answering it from a name lookup would hand back every same-named
-        // symbol, which is the ambiguity the position was given to resolve.
-        let by_position = req.at_file.is_some() || req.at_line.is_some();
-        if req.path.is_none() && !by_position {
-            if let Some(symbol) = req.symbol.as_deref() {
-                if let Some(response) =
-                    super::resident::references(self.config.as_deref(), &self.root, symbol)
-                {
-                    return json_result(&response);
-                }
-            }
-        }
-        let base = req
-            .path
-            .as_ref()
-            .map_or_else(|| self.root.clone(), |p| self.root.join(p));
-        // Build the multi-language graph, exactly as the resident path above
-        // resolves against one. This walked `rust_files` and parsed every hit as
-        // `"rust"`, so a `path`-scoped request (which always lands here, daemon
-        // or not) over a Python tree searched ZERO files and answered "no
-        // definitions" — the CLI-side hank #76 bug, same cause, second surface.
-        let graph = match CodeGraph::build(&base) {
-            Ok(graph) => graph,
-            Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
-        };
-        let to_item = |symbol: &crate::graph::SymbolNode| RefItem {
-            file: symbol.file.clone(),
-            name: symbol.name.clone(),
-            kind: symbol.kind.clone(),
-            start_line: symbol.start_line,
-            tier: symbol.tier.as_str().to_string(),
-        };
-        let (queried, definitions): (String, Vec<RefItem>) =
-            match (&req.symbol, &req.at_file, req.at_line) {
-                // Position wins when given: it is the more specific request.
-                (_, Some(file), Some(line)) => {
-                    let hit = graph.symbol_at(file, line);
-                    (
-                        hit.map_or_else(|| format!("{file}:{line}"), |n| n.name.clone()),
-                        hit.into_iter().map(to_item).collect(),
-                    )
-                }
-                // Half a position is not a position. Refuse rather than quietly
-                // dropping to a name lookup the caller did not ask for — a silent
-                // downgrade would answer a "which one is here" question with "all
-                // of them", the exact over-connection this parameter exists to cut.
-                (_, Some(_), None) | (_, None, Some(_)) => {
-                    return Err(McpError::invalid_params(
-                        "at_file and at_line go together: give both for a position-based lookup, \
-                     or neither and use `symbol`."
-                            .to_string(),
-                        None,
-                    ));
-                }
-                (Some(name), None, None) => (
-                    name.clone(),
-                    graph.definitions(name).into_iter().map(to_item).collect(),
-                ),
-                (None, None, None) => {
-                    return Err(McpError::invalid_params(
-                        "give `symbol`, or `at_file` + `at_line` to resolve by position."
-                            .to_string(),
-                        None,
-                    ));
-                }
-            };
-        let response = ReferencesResponse {
-            symbol: queried,
-            count: definitions.len(),
-            definitions,
-            searched_symbols: Some(graph.stats().0),
-            tier: crate::types::Tier::TreeSitter.as_str().to_string(),
-        };
-        json_result(&response)
+        handlers::references(self, &req)
     }
 
     #[tool(
@@ -407,6 +340,39 @@ impl HankMcpServer {
     ) -> Result<CallToolResult, McpError> {
         handlers::dataflow(self, &req)
     }
+
+    // The three board tools (FR-35/37/38). Always REGISTERED for the same reason
+    // `hank_promote` is — the `#[tool_router]` macro references every `#[tool]`
+    // method unconditionally — with the BODY feature-split on `game-state`.
+    #[tool(
+        description = "Ingest generic (non-code) facts into the hot board graph: {entities[], edges[], game_id, faction_id, visibility, provenance}. The node/edge JSON mirrors quipu_episode, so one adapter output feeds both stores. `visibility` has NO default and MUST be stated: `shared` writes the game's common-knowledge base that every faction reads, `private` writes only this faction's copy-on-write overlay. A shared write carrying a faction is refused and counted — that is a fog-of-war leak. Facts are tagged tier `engine-state`. Best for: 'load this turn's world view before guarding a move'."
+    )]
+    async fn hank_ingest(
+        &self,
+        Parameters(req): Parameters<StateIngestRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        state_handlers::ingest(self, &req)
+    }
+
+    #[tool(
+        description = "Check proposed orders against game-state policies, over a copy-on-write overlay of THIS faction's board — the (game_state + proposed_orders) analog of hank_verify. Returns violations (deny) and advisories (warn), each naming the offending order ids, plus `unevaluated` and `vacuous` for policies that could not run or whose selector matched nothing. REFUSES if no board was ingested into this process, rather than reporting zero violations over an empty board. COMPLEMENTS the game engine, which remains the sole authority on legality: this can only subtract from, or annotate, moves that are already legal, and it judges an APPROXIMATED post-order board built from each order's declared effects. Best for: 'would these orders break one of our standing rules?'."
+    )]
+    async fn hank_guard(
+        &self,
+        Parameters(req): Parameters<StateGuardRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        state_handlers::guard(self, &req)
+    }
+
+    #[tool(
+        description = "Speculatively apply an order set to this faction's board and return what it changes and what those changes reach, ranked nearest-then-largest — hank_impact generalized from the call graph to the board. Nothing is committed. Structural only: which entities a change reaches, how far, by which relations, over the adapter's own vocabulary — domain judgements like 'is this base exposed' are graph-pattern policies via hank_guard, not hardcoded here. Contrast with quipu_impact, which is durable and cross-game; this is ephemeral, this-turn and tactical. Best for: 'what does this move expose?'."
+    )]
+    async fn hank_whatif(
+        &self,
+        Parameters(req): Parameters<StateWhatIfRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        state_handlers::whatif(self, &req)
+    }
 }
 
 impl HankMcpServer {
@@ -490,6 +456,10 @@ fn reach_item(reached: &Reached) -> ReachItem {
 // `hank_promote` and `hank_dataflow` call into it at runtime.
 #[path = "handlers.rs"]
 mod handlers;
+
+// The board tool bodies (FR-35/37/38), feature-split on `game-state`.
+#[path = "state_handlers.rs"]
+mod state_handlers;
 
 // The FR-3 enforcement walk (aegis-8yrn) lives in a size-exempt sibling file so
 // it can call the private tool handlers as a child module without pushing

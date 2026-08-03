@@ -31,6 +31,7 @@ use crate::types::Tier;
 ///
 /// The string forms match Quipu's `aegis:matchType` enum so a projected policy
 /// round-trips.
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MatchType {

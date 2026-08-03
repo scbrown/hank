@@ -34,6 +34,38 @@ pub struct EngineStatus {
     /// the layer is ABSENT (the root is not a git repo, so there is no commit
     /// to anchor a shared base to) — distinct from present-with-no-overlays.
     pub tenant_layer: Option<crate::graph::RegistryStatus>,
+    /// The FR-39 board layer: games resident, their shared bases, and each
+    /// faction's overlay size. `None` when this build has no `game-state`
+    /// engine — which is a different fact from an engine holding no games, and
+    /// the two must not read alike: the first means `/guard` does not exist
+    /// here, the second means it exists and would refuse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_layer: Option<BoardLayerStatus>,
+}
+
+/// The board layer in an [`EngineStatus`]. A plain mirror of
+/// `crate::state::StateStatus` so the wire type stays compilable without the
+/// `game-state` feature — the field must EXIST on every build for the "absent
+/// engine vs. empty engine" distinction above to be expressible.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BoardLayerStatus {
+    /// Games resident, with their factions.
+    pub games: Vec<BoardGameStatus>,
+    /// Shared writes refused for carrying a faction (the fog-leak counter).
+    pub fog_leaks_blocked: usize,
+}
+
+/// One game in a [`BoardLayerStatus`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BoardGameStatus {
+    /// The game.
+    pub game_id: String,
+    /// Entities in its shared, common-knowledge base.
+    pub shared_nodes: usize,
+    /// Relationships in that base.
+    pub shared_edges: usize,
+    /// `faction_id` → `(overlay entities, overlay relationships)`.
+    pub factions: Vec<(String, usize, usize)>,
 }
 
 /// One advised symbol in an [`EditReply`]: a symbol of the edited file that

@@ -1297,17 +1297,21 @@ have grown from single files into modules.
 `serve` (`mcp` feature), `completions` — all live. `promote` — live behind
 the `quipu` feature (SHACL-validate, then write); a phase notice without it.
 
-**MCP tools (11, `mcp` feature):** `hank_status`, `hank_symbols`,
+**MCP tools (14, `mcp` feature):** `hank_status`, `hank_symbols`,
 `hank_references`, `hank_analyze`, `hank_callers`, `hank_callees`, `hank_impact`
 (with `cochange`), `hank_communities`, `hank_dataflow`, `hank_verify`,
-`hank_promote` (writes to Quipu; needs the `quipu` feature). Over
-stdio + streamable-HTTP.
+`hank_promote` (writes to Quipu; needs the `quipu` feature), `hank_ingest`,
+`hank_guard`, `hank_whatif` (the game-state harness; need the `game-state`
+feature). Over stdio + streamable-HTTP.
 
-**Cargo features:** `default = []`; `mcp`, `langs-extra`, `quipu` (all off by
-default; `mcp` in the CI matrix). `langs-extra` deps are declared but extractors
-are Rust-only so far. `cpg` and `lsp` are planned but are NOT features yet — an
-empty feature that gates nothing lets a build advertise a tier it cannot serve
-(aegis-qe5z); each returns when it gates a real extractor.
+**Cargo features:** `default = []`; `mcp`, `langs-extra`, `quipu`, `game-state`
+(all off by default; `mcp`, `quipu` and `game-state` in the CI matrix).
+`langs-extra` deps are declared but extractors are Rust-only so far. `cpg` and
+`lsp` are planned but are NOT features yet — an empty feature that gates nothing
+lets a build advertise a tier it cannot serve; each returns when it
+gates a real extractor. `game-state` is not that shape: it gates `src/state/`,
+the ingestion engine itself, which is why `Tier::served()` may key the
+`engine-state` tier on it.
 
 **Tests:** 27 (19 unit + 8 integration via `assert_cmd`), green on `default` and
 `mcp`. Quality gate green: `cargo fmt`, `clippy -D warnings` (both arms),

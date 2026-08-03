@@ -145,3 +145,86 @@ pub(super) fn dataflow(
     };
     json_result(&response)
 }
+
+/// Body of `hank_references`.
+pub(super) fn references(
+    server: &HankMcpServer,
+    req: &ReferencesRequest,
+) -> Result<CallToolResult, McpError> {
+    // A position-based request (FR-4, hank #8) needs the node SPANS, which
+    // the daemon's `/references` reply does not carry — so it takes the
+    // transient path, like a `path`-scoped one. Slower, and correct;
+    // answering it from a name lookup would hand back every same-named
+    // symbol, which is the ambiguity the position was given to resolve.
+    let by_position = req.at_file.is_some() || req.at_line.is_some();
+    if req.path.is_none() && !by_position {
+        if let Some(symbol) = req.symbol.as_deref() {
+            if let Some(response) =
+                crate::mcp::resident::references(server.config.as_deref(), &server.root, symbol)
+            {
+                return json_result(&response);
+            }
+        }
+    }
+    let base = req
+        .path
+        .as_ref()
+        .map_or_else(|| server.root.clone(), |p| server.root.join(p));
+    // Build the multi-language graph, exactly as the resident path above
+    // resolves against one. This walked `rust_files` and parsed every hit as
+    // `"rust"`, so a `path`-scoped request (which always lands here, daemon
+    // or not) over a Python tree searched ZERO files and answered "no
+    // definitions" — the CLI-side hank #76 bug, same cause, second surface.
+    let graph = match CodeGraph::build(&base) {
+        Ok(graph) => graph,
+        Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
+    };
+    let to_item = |symbol: &crate::graph::SymbolNode| RefItem {
+        file: symbol.file.clone(),
+        name: symbol.name.clone(),
+        kind: symbol.kind.clone(),
+        start_line: symbol.start_line,
+        tier: symbol.tier.as_str().to_string(),
+    };
+    let (queried, definitions): (String, Vec<RefItem>) =
+        match (&req.symbol, &req.at_file, req.at_line) {
+            // Position wins when given: it is the more specific request.
+            (_, Some(file), Some(line)) => {
+                let hit = graph.symbol_at(file, line);
+                (
+                    hit.map_or_else(|| format!("{file}:{line}"), |n| n.name.clone()),
+                    hit.into_iter().map(to_item).collect(),
+                )
+            }
+            // Half a position is not a position. Refuse rather than quietly
+            // dropping to a name lookup the caller did not ask for — a silent
+            // downgrade would answer a "which one is here" question with "all
+            // of them", the exact over-connection this parameter exists to cut.
+            (_, Some(_), None) | (_, None, Some(_)) => {
+                return Err(McpError::invalid_params(
+                    "at_file and at_line go together: give both for a position-based lookup, \
+                     or neither and use `symbol`."
+                        .to_string(),
+                    None,
+                ));
+            }
+            (Some(name), None, None) => (
+                name.clone(),
+                graph.definitions(name).into_iter().map(to_item).collect(),
+            ),
+            (None, None, None) => {
+                return Err(McpError::invalid_params(
+                    "give `symbol`, or `at_file` + `at_line` to resolve by position.".to_string(),
+                    None,
+                ));
+            }
+        };
+    let response = ReferencesResponse {
+        symbol: queried,
+        count: definitions.len(),
+        definitions,
+        searched_symbols: Some(graph.stats().0),
+        tier: crate::types::Tier::TreeSitter.as_str().to_string(),
+    };
+    json_result(&response)
+}

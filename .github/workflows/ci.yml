@@ -36,6 +36,10 @@ jobs:
             flags: "--features quipu"
           - name: mcp+quipu
             flags: "--features mcp,quipu"
+          - name: game-state
+            flags: "--features game-state"
+          - name: mcp+game-state
+            flags: "--features mcp,game-state"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -69,6 +73,10 @@ jobs:
             flags: "--features quipu"
           - name: mcp+quipu
             flags: "--features mcp,quipu"
+          - name: game-state
+            flags: "--features game-state"
+          - name: mcp+game-state
+            flags: "--features mcp,game-state"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -88,6 +96,13 @@ jobs:
   # "ship dark" (Bobbin's hard-won lesson). --features quipu joined in Phase 4
   # (promotion): its tests are in-process (rudof SHACL) and the refusal path
   # returns before any network call, so the arm needs no live Quipu.
+  #
+  # --features game-state joined with the FR-35..FR-39 harness, in the same
+  # change that added the feature. Both arms are needed, not just the combined
+  # one: `game-state` alone covers the engine and its tenancy, and
+  # `mcp,game-state` is the only arm that compiles the /ingest, /guard and
+  # /whatif surfaces plus the three MCP tools. The engine is pure in-memory —
+  # no network, no fixtures — so both are self-contained.
 
   build:
     name: Build

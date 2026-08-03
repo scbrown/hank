@@ -36,6 +36,8 @@ use crate::policy::PolicyConfig;
 pub mod client;
 #[cfg(feature = "mcp")]
 pub(crate) mod http;
+#[cfg(all(feature = "mcp", feature = "game-state"))]
+pub(crate) mod state_http;
 mod tenanted;
 pub mod wire;
 
@@ -70,6 +72,13 @@ struct Engine {
     /// working-tree delta at startup is visible to the legacy surface and
     /// absent from tenant views until a tenant touches those files.
     registry: Option<RwLock<TenantRegistry>>,
+    /// The FR-39 board layer: one shared base per game, one overlay per
+    /// `(game, faction)`. Unlike `registry` this is never `None` — a board is
+    /// built by ingestion, not by a repo, so there is nothing for it to be
+    /// absent FOR. It starts empty, and an empty board is REFUSED by the guard
+    /// rather than reported as clean (see [`crate::state`]).
+    #[cfg(feature = "game-state")]
+    board: RwLock<crate::state::StateRegistry>,
 }
 
 impl ResidentEngine {
@@ -98,8 +107,20 @@ impl ResidentEngine {
                 nodes,
                 edges,
                 registry,
+                #[cfg(feature = "game-state")]
+                board: RwLock::new(crate::state::StateRegistry::new()),
             }),
         })
+    }
+
+    /// The FR-39 board layer, for the `/ingest`, `/guard` and `/whatif`
+    /// endpoints. Behind an `RwLock` because ingestion mutates while guard and
+    /// what-if only read — and because what-if speculates on a CLONE of the
+    /// overlay, a long speculation never holds a write lock.
+    #[cfg(feature = "game-state")]
+    #[must_use]
+    pub fn board(&self) -> &RwLock<crate::state::StateRegistry> {
+        &self.inner.board
     }
 
     /// The resident graph. Query endpoints (stage 2) borrow this; nothing mutates
@@ -231,7 +252,39 @@ impl ResidentEngine {
                 .as_ref()
                 .and_then(|lock| lock.read().ok())
                 .map(|reg| reg.status()),
+            board_layer: self.board_status(),
         }
+    }
+
+    /// The board layer for [`EngineStatus`]. `None` on a build without the
+    /// `game-state` engine — see the field's docs for why that must not read the
+    /// same as an engine holding no games.
+    #[cfg(feature = "game-state")]
+    fn board_status(&self) -> Option<wire::BoardLayerStatus> {
+        let status = self.inner.board.read().ok()?.status();
+        Some(wire::BoardLayerStatus {
+            fog_leaks_blocked: status.fog_leaks_blocked,
+            games: status
+                .games
+                .into_iter()
+                .map(|g| wire::BoardGameStatus {
+                    game_id: g.game_id,
+                    shared_nodes: g.shared_nodes,
+                    shared_edges: g.shared_edges,
+                    factions: g
+                        .factions
+                        .into_iter()
+                        .map(|f| (f.faction_id, f.overlay_nodes, f.overlay_edges))
+                        .collect(),
+                })
+                .collect(),
+        })
+    }
+
+    #[cfg(not(feature = "game-state"))]
+    #[allow(clippy::unused_self)]
+    fn board_status(&self) -> Option<wire::BoardLayerStatus> {
+        None
     }
 }
 

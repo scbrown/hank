@@ -29,8 +29,14 @@ use crate::dataflow::{Dataflow, FlowDir};
 use crate::graph::Dir;
 
 /// Build the daemon router over a resident engine.
+///
+/// The FR-35/37/38 board routes are merged in from [`super::state_http`] when
+/// the `game-state` engine is compiled in — and are ABSENT otherwise, so a build
+/// without the engine 404s on `/guard` rather than mounting a route that cannot
+/// answer.
 pub fn router(engine: ResidentEngine) -> Router {
-    Router::new()
+    #[allow(unused_mut)]
+    let mut router = Router::new()
         .route("/health", get(health))
         .route("/status", get(status))
         .route("/callers", get(callers))
@@ -40,8 +46,12 @@ pub fn router(engine: ResidentEngine) -> Router {
         .route("/symbols", get(symbols))
         .route("/dataflow", get(dataflow))
         .route("/measure", post(measure))
-        .route("/edit", post(edit))
-        .with_state(engine)
+        .route("/edit", post(edit));
+    #[cfg(feature = "game-state")]
+    {
+        router = router.merge(super::state_http::routes());
+    }
+    router.with_state(engine)
 }
 
 /// Liveness: a healthy daemon answers 200. The [`super::client::probe`] keys on

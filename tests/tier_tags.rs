@@ -84,10 +84,17 @@ fn refs_not_found_message_is_unchanged() {
 
 #[test]
 fn status_json_advertises_only_implemented_tiers() {
-    // aegis-qe5z: `hank status` used to push "lsp"/"cpg" onto the advertised tier
+    // `hank status` used to push "lsp"/"cpg" onto the advertised tier
     // list under empty Cargo features that gated no code, so `--features lsp` made
-    // the tool claim a precision tier it did not have. status now advertises exactly
-    // the tiers with a real extractor — treesitter alone today.
+    // the tool claim a precision tier it did not have. status now advertises a tier
+    // only when something can actually produce one.
+    //
+    // `engine-state` (FR-35) is the one tier that varies by build, and it varies
+    // WITH ITS ENGINE rather than with a bare flag: `game-state` gates
+    // `src/state/`, which is the ingestion path itself. Asserted in both
+    // directions — advertising it without the engine repeats the empty-feature
+    // lie, and omitting it WITH the engine sends a consumer looking for a tier
+    // this binary really serves.
     let out = Command::cargo_bin("hank")
         .unwrap()
         .args(["status", "--json"])
@@ -97,9 +104,13 @@ fn status_json_advertises_only_implemented_tiers() {
         .stdout
         .clone();
     let v: serde_json::Value = serde_json::from_slice(&out).expect("stdout is JSON");
+    let tiers = v["tiers"].as_array().expect("tiers is an array").clone();
+    assert!(tiers.contains(&serde_json::json!("treesitter")));
+    assert!(!tiers.contains(&serde_json::json!("lsp")));
+    assert!(!tiers.contains(&serde_json::json!("cpg")));
     assert_eq!(
-        v["tiers"],
-        serde_json::json!(["treesitter"]),
-        "status advertised an unimplemented tier: {v}"
+        tiers.contains(&serde_json::json!("engine-state")),
+        cfg!(feature = "game-state"),
+        "status advertised a tier out of step with its engine: {v}"
     );
 }

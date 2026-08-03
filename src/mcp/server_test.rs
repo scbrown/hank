@@ -331,15 +331,26 @@ async fn every_fact_serving_response_carries_a_tier() {
 
 #[tokio::test]
 async fn status_advertises_only_implemented_tiers() {
-    // aegis-qe5z: hank_status must claim a tier only when it is real. The extractor
-    // assigns TreeSitter alone, so status advertises exactly ["treesitter"] — never
-    // lsp/cpg, which have no implementation and are no longer even Cargo features.
+    // hank_status must claim a tier only when it is real. The extractor
+    // assigns TreeSitter, so that is always advertised — never lsp/cpg, which have
+    // no implementation and are no longer even Cargo features.
+    //
+    // `engine-state` (FR-35) is the one tier that varies, and it varies WITH ITS
+    // ENGINE, not with a bare flag: `game-state` gates `crate::state`, which is
+    // the ingestion path itself. Asserted in both directions so neither
+    // "advertised without the engine" nor "engine built but not advertised" can
+    // pass — the first is the empty-feature lie this test was written for, the
+    // second sends a consumer looking for a tier the build really serves.
     let dir = fixture();
     let payload = served(server(&dir).hank_status().await);
+    let tiers = payload["tiers"].as_array().unwrap().clone();
+    assert!(tiers.contains(&serde_json::json!("treesitter")));
+    assert!(!tiers.contains(&serde_json::json!("lsp")));
+    assert!(!tiers.contains(&serde_json::json!("cpg")));
     assert_eq!(
-        payload["tiers"],
-        serde_json::json!(["treesitter"]),
-        "status advertised a tier with no implementation: {payload}"
+        tiers.contains(&serde_json::json!("engine-state")),
+        cfg!(feature = "game-state"),
+        "status advertised a tier out of step with its engine: {payload}"
     );
 }
 

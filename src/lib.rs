@@ -50,6 +50,11 @@ pub mod promote;
 pub mod reconcile;
 mod render;
 pub mod rules;
+/// The game-state harness (FR-35..FR-39): a generic in-memory fact graph, a
+/// `graph-pattern` policy plane over it, and `(game, faction)` tenancy. Gated so
+/// a build that cannot ingest a board does not advertise the tier.
+#[cfg(feature = "game-state")]
+pub mod state;
 pub mod textrules;
 pub mod throttle;
 pub mod trace;

@@ -142,6 +142,12 @@ langs-extra = [
 # `Tier::served()` (src/types.rs) — the two must move together.
 # Phase 4: promote committed facts into Quipu, SHACL-validated.
 quipu = ["dep:oxrdf", "dep:oxttl", "dep:oxrdfio", "dep:rudof_lib", "dep:ureq", "dep:ring"]
+# FR-35..FR-39: the game-state harness — generic (non-code) fact ingestion, the
+# `graph-pattern` policy plane, the order guard, speculative what-if, and
+# per-(game, faction) tenancy. Unlike the removed `lsp`/`cpg` flags, this one
+# gates a real engine (`src/state/`), which is why `Tier::served()` may key the
+# `engine-state` tier on it. It joins the CI matrix in this same change.
+game-state = []
 
 [dev-dependencies]
 tempfile = "3"

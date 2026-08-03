@@ -15,6 +15,7 @@
 - [The Tenancy Model](concepts/tenancy-model.md)
 - [Tiers and Freshness](concepts/tiers-and-freshness.md)
 - [Promotion to Quipu](concepts/promotion.md)
+- [The Game-State Harness](concepts/game-state.md)
 
 # Reference
 

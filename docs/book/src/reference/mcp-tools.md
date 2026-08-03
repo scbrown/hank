@@ -33,6 +33,15 @@ hank serve --http     # streamable-HTTP at http://127.0.0.1:3040/mcp
 | `hank_dataflow` | Intra-procedural data dependence within a function |
 | `hank_verify` | Verdict on a **proposed** edit buffer, before you write it (FR-23/FR-24) |
 | `hank_promote` | Promote a subtree's facts to Quipu — SHACL-validate, then write (needs the `quipu` feature) |
+| `hank_ingest` | Load generic (non-code) facts into the hot board graph (FR-35; needs the `game-state` feature) |
+| `hank_guard` | Check proposed orders against game-state policies (FR-37; needs the `game-state` feature) |
+| `hank_whatif` | Speculative, uncommitted impact of an order set over the board (FR-38; needs the `game-state` feature) |
+
+The last three are the **game-state harness**. They are registered on every
+build, as `hank_promote` is, and refuse with a message naming the feature when
+it is absent — a tool that accepted a board and silently did nothing would be
+worse than one that is missing, because the caller would believe it had guarded.
+See [The Game-State Harness](../concepts/game-state.md).
 
 ## `hank_references`
 

@@ -31,6 +31,20 @@ pub enum Tier {
     Lsp,
     /// Control/data dependence from the code property graph.
     Cpg,
+    /// A fact an engine ADAPTER stated, not one Hank derived from source
+    /// (FR-35). Its provenance is an adapter id + turn + faction, never a
+    /// `file:line` — see [`crate::state`].
+    ///
+    /// It is a peer of the code tiers, not a rung above or below them: a board
+    /// fact and a code fact must be equally impossible to mistake for each
+    /// other, in BOTH directions. Nothing here is span-anchored, so a consumer
+    /// that reads an `engine-state` fact as if it pointed at source is wrong in
+    /// the same way FR-3 exists to prevent.
+    ///
+    /// Renamed explicitly: the enum's `snake_case` rule would serialize this as
+    /// `engine_state`, and the addendum fixes the spelling as `engine-state`.
+    #[serde(rename = "engine-state")]
+    EngineState,
 }
 
 /// How current a served fact is relative to the tenant's working copy.
@@ -72,6 +86,7 @@ impl Tier {
             Tier::TreeSitter => "treesitter",
             Tier::Lsp => "lsp",
             Tier::Cpg => "cpg",
+            Tier::EngineState => "engine-state",
         }
     }
 
@@ -90,9 +105,22 @@ impl Tier {
     /// When a tier gains a real implementation, add it HERE, gated on that
     /// implementation (a `Vec` push behind the module that provides it) — never on
     /// a bare feature flag, which can be enabled without the code existing.
+    ///
+    /// `engine-state` (FR-35) obeys that rule rather than bending it: the
+    /// `game-state` feature gates [`crate::state`], which is the ingestion
+    /// engine itself, so the flag and the implementation are the same thing
+    /// here — unlike the removed `lsp`/`cpg` flags, which gated nothing. A build
+    /// without `game-state` has no `/ingest` to state a fact through and so does
+    /// not advertise the tier.
     #[must_use]
     pub fn served() -> Vec<String> {
-        vec![Tier::TreeSitter.as_str().to_string()]
+        // `mut` is used only on the `game-state` arm; without the allow, the
+        // default build fails `-D warnings` on an unused `mut`.
+        #[allow(unused_mut)]
+        let mut tiers = vec![Tier::TreeSitter.as_str().to_string()];
+        #[cfg(feature = "game-state")]
+        tiers.push(Tier::EngineState.as_str().to_string());
+        tiers
     }
 }
 
@@ -218,12 +246,46 @@ mod tests {
 
     #[test]
     fn served_tiers_are_only_implemented_ones() {
-        // aegis-qe5z: status must advertise a tier only when it is real. Today
-        // the extractor assigns TreeSitter alone, so that is all `served()` may
-        // claim — never `lsp`/`cpg`, which have no implementation. A push of an
-        // unimplemented tier here (or a re-introduced empty feature) fails this.
-        assert_eq!(Tier::served(), vec!["treesitter".to_string()]);
+        // Status must advertise a tier only when it is real. The
+        // extractor assigns TreeSitter, so that is always claimed — never
+        // `lsp`/`cpg`, which have no implementation. A push of an unimplemented
+        // tier here (or a re-introduced empty feature) fails this.
+        assert!(Tier::served().contains(&"treesitter".to_string()));
         assert!(!Tier::served().contains(&"lsp".to_string()));
         assert!(!Tier::served().contains(&"cpg".to_string()));
+    }
+
+    /// The `engine-state` tier is advertised EXACTLY when the engine that can
+    /// produce one is compiled in — asserted in both directions, because the
+    /// failure this guards is symmetric. Advertising it without `game-state`
+    /// repeats the empty-feature lie; omitting it WITH `game-state` sends a
+    /// consumer looking for a tier the build actually serves.
+    #[test]
+    fn engine_state_is_advertised_exactly_when_its_engine_is_built() {
+        let advertised = Tier::served().contains(&"engine-state".to_string());
+        assert_eq!(advertised, cfg!(feature = "game-state"));
+    }
+
+    /// A board fact and a code fact must never render alike (FR-3, FR-35): the
+    /// wire strings are what a consumer discriminates on, so a collision here
+    /// would make the two indistinguishable downstream.
+    #[test]
+    fn every_tier_has_a_distinct_wire_string() {
+        let all = [Tier::TreeSitter, Tier::Lsp, Tier::Cpg, Tier::EngineState];
+        let distinct: std::collections::BTreeSet<&str> = all.iter().map(|t| t.as_str()).collect();
+        assert_eq!(distinct.len(), all.len());
+        assert_eq!(Tier::EngineState.as_str(), "engine-state");
+    }
+
+    /// The tier round-trips through serde under the name the addendum fixes.
+    /// `rename_all = "snake_case"` would render this variant `engine_state`, so
+    /// the explicit rename is load-bearing and a silent change to it would move
+    /// the wire contract without touching any prose.
+    #[test]
+    fn engine_state_serializes_as_the_addendum_spells_it() {
+        let json = serde_json::to_string(&Tier::EngineState).unwrap();
+        assert_eq!(json, "\"engine-state\"");
+        let back: Tier = serde_json::from_str("\"engine-state\"").unwrap();
+        assert_eq!(back, Tier::EngineState);
     }
 }
