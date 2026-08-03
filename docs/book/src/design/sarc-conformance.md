@@ -1,13 +1,17 @@
 # SARC Conformance — what hank × quipu still needs
 
-Status: **Phases 1–4 landed, Phase 6 substantially landed.** Constraint metadata
+Status: **Phases 1–5 landed; Phase 6 substantially landed.** Constraint metadata
 and placement; the Σ-derived trace record and signed verdict emission; a real
 Post-Action Auditor with `throttle`; an Escalation Router with a bounded
-reversibility window; authority intersection over named graphs and the
-attribution tuple. **Phase 5 (the `T ⊨ Σ` checker) is the main outstanding
-work**, and each "as built" section below ends with what it did *not* close. See
-[Build order](#build-order) for the phases and the "as built" sections for what
-actually shipped versus what was sketched.
+reversibility window; the `T ⊨ Σ` checker, the dispatch-graph inventory and the
+replay harness; authority intersection over named graphs and the attribution
+tuple.
+
+**Read the "as built" sections, not this line.** Each ends with what its phase
+did *not* close, and three of those matter: there is no Action-Time Monitor at
+all, the escalation queue has no server so `W_q < τ_rev` is unmeasured, and the
+trace is still a sequence rather than a tree. See [Build
+order](#build-order) for the phases as originally scoped.
 
 ## Why this document
 
@@ -202,13 +206,15 @@ As first written, and where each rung now stands:
   emission) — was "substantially met; I3 and I8 outstanding". **I3 met** by the
   Σ-derived trace record; I8 waits on the checker (Phase 5).
 - **Level 2** (PAA, soft constraints with calibrated operating points) — was "not
-  started". **PAA and `throttle` built**; the operating points are *declarable*
-  but not yet *calibrated*, which needs the replay harness in Phase 5. A declared
-  θ that no measurement backs is a number, not a calibration, and the ladder
-  should not be claimed on it.
+  started". **PAA and `throttle` built**, and the replay harness now measures the
+  promotion gates. But θ is calibratable rather than calibrated: replay counts
+  blocks and cannot label false positives, and bounds no false negatives at all.
+  A declared θ that no measurement backs is a number, not a calibration, and the
+  rung should not be claimed on one.
 - **Level 3** (ATM, ER with declared τ_rev) — **ER built** with a declared window
   and default-deny past it. **No ATM**: nothing observes an action mid-flight
-  (G6), so this rung is half met.
+  (G6), and the escalation queue has no server, so §5.3's `W_q < τ_rev` is
+  unmeasured. This rung is half met.
 - **Level 4** (multi-agent) — was "blocked on quipu multi-tenancy", which
   misdescribed the blocker. Authority intersection and the attribution tuple are
   built; the trace is still a sequence rather than a tree, so the
@@ -416,6 +422,28 @@ generalises from the SARC field list to every `aegis:` property the shape graph
 mentions; adding a constrained property without a declaration fails the build.
 A second test asserts no declaration carries a `rdfs:comment` that is merely its
 `rdfs:label` restated.
+
+**As built.** `governance_plane_properties_are_all_described` in
+`quipu/src/governance_tests.rs` does exactly that, over every `sh:path` in
+`governance.ttl`, with a non-vacuity floor — an extractor that silently found
+nothing would otherwise pass over an empty set.
+`every_description_says_more_than_its_own_label` is the second test; seven
+declarations were rewritten to pass it honestly rather than by lowering the bar.
+
+Two things came out differently. **`aegis:gate` carries two meanings** in this
+vocabulary — a Predicate's applicability condition, and the gate that produced an
+`aegis:Decision` — and the declaration records that rather than picking one, with
+a test asserting it still does. A reader who meets only one of the two will write
+code assuming it is the only one.
+
+And the scope is the **governance plane only**. The ~100 estate properties in
+`aegis-ontology.shapes.ttl` (`hostname`, `rig`, `park`, `plexId`) are excluded by
+name: their intended subjects are not all obvious from their shapes, and
+asserting domains by guess *materialises wrong `rdf:type`s* rather than merely
+documenting badly. `materialising_the_declarations_types_the_shipped_catalog_correctly`
+runs the reasoner over the shipped catalog and asserts no Selector or Predicate
+became a Policy — verified by mutation, since the materialisation is the risk and
+so is what the test has to exercise.
 
 **Why it earns its place.** Two consumers this stack has already committed to.
 The authoring surface ([Governance Plane](governance-plane.md) §Authoring) is
@@ -769,6 +797,115 @@ stays open, and it is named here rather than quietly dropped.
   both-outcomes, non-vacuity, recoverability, replay. This is what makes the
   Phase-1 operating point θ an honest number rather than a declared one, and it
   gates advise→enforce promotion per rule.
+
+*All three built; see [Phase 5, as built](#phase-5-as-built), including what
+replay measures and what it provably cannot.*
+
+### Phase 5, as built
+
+`quipu/src/governance/audit.rs` (+ `audit/passes.rs`, `audit_spec.rs`),
+`inventory.rs`, `replay.rs`, and `quipu audit <trace>|inventory|replay <trace>`.
+All three pieces landed. What is worth recording is where each one stops.
+
+#### The checker
+
+Four passes, each a comparison between two declared values and never a model
+call. Coverage, class-placement compatibility, outcome consistency, attribution
+completeness — plus the I6 claim-versus-record check described above.
+
+**Two severities, kept apart deliberately.** A **violation** is the trace
+contradicting Σ: a soft constraint that blocked, a declared `deny` that only
+warned under `enforce`, a record whose declared chain disagrees with the process
+that ran. An **incompleteness** is the trace not saying *enough* to decide: no
+principal chain, no declared class, a constraint Σ declares that this window
+never exercised. Collapsing them would break the checker in the direction that
+matters — report everything as a violation and an operator learns to ignore the
+output; report everything as an incompleteness and a soft constraint blocking an
+edit reads as a formatting note. Only violations change the exit code.
+
+**The outcome pass is mode-aware**, and has to be. `advise` has a declared
+ceiling, so a hard `deny` constraint that only warned is *correct* under `advise`
+and a violation under `enforce`. A check that ignored the mode would have to pick
+one of those two records to be wrong about.
+
+**The placement pass reuses `placement::points_for`** rather than carrying its
+own copy of Table 3. Two copies would eventually disagree, and the disagreement
+would be between the definition-time check and the audit-time one — the two
+places that must not.
+
+**What it cannot check, stated in the module doc rather than papered over.**
+SARC's coverage pass asks whether every constraint that *applied* to an action
+was evaluated. Deciding applicability means re-running the selector against the
+file as it stood, and quipu has neither the file nor the parser. What is
+checkable is the converse — nothing is cited that Σ does not define — plus
+vacuity. A checker reporting "coverage: pass" while testing something weaker
+would be the more dangerous artifact.
+
+Unreadable lines are **counted, never skipped**, and the count is in every
+summary even at zero. Conformance over a window that was only partly read is not
+conformance.
+
+#### The dispatch inventory (I7)
+
+`shapes/dispatch-inventory.ttl` turns
+`docs/work-scoped-governance.md` §"What this cannot reach" from prose into
+`aegis:ToolClass` facts. Prose goes stale the first time a harness adds a tool;
+nothing recomputes, and the list quietly becomes a description of last year's
+deployment.
+
+The distinction the whole thing exists for: an executable class traversing
+nothing with **no stated reason** is an unknown hole (violation); the same class
+with an `aegis:ungovernedReason` is an **acknowledged bypass surface**
+(incompleteness). Neither is "governed", and the checker never reports one as the
+other — without that split an operator cannot tell a decision from an oversight.
+Every acknowledged surface is reported on every run, because one an operator has
+stopped seeing is one they have stopped weighing.
+
+Plus the cross-check the other direction: a constraint placed at a point no
+executable class traverses **can never fire**. It reads as governance in the
+catalog and is inert in the deployment — the failure hardest to see from either
+side alone. An empty inventory is an incompleteness, never a pass: an unwritten
+dispatch graph is not an empty one.
+
+The seed file says in its own comment that nothing derives it from the harness's
+tool registry, so it can drift the way the prose did. The difference is that a
+drifted declaration is a wrong answer to a question something asks, rather than a
+paragraph nobody re-reads.
+
+#### The replay harness
+
+Five gates per rule — liveness, both-outcomes, in-spec, recoverability, and
+new-blocks (not a gate; the number an operator is actually deciding about).
+Recoverability walks the trace in **order**: a target cleared *before* its
+refusal proves nothing about whether anyone got past the rule, and counting it
+would make every rule that ever allowed anything look recoverable.
+
+Nothing is re-evaluated. The predicate needed the file as it stood and that file
+is gone, so replay is deterministic arithmetic over records rather than a
+simulation.
+
+**Three limits ride in the summary rather than in a footnote**, because a
+promotion number read without them is read as a safety claim:
+
+1. It measures only traffic that happened. A rule that would block a kind of edit
+   nobody attempted shows zero new blocks and is not therefore safe.
+2. It counts false-positive **candidates**, never false positives. A block is
+   wrong only if the action was legitimate, and no record carries that judgement
+   — it needs a human. Reporting `new_blocks` as an FP rate would be the
+   number-shaped fiction the operating point exists to replace.
+3. It bounds **no false negatives at all**. Actions a rule let through without
+   firing look exactly like actions it correctly approved.
+
+So θ is now *measurable in one direction and still undeclared in the other*, and
+the doc should not be read as saying the operating points are calibrated. They
+are calibratable.
+
+#### Still open in Phase 5
+
+There is no scheduler behind the Escalation Router, so §5.3's `W_q < τ_rev`
+remains unmeasured: the queue-depth and utilisation metrics need a queue with a
+server attached, and claiming the inequality from a store that only records
+requests would be the dashboard anti-pattern with extra steps.
 
 ### Phase 6 — Multi-agent
 
