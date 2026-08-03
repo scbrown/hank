@@ -107,6 +107,15 @@ pub struct Rule {
     /// rules at `hook post-edit`.
     #[serde(default)]
     pub verification_point: Option<VerificationPoint>,
+    /// The backoff a `throttle` response applies to SUBSEQUENT actions once this
+    /// constraint's window is crossed, mirroring `aegis:backoffFormula`.
+    ///
+    /// Only meaningful on a soft constraint at the PAA — the only place a
+    /// response can act on the next action rather than this one. `None` means
+    /// the constraint warns without throttling, which is the honest default: a
+    /// backoff nobody declared is a cost nobody agreed to.
+    #[serde(default)]
+    pub backoff_formula: Option<String>,
 }
 
 /// A single rule violation, with the text shown to the model.
@@ -276,6 +285,7 @@ mod tests {
             message: None,
             class: None,
             verification_point: None,
+            backoff_formula: None,
         }
     }
 

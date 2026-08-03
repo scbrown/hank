@@ -91,7 +91,7 @@ fn guard_recorded(
     config_override: Option<&Path>,
 ) -> (Outcome, Vec<(&'static str, serde_json::Value)>) {
     let started = Instant::now();
-    let decision = guard_inner(input_json, default_root, tenant, config_override);
+    let mut decision = guard_inner(input_json, default_root, tenant, config_override);
     let result = match &decision.outcome {
         Outcome::Allow => "allow",
         Outcome::Deny(_) => "deny",
@@ -171,6 +171,23 @@ fn guard_recorded(
     // and that migration is a separate change from the one adding the structure.
     if let Some(rule) = crate::trace::legacy_rule_field(&decision.constraints) {
         fields.push(("rule", rule.into()));
+    }
+
+    // Any throttle a previous PAA crossing recorded, surfaced on THIS edit —
+    // the whole point of a response placed at the post-action point. Purely
+    // additive: it never changes the outcome, only what the model is told, so a
+    // soft constraint cannot become a block by this route.
+    if matches!(decision.outcome, Outcome::Allow | Outcome::Notify(_)) {
+        let advisories =
+            super::paa::active_advisories(&root.display().to_string(), crate::throttle::now_secs());
+        if !advisories.is_empty() {
+            fields.push(("throttled", (advisories.len() as u64).into()));
+            let joined = advisories.join("\n");
+            decision.outcome = match decision.outcome {
+                Outcome::Notify(existing) => Outcome::Notify(format!("{existing}\n{joined}")),
+                _ => Outcome::Notify(joined),
+            };
+        }
     }
 
     // Sign and spool a verdict per evaluated constraint (SARC I3/I8). AFTER the

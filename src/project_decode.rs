@@ -233,6 +233,7 @@ pub fn decode_policies(sparql_json: &str) -> Result<Vec<ProjectedPolicy>> {
                 message: None,
                 class,
                 verification_point,
+                backoff_formula: optional("backoffFormula"),
             },
             effect,
             latency_budget_ms,

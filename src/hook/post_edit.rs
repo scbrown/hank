@@ -43,11 +43,26 @@ pub fn run_post_edit(tenant: Option<&str>) -> anyhow::Result<()> {
     std::io::stdin().lock().read_to_string(&mut buf).ok();
     let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
+    // Two independent things happen here, and they are kept independent on
+    // purpose. The blast-radius advisory bails early on anything it cannot
+    // reason about — a non-Rust file, a file with no symbols, an edit landing
+    // outside every symbol body. The AUDIT must not inherit those exits: a
+    // constraint declared at the PAA has to be evaluated whether or not this
+    // edit happened to have interesting callers, or its coverage would depend on
+    // a property of the file that has nothing to do with the rule.
+    let mut sections: Vec<String> = Vec::new();
+    if let Some(audit) = super::paa::post_action_audit(&buf, &root) {
+        sections.extend(audit);
+    }
     if let Some(text) = advisory_for(&buf, &root, tenant) {
+        sections.push(text);
+    }
+
+    if !sections.is_empty() {
         let envelope = serde_json::json!({
             "hookSpecificOutput": {
                 "hookEventName": "PostToolUse",
-                "additionalContext": text,
+                "additionalContext": sections.join("\n\n"),
             }
         });
         println!("{envelope}");

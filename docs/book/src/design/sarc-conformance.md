@@ -1,8 +1,8 @@
 # SARC Conformance — what hank × quipu still needs
 
-Status: **Phases 1 and 2 landed** (constraint metadata and placement; the
-Σ-derived trace record and signed verdict emission). Phase 3 completes the MVP;
-Phases 4–6 are scoped but not started. See [Build order](#build-order) for what each
+Status: **MVP complete** — Phases 1–3 landed (constraint metadata and placement;
+the Σ-derived trace record and signed verdict emission; a real Post-Action
+Auditor with `throttle`). Phases 4–6 are scoped but not started. See [Build order](#build-order) for what each
 phase covers and [Phase 1, as built](#phase-1-as-built) for what shipped.
 
 ## Why this document
@@ -100,6 +100,7 @@ rules share one vocabulary" — and phases it. Its phase 1 *is* SARC's I3. It is
 designed, not built.
 
 **G4 — The Post-Action Auditor is advisory context, not a constraint site.**
+**Closed in Phase 3.**
 
 `src/hook/post_edit.rs` injects blast-radius context after an edit. It evaluates
 no constraint, emits no verdict, and cannot prevent the *next* action — which is
@@ -575,6 +576,57 @@ Soft constraints stay non-blocking by construction. The PAA's "prevents the
 next, not the just-completed" semantics must be explicit in the module doc,
 because presenting it otherwise is the false-`prevented` claim the enforcement
 gradient exists to stop.
+
+### Phase 3, as built
+
+`src/hook/paa.rs` evaluates the constraints that DECLARE
+`verificationPoint "PAA"` against the completed file, records them in the same
+trace vocabulary the gate uses, and spools their verdicts.
+
+**The two points partition the rule set; they do not overlap.** A rule declaring
+`PAA` is skipped at the gate and judged here; one declaring `PAG`, or declaring
+nothing at all, is judged at the gate exactly as before the field existed. So a
+constraint is evaluated once and its verdict says where — auditing at both would
+record two verdicts for one action and make the coverage pass ambiguous.
+
+**A satisfied constraint is recorded, not skipped.** "The rule ran and held" and
+"the rule never ran" are different facts, and an absent evaluation reads as a
+constraint nobody applied.
+
+**The auditor never blocks, under any mode.** `Enforce` and `Advise` behave
+identically here; only `Off` disarms it. That is not an oversight — it is what
+makes the soft class mean something, and quipu's placement check already refuses
+to let a *hard* constraint declare itself at this point.
+
+**`throttle`, and what it honestly is.** A declared `backoffFormula` records an
+expiring, repo-scoped backoff (`src/throttle.rs`) that the next edit's advisory
+surfaces. It is `observed`, not `prevented`: an agent that ignores it proceeds.
+There is no timer and no sleeping — a throttle is state with an expiry, read by
+whatever hook runs next — so it is deliberately not described as rate limiting,
+which it cannot enforce. What it does buy is that a crossing is bounded,
+recorded, and visible to the next action instead of dissolving into a log line.
+
+Three judgement calls worth naming:
+
+- **An unparsed backoff formula applies no throttle and says so**, recording
+  `Response::NoAction`. A default would be a backoff nobody declared, under a
+  constraint whose entire point is that its cost *was* declared — and silently
+  warning instead would report the crossing as handled.
+- **Throttles are scoped to the repo root.** State is one file per user, not per
+  checkout. The first implementation was unscoped, and the test suite caught it
+  the way it deserved to be caught: tests passed alone and failed together,
+  because a throttle written by one leaked into another. In production the same
+  bug means a window crossed in one repo advises an agent editing an unrelated
+  one — an advisory that is true about something and false about the work in
+  front of it, which is how agents learn to ignore advisories.
+- **An unscoped record matches nothing rather than everything.** The permissive
+  reading of a legacy line would advise every repo on the host.
+
+**The audit runs independently of the blast-radius advisory.** `advisory_for`
+bails early on a non-Rust file, a file with no symbols, or an edit landing
+outside every symbol body. The auditor must not inherit those exits, or a
+constraint's coverage would depend on a property of the file with nothing to do
+with the rule.
 
 ### Phase 4 — Escalation Router (quipu, hank client)
 
