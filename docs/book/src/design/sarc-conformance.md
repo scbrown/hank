@@ -49,6 +49,10 @@ and nothing checks correspondence. This document names them and orders the work.
 | One-directional policy projection | quipu canonical → hank read cache | `src/project.rs`, `src/hook/rule_planes.rs` |
 | Confidence inputs | `tier ∈ {live,lsp,tree-sitter,committed,attested}` + `freshness` | shapes, FR-3 |
 | Layer discipline (SARC I6) | no rule lives in the prompt; declared, not yet verified against reality | [Governance Plane](governance-plane.md) |
+| Post-Action Auditor | `hank hook post-edit`, soft class + `throttle` | `src/hook/paa.rs`, `src/throttle.rs` |
+| Constraint class + placement | `aegis:constraintClass` / `verificationPoint`, checked at write | `quipu/src/governance/placement.rs` |
+| Σ-derived trace record | `constraints[]` with outcome, response and placement | `src/trace.rs` |
+| Signed verdicts, both sides | hank spools at the gate and the PAA; quipu persists the write gate's | `src/verdict_spool.rs`, `quipu/src/governance/verdict_facts.rs` |
 
 [Governance Plane](governance-plane.md) independently anticipates much of SARC —
 risk × confidence adaptive effect, verdict integrity, the out-of-band verifier,
@@ -79,19 +83,23 @@ constraint missing any field is not a constraint; it is a comment").
   and the shipped catalog sets neither.
 
 **G2 — The verdict path is built but not wired.** Violates I3 and I8 ([SARC]
-§3.5). **Closed in Phase 2.**
+§3.5). **Closed in Phase 2**, both halves.
 
-`src/verdict.rs` implements signing and `promote_verdict`, and it is correct —
-it mirrors quipu's scheme exactly so a hank-signed verdict verifies under
-quipu's root of trust. It has **no caller** outside `hank verdict-key` in
-`src/cli.rs`. A pre-edit guard decision — the exact moment a constraint fires —
-never becomes a governed fact. Symmetrically, quipu's own write-gate decision is
-not persisted (`Q-VERDICT-PERSIST`, open). Today the only enforcement record is
-a local, fail-silent JSONL spool.
+`src/verdict.rs` implemented signing and `promote_verdict` correctly — mirroring
+quipu's scheme so a hank-signed verdict verifies under quipu's root of trust —
+and had **no caller** outside `hank verdict-key`. A pre-edit guard decision, the
+exact moment a constraint fires, never became a governed fact. Symmetrically,
+quipu's own write-gate decision was not persisted (`Q-VERDICT-PERSIST`).
+
+Both now record. hank signs at the gate and at the PAA and spools locally,
+drained by `hank verdicts`; quipu stages its write-gate verdicts and flushes
+them *after* the savepoint resolves, so a denial's verdict survives the rollback
+that denial caused.
 
 **G3 — The trace is not derived from Σ.** Violates I3 ([SARC] §3.5: "the trace
-is generated; it is not reconstructed"), and I8 by consequence. **Partly closed
-in Phase 2** — see [Phase 2, as built](#phase-2-as-built).
+is generated; it is not reconstructed"), and I8 by consequence. **Closed for the
+constraint set in Phase 2**; the attribution half stays open under G7. See
+[Phase 2, as built](#phase-2-as-built).
 
 `src/metrics.rs` emitted `{kind, ts, agent, tenant, item, …}` per event. There
 was no pre/post state, no `constraints_evaluated` set with outcomes, no
