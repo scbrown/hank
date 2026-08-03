@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- *(guard)* Advisory for two agents mutating ONE working tree([544795b](https://github.com/scbrown/hank/commit/544795b280f46a4cc195676d3b0cc758101083b6))
+- *(guard)* Guard A — redundant re-read detection, with the discrimination that makes it usable([6d8689f](https://github.com/scbrown/hank/commit/6d8689f636ccf9636a39d9435cb1257305583177))
+- *(guard)* Delegate boundary — write-shaped work in territory you do not own([7bfca63](https://github.com/scbrown/hank/commit/7bfca6396196cad99022d9a3b56e9ef164bc6d45))
 - *(policy)* Project SARC constraint class and placement from quipu([3fcdf7f](https://github.com/scbrown/hank/commit/3fcdf7fa623ecc00ef8759114d154ee7dd9dd483))
 - *(trace)* Σ-derived constraint record, replacing the joined rule string([d24192c](https://github.com/scbrown/hank/commit/d24192cf08b76e58da8d5089d7fbfc169b62408d))
 - *(verdict)* Sign and spool verdicts at the moment a constraint fires([e448616](https://github.com/scbrown/hank/commit/e448616ea4ab9e65055a6d4aa45e50cb342620de))
@@ -13,10 +16,33 @@ All notable changes to this project will be documented in this file.
 - *(trace)* The attribution tuple, now that authority exists([eae8763](https://github.com/scbrown/hank/commit/eae8763faae1809a5a6d09f436397df75fbaae47))
 - *(hosting)* Check the claimed hosting layer against reality (H-SARC-I6)([fba8091](https://github.com/scbrown/hank/commit/fba8091643dacdca5ee8b5f896822044b5a4a0c3))
 
+### CI/CD
+
+- *(crates)* Give hank a publish path that is not a human with a token([489de89](https://github.com/scbrown/hank/commit/489de894fcb39f802a2d689b3008f065766ef242))
+
 ### Documentation
 
+- *(design)* SARC conformance — the gaps between hank and quipu([5576c64](https://github.com/scbrown/hank/commit/5576c64b8f7f13599e978042715ecf15b3d639be))
+- *(design)* Cite the sources the SARC analysis was drawn from([4c59a7b](https://github.com/scbrown/hank/commit/4c59a7bb0bc884ae951a110a8755146a0e713e37))
 - *(design)* Correct the unrepresentable claim, and spec the two gaps Phase 1 exposed([5edaf0a](https://github.com/scbrown/hank/commit/5edaf0a659dae372f48dd4ab3eb076cfda2d40d8))
+- *(design)* Reconcile the gap list with what the MVP actually built([f3fdef9](https://github.com/scbrown/hank/commit/f3fdef931e870717935dc0596a47bea5e66ff662))
+- *(design)* Phase 5 and Q-SARC-VOCAB as built([28d6483](https://github.com/scbrown/hank/commit/28d6483d08422e1e07b40641cc8ac6a6917fe067))
+- *(design)* Phase 6 as built, and the four things still open([ba8fb78](https://github.com/scbrown/hank/commit/ba8fb78c991ecd693ef5f21d7891646a480a23c3))
 - The enforcement trace as a reference page, and README catch-up([992ba35](https://github.com/scbrown/hank/commit/992ba35a8412395c33f55b50e34d2d870d43b1d5))
+
+### Fixed
+
+- *(changelog)* Blank lines around version headings — repair CI, second attempt([d6a3875](https://github.com/scbrown/hank/commit/d6a3875ff0fb39c44a8b881c47b5f0d4cb30239e))
+- *(ci)* Close two gates that could pass without checking anything (#84)([971448e](https://github.com/scbrown/hank/commit/971448e51bfcd957447b6d9603dba3dc40b96242))
+
+### Miscellaneous
+
+- *(release)* Sync Cargo.lock to 0.4.0([b19ca9b](https://github.com/scbrown/hank/commit/b19ca9b939a510b3a7fbf0967847b1867bbe44d3))
+- Release v0.5.0([0f6ecad](https://github.com/scbrown/hank/commit/0f6ecad623abb4239be3f42c8e70c49e28c6f5a9))
+
+### Style
+
+- Cargo fmt — repair CI, which I broke and did not check([7b20f40](https://github.com/scbrown/hank/commit/7b20f40e9a39d8da5a1c0e54d1ba734ad0bd64dd))
 
 ## [0.4.0] - 2026-08-02
 
