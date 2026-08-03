@@ -248,6 +248,22 @@ enum Commands {
         #[arg(long, default_value = "hank-signing.pk8")]
         key_path: PathBuf,
     },
+    /// Promote spooled verdicts into quipu (quipu feature).
+    ///
+    /// The pre-edit guard SIGNS a verdict the moment a constraint fires and
+    /// appends it locally; it never promotes on the edit path, because a
+    /// `/knot` round-trip does not fit inside the guard's deadline and would
+    /// make every agent's edit latency a function of quipu's availability. This
+    /// is the other half.
+    #[cfg(feature = "quipu")]
+    Verdicts {
+        /// Quipu base URL. Defaults to `[hank.quipu] endpoint`.
+        #[arg(long)]
+        to: Option<String>,
+        /// Spool file. Defaults to the same resolution the guard uses.
+        #[arg(long)]
+        spool: Option<PathBuf>,
+    },
 }
 
 /// Supported agent-harness hook events.
@@ -295,6 +311,8 @@ fn deliberate_use_name(cmd: &Commands) -> Option<&'static str> {
         Commands::Promote { .. } => "promote",
         #[cfg(feature = "quipu")]
         Commands::Verifier { .. } => "verifier",
+        #[cfg(feature = "quipu")]
+        Commands::Verdicts { .. } => "verdicts",
     })
 }
 
@@ -350,6 +368,10 @@ impl Cli {
                 println!("verifier: {}", crate::verdict::VERIFIER);
                 println!("public_key: {}", crate::verdict::public_key_hex(&keypair));
                 Ok(())
+            }
+            #[cfg(feature = "quipu")]
+            Commands::Verdicts { to, spool } => {
+                self.drain_verdicts(to.as_deref(), spool.as_deref())
             }
             Commands::Serve { http } => self.serve(*http).await,
             Commands::Daemon { port } => self.daemon(*port).await,

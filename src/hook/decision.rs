@@ -25,6 +25,15 @@ pub(super) struct Decision {
     /// The old field is still DERIVED from this set for the spool, so live
     /// dashboards grouping on it keep working.
     pub(super) constraints: Vec<crate::trace::ConstraintEvaluation>,
+    /// How current the POLICY SET that produced these evaluations was.
+    ///
+    /// Carried on the decision rather than assumed at the recording seam. A
+    /// verdict signed with a hardcoded `fresh` claims currency nobody checked —
+    /// the exact defect `verdict_turtle` had — and the recorder is the one place
+    /// that cannot know the answer: local config is authoritative and genuinely
+    /// fresh, while a projected registry may be serving a stale cache, and only
+    /// the plane that evaluated the rules knows which.
+    pub(super) freshness: crate::types::Freshness,
 }
 
 impl From<Outcome> for Decision {
@@ -32,19 +41,31 @@ impl From<Outcome> for Decision {
         Self {
             outcome,
             constraints: Vec::new(),
+            // Nothing was evaluated, so there is no policy set whose currency
+            // could be in question.
+            freshness: crate::types::Freshness::Fresh,
         }
     }
 }
 
 impl Decision {
     /// A decision attributed to one or more evaluated constraints.
+    /// A decision attributed to one or more evaluated constraints, declaring
+    /// the currency of the policy set behind them.
+    ///
+    /// `freshness` is a parameter and not a default on purpose: a default would
+    /// be `Fresh`, and every caller that forgot it would silently claim currency
+    /// nobody checked. That is the defect `verdict_turtle` shipped with, one
+    /// layer down, and it is worth not rebuilding here.
     pub(super) fn evaluated(
         outcome: Outcome,
         constraints: Vec<crate::trace::ConstraintEvaluation>,
+        freshness: crate::types::Freshness,
     ) -> Self {
         Self {
             outcome,
             constraints,
+            freshness,
         }
     }
 
@@ -65,6 +86,8 @@ impl Decision {
                 crate::trace::Outcome::Unsatisfied,
                 response,
             )],
+            // hank's own scope rules: no cache between the rule and the check.
+            crate::types::Freshness::Fresh,
         )
     }
 }

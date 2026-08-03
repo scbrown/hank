@@ -17,6 +17,9 @@ use std::time::{Duration, Instant};
 
 #[path = "decision.rs"]
 mod decision;
+#[cfg(feature = "quipu")]
+#[path = "verdicts.rs"]
+mod verdicts;
 
 use decision::Decision;
 
@@ -157,6 +160,11 @@ fn guard_recorded(
     // than sibling keys, so a reader never reassembles class-to-id by position.
     if !decision.constraints.is_empty() {
         fields.push(("constraints", crate::trace::to_json(&decision.constraints)));
+        // How current the POLICY SET behind those evaluations was. A confidence
+        // input in SARC's sense (§5.2) and, more practically, the field that
+        // stops a soak window counting verdicts computed against a stale
+        // projection as if they were evidence about the current policy.
+        fields.push(("policy_freshness", decision.freshness.as_str().into()));
     }
     // The pre-existing `rule` field, DERIVED from the same set. Live dashboards
     // group on it; dropping it would silently empty every panel built on it,
@@ -164,6 +172,20 @@ fn guard_recorded(
     if let Some(rule) = crate::trace::legacy_rule_field(&decision.constraints) {
         fields.push(("rule", rule.into()));
     }
+
+    // Sign and spool a verdict per evaluated constraint (SARC I3/I8). AFTER the
+    // outcome is fixed, like the metrics emit above and for the same reason:
+    // recording rides behind the decision and can never lean on it. Signing is
+    // microseconds; the /knot round-trip that would actually promote these is
+    // deliberately NOT here — see `crate::verdict_spool`.
+    #[cfg(feature = "quipu")]
+    verdicts::spool_verdicts(
+        &decision,
+        config.as_ref(),
+        &root,
+        file_path.as_deref(),
+        input.as_ref(),
+    );
 
     (decision.outcome, fields)
 }

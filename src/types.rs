@@ -45,6 +45,25 @@ pub enum Freshness {
     Recomputing,
 }
 
+impl Freshness {
+    /// The lowercase string form used on the wire and in the trace record.
+    ///
+    /// `Recomputing` renders as itself here rather than collapsing to `stale`:
+    /// a trace record is diagnostic and the distinction is real. The VERDICT
+    /// path collapses it (see `crate::verdict`), because `aegis:freshness`
+    /// admits only fresh/stale and the conservative reading is the only one
+    /// that cannot overstate — two different audiences, two different mappings,
+    /// each stated where it applies.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Freshness::Fresh => "fresh",
+            Freshness::Stale => "stale",
+            Freshness::Recomputing => "recomputing",
+        }
+    }
+}
+
 impl Tier {
     /// The lowercase string form used on the wire and in the ontology.
     #[must_use]

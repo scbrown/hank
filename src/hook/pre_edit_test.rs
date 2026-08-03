@@ -760,3 +760,20 @@ fn a_clean_edit_records_no_constraints_field_at_all() {
     );
     assert!(line.get("rule").is_none());
 }
+
+#[test]
+fn the_record_declares_the_currency_of_the_policy_set() {
+    // A confidence input, and the field that stops a soak window counting
+    // verdicts computed against a stale projection as evidence about the
+    // current policy. Local config is authoritative, so it is genuinely fresh.
+    let line = guard_line(NO_TICKET_RULE, "fn leaf() {} // see ABC-123");
+    assert_eq!(line["policy_freshness"], "fresh");
+}
+
+#[test]
+fn a_clean_edit_declares_no_policy_freshness_either() {
+    // It rides with the constraint set: no evaluations, no policy set whose
+    // currency could be in question.
+    let line = guard_line(NO_TICKET_RULE, "fn leaf() {} // nothing to see");
+    assert!(line.get("policy_freshness").is_none());
+}

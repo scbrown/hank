@@ -54,6 +54,8 @@ pub mod types;
 /// Phase-4 verdict signing + promotion (H-PROMOTE-VERDICT).
 #[cfg(feature = "quipu")]
 pub mod verdict;
+#[cfg(feature = "quipu")]
+pub mod verdict_spool;
 pub mod verify;
 pub mod watch;
 

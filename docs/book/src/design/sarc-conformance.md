@@ -1,8 +1,8 @@
 # SARC Conformance — what hank × quipu still needs
 
-Status: **Phase 1 landed**; **Phase 2 in progress** (the Σ-derived trace record
-is in; verdict emission is next). Phase 3 completes the MVP; Phases 4–6 are
-scoped but not started. See [Build order](#build-order) for what each
+Status: **Phases 1 and 2 landed** (constraint metadata and placement; the
+Σ-derived trace record and signed verdict emission). Phase 3 completes the MVP;
+Phases 4–6 are scoped but not started. See [Build order](#build-order) for what each
 phase covers and [Phase 1, as built](#phase-1-as-built) for what shipped.
 
 ## Why this document
@@ -79,7 +79,7 @@ constraint missing any field is not a constraint; it is a comment").
   and the shipped catalog sets neither.
 
 **G2 — The verdict path is built but not wired.** Violates I3 and I8 ([SARC]
-§3.5).
+§3.5). **Closed in Phase 2.**
 
 `src/verdict.rs` implements signing and `promote_verdict`, and it is correct —
 it mirrors quipu's scheme exactly so a hank-signed verdict verifies under
@@ -506,7 +506,52 @@ return). The whole record composition is now under test through the real
 decision path, and exactly one line — the `emit` call, which `metrics.rs` covers
 directly — sits outside it.
 
-**Still open in Phase 2:** verdict emission (G2) and the attribution tuple. `α`
+**Verdict emission (G2) closed.** `src/verdict_spool.rs` signs one verdict per
+evaluated constraint at the moment the constraint fires, and appends it locally;
+`hank verdicts` promotes the spool to quipu. It is a spool and not a direct
+call because the guard runs inside `PreToolUse` under a `deadline_ms` that
+defaults to 100 ms, and a `/knot` round-trip is not that — the projection path
+already records what an unbounded quipu call does here (a wedged quipu held the
+guard for two minutes). Promotion on the edit path would make every agent's
+edit latency a function of quipu's availability, to record a fact nobody needs
+until an audit. Signing is microseconds; the verdict is durable at the moment
+of decision and stays bound to the evidence hash it was signed over, so the
+delay costs nothing.
+
+Four judgement calls in it worth naming:
+
+- **The guard never mints a signing key.** `verdict::load_or_generate` creates
+  one when absent, and a keypair materialising as a side effect of an agent's
+  edit should not happen quietly. On the hook path only an *existing* key signs;
+  `hank verifier` is the deliberate act that creates one.
+- **The verdict records what the PREDICATE concluded, not what the guard did.**
+  A constraint can be unsatisfied while the mode declined to block. Conflating
+  them would make an advise-mode fleet indistinguishable from a compliant one in
+  the governed record; the response lives in the trace record beside it.
+- **`unknown` spools nothing.** An unknown verdict asserts "there was no
+  evidence", and a constraint hank evaluated had evidence by construction.
+  Minting satisfied or unsatisfied for it would be a signed claim about
+  something that concluded neither.
+- **A rejected verdict is retained, never dropped.** The drain truncates only
+  when every line was accepted. A rejection is a fact about the verdict — a
+  shape violation, an unregistered verifier — and truncating past it would erase
+  exactly the record worth investigating.
+
+**Freshness stopped being a lie in two places.** `verdict_turtle` hardcoded
+`aegis:freshness "fresh"`, so every verdict hank could have promoted would have
+claimed currency it never checked. It now takes the real value, and `Decision`
+carries the currency of the policy set that produced it — a parameter rather
+than a defaulted field, because a default would be `Fresh` and every caller who
+forgot it would rebuild the same defect. The trace record carries it as
+`policy_freshness`, which is what stops a soak window counting verdicts computed
+against a stale projection as evidence about current policy.
+
+`Recomputing` maps to `stale` on the verdict and stays itself on the trace
+record: `aegis:freshness` admits only fresh/stale and the conservative reading is
+the only one that cannot overstate, while a trace record is diagnostic and the
+distinction is real. Two audiences, two mappings, each stated where it applies.
+
+**Still open in Phase 2:** the attribution tuple. `α`
 remains partial by design — hank can supply `tool`, `executor` and `C_eval`
 honestly, but the principal chain `P` and intersected authority `auth` need
 multi-tenancy quipu does not have. They are absent from the record rather than

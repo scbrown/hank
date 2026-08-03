@@ -89,7 +89,9 @@ pub(super) fn rule_check(config: &HankConfig, input: &HookInput, rel: &str) -> O
                 .map(|r| (r.class, r.verification_point))
         },
     );
-    Some(Decision::evaluated(outcome, evaluations))
+    // Local config is the authoritative source, not a cache, and the evidence
+    // is the exact proposed edit — so this verdict is genuinely fresh.
+    Some(Decision::evaluated(outcome, evaluations, Freshness::Fresh))
 }
 
 /// Build one [`ConstraintEvaluation`] per DISTINCT rule that fired, in stable
@@ -395,7 +397,14 @@ pub(super) fn governed_check(
                 .map(|v| (v.class, v.verification_point))
         },
     ));
-    Some(Decision::evaluated(outcome, evaluations))
+    // The projection's REAL sync state, not an assumption: a verdict computed
+    // against a registry that could not be refreshed is stale, and saying so is
+    // the whole point of carrying the field.
+    Some(Decision::evaluated(
+        outcome,
+        evaluations,
+        registry.freshness(),
+    ))
 }
 
 /// The absolute path of the file this edit actually writes to, which is the

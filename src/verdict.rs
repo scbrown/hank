@@ -98,6 +98,7 @@ pub fn verdict_turtle(
     target_ref: &str,
     satisfied: bool,
     evidence: &str,
+    freshness: crate::types::Freshness,
 ) -> String {
     let outcome = if satisfied {
         "satisfied"
@@ -125,14 +126,35 @@ pub fn verdict_turtle(
          \x20   aegis:verifier \"{verifier}\" ;\n\
          \x20   aegis:signature \"{signature}\" ;\n\
          \x20   aegis:tier \"{tier}\" ;\n\
-         \x20   aegis:freshness \"fresh\" .\n",
+         \x20   aegis:freshness \"{freshness}\" .\n",
         label = escape(&format!("{policy_name} @ {target_ref}")),
         predicate = escape(policy_name),
         target = escape(target_ref),
         hash = escape(&hash),
         verifier = VERIFIER,
         tier = TIER,
+        freshness = freshness_label(freshness),
     )
+}
+
+/// The `aegis:freshness` lexical value for a hank freshness.
+///
+/// The shape admits only `fresh` and `stale`. `Recomputing` is a hank-internal
+/// state with no governed counterpart, and it maps to STALE rather than fresh:
+/// a verdict computed while the registry was mid-refresh was computed against
+/// something that may already have moved, and the conservative reading is the
+/// only one that cannot overstate.
+///
+/// This function exists because the field was a hardcoded `"fresh"` — every
+/// verdict hank could have promoted would have claimed currency it had not
+/// checked, which is the precise thing the tier/freshness discipline exists to
+/// stop.
+#[must_use]
+fn freshness_label(freshness: crate::types::Freshness) -> &'static str {
+    match freshness {
+        crate::types::Freshness::Fresh => "fresh",
+        crate::types::Freshness::Stale | crate::types::Freshness::Recomputing => "stale",
+    }
 }
 
 /// Sign and promote a verdict to quipu via `/knot`. Returns the quipu response.
@@ -143,8 +165,16 @@ pub fn promote_verdict(
     target_ref: &str,
     satisfied: bool,
     evidence: &str,
+    freshness: crate::types::Freshness,
 ) -> Result<crate::promote::KnotResult> {
-    let turtle = verdict_turtle(keypair, policy_name, target_ref, satisfied, evidence);
+    let turtle = verdict_turtle(
+        keypair,
+        policy_name,
+        target_ref,
+        satisfied,
+        evidence,
+        freshness,
+    );
     crate::promote::write_knot(
         endpoint,
         &turtle,
@@ -190,7 +220,14 @@ mod tests {
     #[test]
     fn verdict_turtle_is_shape_conformant_and_signed() {
         let kp = keypair();
-        let ttl = verdict_turtle(&kp, "no-ticket-in-comment", "src/a.rs", false, "// ABC-123");
+        let ttl = verdict_turtle(
+            &kp,
+            "no-ticket-in-comment",
+            "src/a.rs",
+            false,
+            "// ABC-123",
+            crate::types::Freshness::Fresh,
+        );
         // Every VerdictShape-required field is present.
         for field in [
             "a aegis:Verdict",
@@ -214,8 +251,22 @@ mod tests {
         // Changing the evidence changes the hash, hence the signed message, hence
         // the signature — so a verdict cannot be replayed onto different evidence.
         let kp = keypair();
-        let a = verdict_turtle(&kp, "p", "src/a.rs", false, "evidence one");
-        let b = verdict_turtle(&kp, "p", "src/a.rs", false, "evidence two");
+        let a = verdict_turtle(
+            &kp,
+            "p",
+            "src/a.rs",
+            false,
+            "evidence one",
+            crate::types::Freshness::Fresh,
+        );
+        let b = verdict_turtle(
+            &kp,
+            "p",
+            "src/a.rs",
+            false,
+            "evidence two",
+            crate::types::Freshness::Fresh,
+        );
         let sig = |ttl: &str| {
             ttl.split("aegis:signature \"")
                 .nth(1)

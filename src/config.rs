@@ -156,6 +156,11 @@ pub struct QuipuConfig {
     /// misconfigured deployment refuses rather than guessing a graph. The CLI
     /// `--to` overrides it for one-off promotions.
     pub endpoint: String,
+    /// Path to the PKCS#8 verdict-signing key. The pre-edit guard signs with
+    /// this key IF IT ALREADY EXISTS and spools the verdict; it never creates
+    /// one, because a key materialising as a side effect of an agent's edit is
+    /// not something that should happen quietly. `hank verifier` creates it.
+    pub signing_key_path: String,
 }
 
 impl Default for QuipuConfig {
@@ -166,6 +171,7 @@ impl Default for QuipuConfig {
             branch_model: "named_graph".to_string(),
             shapes_path: "shapes/".to_string(),
             endpoint: String::new(),
+            signing_key_path: "hank-signing.pk8".to_string(),
         }
     }
 }

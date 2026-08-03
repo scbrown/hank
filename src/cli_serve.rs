@@ -110,3 +110,65 @@ impl Cli {
         }
     }
 }
+
+#[cfg(feature = "quipu")]
+impl super::Cli {
+    /// `hank verdicts` — promote the spooled verdicts into quipu.
+    ///
+    /// The endpoint is deployment config, not a caller's choice, for the same
+    /// reason promotion's is: the graph a verdict lands in is data identity. A
+    /// `--to` override exists for one-off drains; with neither, this refuses
+    /// rather than guessing a graph.
+    pub(super) fn drain_verdicts(
+        &self,
+        to: Option<&str>,
+        spool: Option<&std::path::Path>,
+    ) -> anyhow::Result<()> {
+        let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let config = crate::config::HankConfig::resolve(None, &root).unwrap_or_default();
+        let endpoint = to
+            .map(str::to_string)
+            .filter(|e| !e.is_empty())
+            .or_else(|| Some(config.quipu.endpoint.clone()).filter(|e| !e.is_empty()))
+            .ok_or_else(|| {
+                anyhow::anyhow!("no quipu endpoint: set `[hank.quipu] endpoint` or pass --to")
+            })?;
+        let path = match spool {
+            Some(p) => p.to_path_buf(),
+            None => crate::verdict_spool::resolve_path(
+                std::env::var("HANK_VERDICT_PATH").ok().as_deref(),
+                std::env::var("XDG_STATE_HOME").ok().as_deref(),
+                std::env::var("HOME").ok().as_deref(),
+            )
+            .ok_or_else(|| anyhow::anyhow!("cannot resolve a verdict spool path"))?,
+        };
+
+        let drained = crate::verdict_spool::drain(&path, &endpoint)?;
+        if self.json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "promoted": drained.promoted,
+                    "rejected": drained.rejected,
+                    "spool": path.display().to_string(),
+                })
+            );
+        } else if !self.quiet {
+            println!(
+                "promoted {} verdict(s), {} rejected ({})",
+                drained.promoted,
+                drained.rejected,
+                path.display()
+            );
+            if drained.rejected > 0 {
+                // The spool is RETAINED on any rejection. Say so, or an operator
+                // reruns the drain expecting the failures to have cleared.
+                println!(
+                    "the spool was kept: a rejected verdict is evidence of a \
+                     disagreement worth investigating, not a record to discard"
+                );
+            }
+        }
+        Ok(())
+    }
+}
