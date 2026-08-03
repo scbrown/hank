@@ -30,6 +30,7 @@
 - [Vision](design/vision.md)
 - [Policy edit hooks](design/policy-edit-hooks.md)
 - [Governance Plane](design/governance-plane.md)
+- [SARC Conformance](design/sarc-conformance.md)
 - [Governed Relations](design/governed-relations.md)
 - [Workflow-Gated Edits](design/workflow-gated-edits.md)
 
