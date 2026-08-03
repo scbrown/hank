@@ -589,6 +589,8 @@ COMMANDS:
     hook        Harness hook adapter (post-edit advisory / pre-edit guard)
     verify      Verdict on a proposed edit buffer (FR-23/FR-24)
     promote     Promote a commit's structural facts into Quipu    [Phase 4]
+    verifier    Show the verdict-signing public key to register  [quipu feature]
+    verdicts    Drain the local signed-verdict spool into quipu  [quipu feature]
     status      Show base commit, tiers, and configuration
     completions Generate shell completions
     help        Print help
@@ -722,6 +724,19 @@ import, a top-level comment). `a.rs` defines: one:1-1, two:5-5
 </code></pre>
 <p><code>refs</code> answers "where is this <strong>defined</strong>". For "what <strong>reaches</strong> this", use
 <code>hank callers</code>; for the transitive form, <code>hank impact</code>.</p>
+<h2 id="hank-verifier-and-hank-verdicts"><a class="header" href="#hank-verifier-and-hank-verdicts"><code>hank verifier</code> and <code>hank verdicts</code></a></h2>
+<p>Both require the <code>quipu</code> feature. The guard signs a verdict the moment a
+constraint fires and appends it locally; these are the registration and the
+drain. Full field list and the reasoning in
+<a href="reference/enforcement-trace.html">The Enforcement Trace</a>.</p>
+<pre><code class="language-bash">hank verifier --key-path hank-signing.pk8   # public key to register in quipu
+hank verdicts --to http://localhost:7878    # drain the spool
+</code></pre>
+<p><code>hank verifier</code> is the <strong>deliberate key-creation act</strong> — it mints the signing key
+if absent. The hook path never does: a signing identity materialising from an
+agent's edit is not something that should happen quietly.</p>
+<p><code>hank verdicts</code> truncates the spool only when every verdict was accepted, so a
+partial drain leaves the remainder intact rather than losing it.</p>
 <h2 id="hank-verify"><a class="header" href="#hank-verify"><code>hank verify</code></a></h2>
 <p>Checks a <em>proposed</em> buffer against the graph Hank already holds and returns a
 boolean verdict plus violations (FR-23/FR-24). Exits <strong>non-zero</strong> when the buffer
@@ -1258,6 +1273,178 @@ into this same field.</li>
 </ul>
 <p><code>--json</code> emits the full <code>policy</code> object (mode, <code>scope_configured</code>, ceilings) and
 the <code>signed_rule_set</code> state for <code>st doctor</code> and other tooling to gate on.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="the-enforcement-trace"><a class="header" href="#the-enforcement-trace">The Enforcement Trace</a></h1>
+<p>What an action tells an auditor afterwards, and the two commands that carry it
+into quipu.</p>
+<p>This is the interface <code>quipu audit</code> consumes. If you are wiring the audit
+checker, this page is the contract; if you are reading a spool by hand, it is the
+field list. The reasoning behind the shape is in <a href="reference/../design/sarc-conformance.html">SARC
+Conformance</a>.</p>
+<h2 id="why-the-record-has-this-shape"><a class="header" href="#why-the-record-has-this-shape">Why the record has this shape</a></h2>
+<p>SARC's invariant I3 asks that a trace be <strong>derived from the specification</strong>
+rather than reconstructed from logs afterwards. The audit checker needs four
+things per action — which constraints applied, where each was evaluated, what
+outcome it produced, and what response was taken — and none of them can be
+recovered from a record that says only which rules fired.</p>
+<p>Before this, the spool's <code>rule</code> field was a <code>+</code>-joined string of names. It
+answers "what fired" and cannot answer "was this evaluated at a point compatible
+with its class", which is exactly the placement pass of the checker. Two rules
+that fired identically at different points produced byte-identical records.</p>
+<h2 id="where-the-spool-lives"><a class="header" href="#where-the-spool-lives">Where the spool lives</a></h2>
+<p><code>$HANK_METRICS_PATH</code>, else <code>$XDG_STATE_HOME/hank/metrics.jsonl</code>, else
+<code>~/.local/state/hank/metrics.jsonl</code>. One JSON object per line, appended, rotated
+to <code>.jsonl.old</code> at 64 MiB.</p>
+<p>Writes are <strong>absolutely fail-silent</strong> — stricter than the guard's own fail-open.
+A metrics write must never change a guard outcome, never block an edit, never
+print. A bookkeeping layer that can take enforcement down with it measures
+negative value.</p>
+<h2 id="record-kinds"><a class="header" href="#record-kinds">Record kinds</a></h2>
+<div class="table-wrapper"><table><thead><tr><th><code>kind</code></th><th>emitted by</th><th>meaning</th></tr></thead><tbody>
+<tr><td><code>guard</code></td><td><code>hank hook pre-edit</code></td><td>a Pre-Action Gate decision, one per edit</td></tr>
+<tr><td><code>audit</code></td><td><code>hank hook post-edit</code></td><td>a Post-Action Auditor crossing, with <code>point: "PAA"</code></td></tr>
+<tr><td><code>governed</code></td><td>the pre-edit guard</td><td>which governed rules spoke, by name</td></tr>
+<tr><td><code>fail_open</code></td><td>anywhere on the guard path</td><td>the guard degraded, and why-kind</td></tr>
+<tr><td><code>hosting_overclaim</code></td><td>the projection refresh</td><td>policies claiming a stronger layer than the one evaluating them</td></tr>
+<tr><td><code>command</code></td><td>the CLI</td><td>deliberate tool use — the leverage signal</td></tr>
+</tbody></table>
+</div>
+<p>Every line also carries <code>ts</code> (unix seconds), and <code>agent</code> / <code>tenant</code> from
+<code>$SHANTY_AGENT</code> and <code>$BOBBIN_ROLE</code> when set.</p>
+<h2 id="the-constraint-set--constraints"><a class="header" href="#the-constraint-set--constraints">The constraint set — <code>constraints[]</code></a></h2>
+<p>One array rather than sibling keys, so a reader never has to reassemble which
+class went with which id by position:</p>
+<pre><code class="language-json">{
+  "kind": "guard", "mode": "enforce", "result": "deny",
+  "policy_freshness": "fresh",
+  "constraints": [
+    {
+      "id": "no-ticket-in-comment",
+      "class": "hard",
+      "verification_point": "PAG",
+      "hosted_at": "orchestration",
+      "outcome": "unsatisfied",
+      "response": "blocked"
+    }
+  ]
+}
+</code></pre>
+<div class="table-wrapper"><table><thead><tr><th>field</th><th>values</th><th>notes</th></tr></thead><tbody>
+<tr><td><code>id</code></td><td>string</td><td>the constraint's stable id — the same name its verdict cites</td></tr>
+<tr><td><code>class</code></td><td><code>hard</code> | <code>soft</code> | <code>escalation</code></td><td><strong>omitted</strong> when undeclared, never guessed</td></tr>
+<tr><td><code>verification_point</code></td><td><code>PAG</code> | <code>ATM</code> | <code>PAA</code> | <code>tool_layer</code> | <code>policy_layer</code></td><td>omitted when undeclared</td></tr>
+<tr><td><code>hosted_at</code></td><td><code>orchestration</code> | <code>tool</code> | <code>policy</code></td><td>the layer that <strong>actually</strong> evaluated it</td></tr>
+<tr><td><code>outcome</code></td><td><code>satisfied</code> | <code>unsatisfied</code> | <code>unknown</code></td><td>what the predicate concluded</td></tr>
+<tr><td><code>response</code></td><td><code>blocked</code> | <code>warned</code> | <code>logged</code> | <code>escalated</code> | <code>no-action</code></td><td>what the runtime did</td></tr>
+</tbody></table>
+</div>
+<p>Three of those distinctions carry weight:</p>
+<ul>
+<li><strong><code>unknown</code> is not a soft <code>unsatisfied</code>.</strong> A constraint that could not be
+evaluated has told you nothing, and collapsing the two is how an unevaluated
+check reads as a passing one.</li>
+<li><strong><code>outcome</code> and <code>response</code> are separate</strong> because they answer different audit
+questions — what the predicate concluded, versus what the runtime did with it —
+and the checker's outcome pass is precisely "does the recorded response match
+the one the policy declared".</li>
+<li><strong><code>hosted_at</code> is never the layer the policy claimed.</strong> It is stamped from the
+evaluating code's own constant. A field that echoed the declaration would let
+an overclaim survive the audit by being asserted twice (SARC I6).</li>
+</ul>
+<p><code>policy_freshness</code> rides alongside: how current the <em>policy set</em> behind those
+evaluations was. It is what stops a soak window counting verdicts computed
+against a stale projection as evidence about current policy.</p>
+<p>The legacy <code>rule</code> field is still emitted, derived from the same set, because live
+dashboards group on it. Dropping it would silently empty every panel built on it.</p>
+<h2 id="the-attribution-tuple--who-is-answerable"><a class="header" href="#the-attribution-tuple--who-is-answerable">The attribution tuple — who is answerable</a></h2>
+<p>SARC §9.6's <code>α = ⟨P, planner, executor, tool, auth, C_eval⟩</code>, on the gate record
+and the PAA record alike. Recorded on <strong>allow as well as deny</strong>: a field that
+appears only on refusals cannot answer "which chain has been acting here", which
+is the question it exists for.</p>
+<div class="table-wrapper"><table><thead><tr><th>field</th><th>source</th><th>notes</th></tr></thead><tbody>
+<tr><td><code>principal_chain</code></td><td><code>$HANK_PRINCIPAL_CHAIN</code></td><td>comma-separated, caller-first</td></tr>
+<tr><td><code>planner</code></td><td><code>$HANK_PLANNER</code></td><td>declared, never derived from the chain's head</td></tr>
+<tr><td><code>executor</code></td><td><code>$SHANTY_AGENT</code></td><td>the identity of the process that actually ran</td></tr>
+<tr><td><code>tool</code></td><td>the hook payload</td><td><code>Edit</code>, <code>Write</code>, <code>MultiEdit</code></td></tr>
+<tr><td><code>attribution_conflict</code></td><td>computed</td><td>emitted <strong>only when true</strong> — see below</td></tr>
+</tbody></table>
+</div>
+<p>A dispatcher that spawns a sub-agent appends itself and exports the extended
+chain; the sub-agent's hook then records the real chain rather than its own leaf
+identity:</p>
+<pre><code class="language-bash">HANK_PRINCIPAL_CHAIN="orchestrator,worker" \
+HANK_PLANNER="orchestrator" \
+SHANTY_AGENT="worker" \
+  claude --agent worker
+</code></pre>
+<p><strong>Every element is omitted when undeclared.</strong> Filling <code>principal_chain</code> with
+<code>[$SHANTY_AGENT]</code> would assert "this action had exactly one principal" to
+precisely the auditor the field exists for, and an undeclared chain is not a
+one-link chain.</p>
+<p><strong><code>planner</code> is not derived from the chain's head.</strong> Which link deliberated and
+which executed is a fact about the dispatch; reading it off list position would
+be an inference wearing a record's clothes.</p>
+<p><strong><code>auth</code> is deliberately absent.</strong> The effective authority is the intersection of
+every link's grant, those grants live in quipu, and hank cannot read them inside
+a 100 ms pre-edit budget. Recording <code>principal_chain</code> is what lets quipu's
+checker <em>derive</em> <code>auth</code> from the authoritative source; a locally-guessed value
+would put a number in the field the grant store never agreed to.</p>
+<h3 id="attribution_conflict"><a class="header" href="#attribution_conflict"><code>attribution_conflict</code></a></h3>
+<p><code>HANK_PRINCIPAL_CHAIN</code> is a declaration; <code>$SHANTY_AGENT</code> is what is running. When
+a chain is declared and its last link disagrees with the executor, the record
+says so rather than silently preferring one. That disagreement is the observable
+signature of a <strong>laundered chain</strong> — an agent acting under a dispatch record that
+names somebody else — and a record that resolved it by precedence would delete
+the only evidence of it.</p>
+<p>It is emitted only when true. A <code>false</code> on every line trains a reader to skip the
+field, which is the opposite of what it is for.</p>
+<h2 id="verdicts--hank-verifier-and-hank-verdicts"><a class="header" href="#verdicts--hank-verifier-and-hank-verdicts">Verdicts — <code>hank verifier</code> and <code>hank verdicts</code></a></h2>
+<p>Both need the <code>quipu</code> feature.</p>
+<p>A trace record is diagnostic. A <strong>verdict</strong> is an attestation: ed25519-signed,
+bound to an evidence hash, and verifiable against a <code>aegis:VerifierRegistration</code>
+that a human authored.</p>
+<pre><code class="language-bash"># Show the public key to register in quipu as this verifier's aegis:publicKey.
+# This is the DELIBERATE key-creation act — it mints the key if absent.
+hank verifier --key-path hank-signing.pk8
+
+# Drain the local spool into quipu.
+hank verdicts --to http://localhost:7878
+</code></pre>
+<p>The guard <strong>signs at the moment a constraint fires and appends locally</strong>; it
+never promotes on the edit path. A <code>/knot</code> round-trip does not fit inside the
+guard's 100 ms deadline, and putting one there would make every agent's edit
+latency a function of quipu's availability — a transiently wedged quipu once held
+a guard for the full two minutes a caller was willing to wait.</p>
+<p>The hook path uses an <strong>existing key only</strong> and never mints one. A signing
+identity materialising from an agent's edit is not something that should happen
+quietly; <code>hank verifier</code> is where that decision is made.</p>
+<p>The spool is truncated only when <strong>every</strong> verdict was accepted. A partial drain
+leaves the file intact rather than losing the remainder.</p>
+<h2 id="the-post-action-auditor-and-throttle"><a class="header" href="#the-post-action-auditor-and-throttle">The Post-Action Auditor and <code>throttle</code></a></h2>
+<p><code>hank hook post-edit</code> evaluates constraints declaring <code>verificationPoint "PAA"</code>
+against the file <em>as it now stands</em> — the completed-action state, which is the
+whole reason the point exists. The gate saw only the fragment an edit proposed.</p>
+<p>It <strong>cannot prevent the action it just watched</strong>, and saying so plainly matters:
+a PAA presented as prevention is the false-<code>prevented</code> claim the enforcement
+gradient exists to stop. What it can do is change what happens next.</p>
+<p><code>throttle</code> is that response. A crossing records an expiring backoff, and the
+<em>next</em> edit's advisory surfaces it. The fold is purely additive by construction —
+it only ever turns an allow into a notice or appends to an existing one, and it
+cannot reach a deny. A soft constraint must not become a block by this route.</p>
+<p>A satisfied PAA constraint is <strong>recorded, not skipped</strong>. "The rule ran and held"
+and "the rule never ran" are different facts, and the checker's coverage pass
+needs to tell them apart — an absent evaluation reads as a constraint nobody
+applied.</p>
+<h2 id="reading-a-trace-with-quipu"><a class="header" href="#reading-a-trace-with-quipu">Reading a trace with quipu</a></h2>
+<pre><code class="language-bash">quipu audit ~/.local/state/hank/metrics.jsonl --db ops.db   # T ⊨ Σ
+quipu audit replay ~/.local/state/hank/metrics.jsonl --db ops.db
+quipu audit tree ~/.local/state/hank/metrics.jsonl
+quipu audit inheritance ~/.local/state/hank/metrics.jsonl --db ops.db
+</code></pre>
+<p><code>quipu audit</code> exits non-zero when the trace <strong>contradicts</strong> the specification; an
+incompleteness (no principal chain, no declared class, a constraint the window
+never exercised) is reported and does not fail the gate. See quipu's <a href="https://scbrown.github.io/quipu/reference/cli.html">CLI
+reference</a> for the passes and
+what each one provably cannot decide.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="specification"><a class="header" href="#specification">Specification</a></h1>
 <p>The full PRD-style build specification lives at the repository root:</p>
 <ul>
