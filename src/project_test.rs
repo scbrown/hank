@@ -297,7 +297,12 @@ fn policy_row(name: &str, effect: &str, extra: &[(&str, &str)]) -> serde_json::V
     serde_json::Value::Object(row)
 }
 
-fn body(rows: Vec<serde_json::Value>) -> String {
+/// A SPARQL-results envelope around `rows`.
+///
+/// Takes a slice rather than a `Vec` so no caller has to hand over ownership of
+/// rows it may want to reuse — and so CI's `--all-targets` clippy, which the
+/// local pre-commit hook does not pass, has nothing to say about it.
+fn body(rows: &[serde_json::Value]) -> String {
     serde_json::json!({ "head": { "vars": [] }, "results": { "bindings": rows } }).to_string()
 }
 
@@ -329,7 +334,7 @@ fn a_catalog_with_no_sarc_fields_still_projects() {
 
 #[test]
 fn sarc_fields_decode_when_present() {
-    let json = body(vec![policy_row(
+    let json = body(&[policy_row(
         "no-ticket-in-comment",
         "deny",
         &[
@@ -350,7 +355,7 @@ fn an_unknown_class_is_a_projection_error_not_a_default() {
     // hard constraint; defaulting it to `hard` would block on a typo. Neither
     // is a reading anyone can defend, so it is an error the guard fails open
     // on, loudly.
-    let json = body(vec![policy_row(
+    let json = body(&[policy_row(
         "p",
         "deny",
         &[("constraintClass", "catastrophic")],
@@ -364,11 +369,7 @@ fn an_unknown_class_is_a_projection_error_not_a_default() {
 
 #[test]
 fn an_unknown_verification_point_is_a_projection_error() {
-    let json = body(vec![policy_row(
-        "p",
-        "deny",
-        &[("verificationPoint", "🤷")],
-    )]);
+    let json = body(&[policy_row("p", "deny", &[("verificationPoint", "🤷")])]);
     assert!(matches!(
         decode_policies(&json).unwrap_err(),
         Error::Projection(_)
@@ -381,7 +382,7 @@ fn a_soft_class_never_blocks_even_with_a_deny_effect() {
     // quipu's placement check now refuses to DEFINE it — but a store predating
     // the check can hold one, and honouring what the author declared it to BE
     // is the only reading that is not a guess.
-    let json = body(vec![policy_row(
+    let json = body(&[policy_row(
         "p",
         "deny",
         &[("constraintClass", "soft"), ("verificationPoint", "PAA")],
@@ -399,7 +400,7 @@ fn a_soft_class_never_blocks_even_with_a_deny_effect() {
 fn a_paa_policy_does_not_fire_at_the_pre_edit_gate() {
     // Evaluating a post-action rule at the gate would tell the model to fix
     // something its author scoped to after the fact.
-    let json = body(vec![policy_row(
+    let json = body(&[policy_row(
         "p",
         "warn",
         &[("constraintClass", "soft"), ("verificationPoint", "PAA")],
@@ -421,7 +422,7 @@ fn a_paa_policy_does_not_fire_at_the_pre_edit_gate() {
 #[test]
 fn a_hard_pag_policy_blocks_under_enforce_and_not_under_advise() {
     // Both outcomes for the same rule — the RED and GREEN pair.
-    let json = body(vec![policy_row(
+    let json = body(&[policy_row(
         "p",
         "deny",
         &[("constraintClass", "hard"), ("verificationPoint", "PAG")],
@@ -449,7 +450,7 @@ fn one_policy_is_one_rule_across_a_cross_product() {
     let a = policy_row("p", "deny", &[("constraintClass", "hard")]);
     let mut b = a.clone();
     b["name"] = serde_json::json!({ "type": "literal", "value": "p (also known as)" });
-    let policies = decode_policies(&body(vec![a, b])).unwrap();
+    let policies = decode_policies(&body(&[a, b])).unwrap();
     assert_eq!(
         policies.len(),
         1,
@@ -463,7 +464,7 @@ fn conflicting_rows_for_one_policy_are_refused_not_merged() {
     // how a guard enforces something nobody wrote.
     let a = policy_row("p", "deny", &[("constraintClass", "hard")]);
     let b = policy_row("p", "deny", &[("constraintClass", "soft")]);
-    let err = decode_policies(&body(vec![a, b])).unwrap_err();
+    let err = decode_policies(&body(&[a, b])).unwrap_err();
     assert!(
         matches!(&err, Error::Projection(m) if m.contains("conflicting")),
         "got {err:?}"
@@ -474,7 +475,7 @@ fn conflicting_rows_for_one_policy_are_refused_not_merged() {
 
 #[test]
 fn a_declared_hosting_layer_projects() {
-    let policies = decode_policies(&body(vec![policy_row(
+    let policies = decode_policies(&body(&[policy_row(
         "secrets-guard",
         "deny",
         &[("hostedAtLayer", "tool")],
@@ -491,7 +492,7 @@ fn an_absent_hosting_layer_is_none_not_a_default() {
     // Defaulting an absent claim to `orchestration` would put a claim in the
     // record that nobody made, and the I6 check would then be comparing hank's
     // own guess against hank's own placement — always agreeing, always useless.
-    let policies = decode_policies(&body(vec![policy_row("p", "warn", &[])])).unwrap();
+    let policies = decode_policies(&body(&[policy_row("p", "warn", &[])])).unwrap();
     assert!(policies[0].hosted_at_layer.is_none());
 }
 
@@ -500,7 +501,7 @@ fn an_unknown_hosting_layer_is_a_projection_error() {
     // The only value quipu's vocabulary deliberately omits is "prompt", and
     // silently dropping it to None would turn the one claim I6 forbids into no
     // claim at all — the exact laundering the field exists to prevent.
-    let err = decode_policies(&body(vec![policy_row(
+    let err = decode_policies(&body(&[policy_row(
         "p",
         "warn",
         &[("hostedAtLayer", "prompt")],
@@ -515,7 +516,7 @@ fn an_unknown_hosting_layer_is_a_projection_error() {
 fn an_overclaiming_policy_still_projects_and_still_blocks() {
     // The loud FAIL-OPEN. Refusing to project would disable a rule that does
     // still work, trading a documentation defect for an enforcement gap.
-    let policies = decode_policies(&body(vec![policy_row(
+    let policies = decode_policies(&body(&[policy_row(
         "secrets-guard",
         "deny",
         &[("hostedAtLayer", "policy"), ("constraintClass", "hard")],
