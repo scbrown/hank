@@ -450,10 +450,11 @@ fails just as silently on a transition-boundary policy. The vocabulary omission
 sits behind that as a second layer, not above it as a guarantee. Even so, the
 honest ceiling is <strong>"refused on quipu's write path"</strong>: a raw SQL write, or a
 process that opens the store directly, bypasses every check quipu has.</p>
-<p><code>hostedAtLayer</code> remains <strong>declared but otherwise unconsumed</strong> — nothing yet
-compares it against where a constraint is actually hosted, so I6 is checked for
-<em>well-formedness</em> and not for <em>truth</em>. A policy can still claim <code>tool</code> while
-being enforced only in hank's orchestration-layer hook.</p>
+<p><code>hostedAtLayer</code> was <strong>declared but otherwise unconsumed</strong> at this point — I6 was
+checked for <em>well-formedness</em> and not for <em>truth</em>, so a policy could claim <code>tool</code>
+while being enforced only in hank's orchestration-layer hook. <a href="#spec-b--h-sarc-i6-check-the-hosting-layer-against-reality">Spec
+B</a> is now built; see
+<a href="#h-sarc-i6-as-built">H-SARC-I6, as built</a>.</p>
 <p><strong>Multi-valued fields are refused, not resolved.</strong> Asserting
 <code>constraintClass "hard"</code> over an existing <code>"soft"</code> leaves <em>both</em> facts active —
 assertion is not replacement. The first implementation read the last SPARQL row
@@ -584,6 +585,29 @@ layer and the real one; the rule still evaluates and still blocks if it is hard.
 A policy declaring <code>"orchestration"</code> produces silence. The negative case — no
 declaration at all — also produces silence, since an absent claim overclaims
 nothing.</p>
+<h4 id="h-sarc-i6-as-built"><a class="header" href="#h-sarc-i6-as-built"><code>H-SARC-I6</code>, as built</a></h4>
+<p><code>hank/src/hosting.rs</code>, <code>quipu/src/governance/audit/passes.rs::hosting</code>. The spec
+above held up; three things are worth recording about how it landed.</p>
+<p><strong>The check runs twice, on purpose, and they are different checks.</strong> Hank checks
+at the <strong>projection seam</strong> — once per refresh, not per edit, because a metadata
+defect repeated on every guard line is a notice people learn to scroll past. That
+one compares the catalog's claim against <code>HANK_HOSTS_AT</code>, a constant rather than
+a configurable: a hook in the agent's loop <em>is</em> the orchestration layer, and
+making it settable would let a deployment declare itself into a robustness it
+does not have. Quipu checks at <strong>audit time</strong>, comparing the claim in Σ against
+the layer the trace says actually ran the constraint. The second is the one that
+cannot be fooled by hank being wrong about itself.</p>
+<p><strong>The record must not echo the claim.</strong> <code>ConstraintEvaluation::hosted_at</code> is
+stamped from the evaluating code's own constant, never copied from the policy's
+<code>aegis:hostedAtLayer</code>. A field that repeated the declaration would let an
+overclaim survive the audit by being asserted twice, which is the failure mode
+the whole check exists to close.</p>
+<p><strong>An unknown layer is a projection error, not a <code>None</code>.</strong> The one value quipu's
+vocabulary deliberately omits is <code>"prompt"</code>, and silently decoding it to "no
+claim" would turn the single claim I6 forbids into no claim at all. It fails the
+projection the way an unknown <code>constraintClass</code> does. On the audit side the same
+value is an <em>incompleteness</em> rather than a violation, because there the checker
+may simply be older than the runtime.</p>
 <h3 id="phase-2--wire-the-verdict-derive-the-trace"><a class="header" href="#phase-2--wire-the-verdict-derive-the-trace">Phase 2 — Wire the verdict, derive the trace</a></h3>
 <p><em>Closes G2 and G3 — the two gaps that make I8 impossible.</em></p>
 <ol>
