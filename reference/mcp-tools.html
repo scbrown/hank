@@ -207,8 +207,16 @@ hank serve --http     # streamable-HTTP at http://127.0.0.1:3040/mcp
 <tr><td><code>hank_dataflow</code></td><td>Intra-procedural data dependence within a function</td></tr>
 <tr><td><code>hank_verify</code></td><td>Verdict on a <strong>proposed</strong> edit buffer, before you write it (FR-23/FR-24)</td></tr>
 <tr><td><code>hank_promote</code></td><td>Promote a subtree's facts to Quipu — SHACL-validate, then write (needs the <code>quipu</code> feature)</td></tr>
+<tr><td><code>hank_ingest</code></td><td>Load generic (non-code) facts into the hot board graph (FR-35; needs the <code>game-state</code> feature)</td></tr>
+<tr><td><code>hank_guard</code></td><td>Check proposed orders against game-state policies (FR-37; needs the <code>game-state</code> feature)</td></tr>
+<tr><td><code>hank_whatif</code></td><td>Speculative, uncommitted impact of an order set over the board (FR-38; needs the <code>game-state</code> feature)</td></tr>
 </tbody></table>
 </div>
+<p>The last three are the <strong>game-state harness</strong>. They are registered on every
+build, as <code>hank_promote</code> is, and refuse with a message naming the feature when
+it is absent — a tool that accepted a board and silently did nothing would be
+worse than one that is missing, because the caller would believe it had guarded.
+See <a href="../concepts/game-state.html">The Game-State Harness</a>.</p>
 <h2 id="hank_references"><a class="header" href="#hank_references"><code>hank_references</code></a></h2>
 <p>Give it <code>symbol</code> <strong>or</strong> a position (<code>at_file</code> + <code>at_line</code>), not both concerns at
 once.</p>
