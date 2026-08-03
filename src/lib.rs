@@ -12,6 +12,7 @@
 //! promotion (`quipu`) land in subsequent phases.
 
 pub mod action;
+pub mod attribution;
 pub mod audit;
 pub mod change;
 pub mod cli;

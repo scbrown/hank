@@ -173,21 +173,22 @@ fn guard_recorded(
         fields.push(("rule", rule.into()));
     }
 
-    // Any throttle a previous PAA crossing recorded, surfaced on THIS edit —
-    // the whole point of a response placed at the post-action point. Purely
-    // additive: it never changes the outcome, only what the model is told, so a
-    // soft constraint cannot become a block by this route.
-    if matches!(decision.outcome, Outcome::Allow | Outcome::Notify(_)) {
-        let advisories =
-            super::paa::active_advisories(&root.display().to_string(), crate::throttle::now_secs());
-        if !advisories.is_empty() {
-            fields.push(("throttled", (advisories.len() as u64).into()));
-            let joined = advisories.join("\n");
-            decision.outcome = match decision.outcome {
-                Outcome::Notify(existing) => Outcome::Notify(format!("{existing}\n{joined}")),
-                _ => Outcome::Notify(joined),
-            };
-        }
+    // Who is answerable for this action (SARC §9.6's α). Recorded on allow as
+    // well as deny: an attribution field that appears only on refusals cannot
+    // answer "which chain has been acting here", which is the question it exists
+    // for. Every element is omitted when undeclared — see `crate::attribution`.
+    let tool = input.as_ref().and_then(|i| i.tool_name.as_deref());
+    fields.extend(crate::attribution::Attribution::capture(tool).fields());
+
+    // Any throttle a previous PAA crossing recorded, surfaced on THIS edit — the
+    // whole point of a response placed at the post-action point.
+    let throttled = super::paa::apply_advisories(
+        &mut decision.outcome,
+        &root.display().to_string(),
+        crate::throttle::now_secs(),
+    );
+    if throttled > 0 {
+        fields.push(("throttled", (throttled as u64).into()));
     }
 
     // Sign and spool a verdict per evaluated constraint (SARC I3/I8). AFTER the

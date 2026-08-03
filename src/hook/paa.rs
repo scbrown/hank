@@ -163,6 +163,30 @@ pub fn active_advisories(scope: &str, now: u64) -> Vec<String> {
         .collect()
 }
 
+/// Fold any live throttle into a gate outcome, returning how many applied.
+///
+/// This is the throttle response *landing*: recorded at the post-action point,
+/// felt at the next pre-action one. Purely additive by construction — it only
+/// ever turns `Allow` into `Notify` or appends to an existing `Notify`, and it
+/// cannot reach `Deny`. A soft constraint must not become a block by this route,
+/// and stating that as code rather than as a convention is what keeps it true.
+#[must_use]
+pub fn apply_advisories(outcome: &mut super::Outcome, scope: &str, now: u64) -> usize {
+    if matches!(outcome, super::Outcome::Deny(_)) {
+        return 0;
+    }
+    let advisories = active_advisories(scope, now);
+    if advisories.is_empty() {
+        return 0;
+    }
+    let joined = advisories.join("\n");
+    *outcome = match std::mem::replace(outcome, super::Outcome::Allow) {
+        super::Outcome::Notify(existing) => super::Outcome::Notify(format!("{existing}\n{joined}")),
+        _ => super::Outcome::Notify(joined),
+    };
+    advisories.len()
+}
+
 /// Evaluate the PAA-declared constraints against the completed edit, record the
 /// trace line and the verdicts, and return anything the model should be told.
 ///
@@ -194,15 +218,17 @@ pub fn post_action_audit(input_json: &str, default_root: &Path) -> Option<Vec<St
         return None;
     }
 
-    // The trace record, in the same vocabulary the gate emits.
-    crate::metrics::emit(
-        "audit",
-        &[
-            ("point", "PAA".into()),
-            ("constraints", crate::trace::to_json(&audit.constraints)),
-            ("ext", ext.into()),
-        ],
-    );
+    // The trace record, in the same vocabulary the gate emits — including the
+    // attribution tuple, so a PAA crossing and the gate decision that follows it
+    // are attributable to the same chain. A record that attributed only the gate
+    // would leave every soft-constraint crossing unowned.
+    let mut fields: Vec<(&str, serde_json::Value)> = vec![
+        ("point", "PAA".into()),
+        ("constraints", crate::trace::to_json(&audit.constraints)),
+        ("ext", ext.into()),
+    ];
+    fields.extend(crate::attribution::Attribution::capture(input.tool_name.as_deref()).fields());
+    crate::metrics::emit("audit", &fields);
 
     // Verdicts, signed against the completed state that was actually judged.
     #[cfg(feature = "quipu")]

@@ -1,9 +1,13 @@
 # SARC Conformance — what hank × quipu still needs
 
-Status: **MVP complete** — Phases 1–3 landed (constraint metadata and placement;
-the Σ-derived trace record and signed verdict emission; a real Post-Action
-Auditor with `throttle`). Phases 4–6 are scoped but not started. See [Build order](#build-order) for what each
-phase covers and [Phase 1, as built](#phase-1-as-built) for what shipped.
+Status: **Phases 1–4 landed, Phase 6 substantially landed.** Constraint metadata
+and placement; the Σ-derived trace record and signed verdict emission; a real
+Post-Action Auditor with `throttle`; an Escalation Router with a bounded
+reversibility window; authority intersection over named graphs and the
+attribution tuple. **Phase 5 (the `T ⊨ Σ` checker) is the main outstanding
+work**, and each "as built" section below ends with what it did *not* close. See
+[Build order](#build-order) for the phases and the "as built" sections for what
+actually shipped versus what was sketched.
 
 ## Why this document
 
@@ -146,6 +150,12 @@ quipu's `group_id` is documented as provenance-only, and
 [Governance Plane](governance-plane.md) scopes v1 to a single trust domain. This is the deepest gap and the one with a
 real prerequisite.
 
+> **Correction.** The "real prerequisite" was described as quipu multi-tenancy,
+> and that was wrong: named graphs are already a storage-enforced isolation
+> substrate, and the actual gap was authorization over them. Mostly closed — see
+> [Phase 6, as built](#phase-6-as-built) for what landed and what is still open
+> (the trace is still a sequence, not a tree).
+
 **G8 — Enforcement completeness is unmeasured.** Violates I7 ([SARC] §3.5).
 
 `docs/work-scoped-governance.md` §"What this cannot reach" is an honest,
@@ -186,11 +196,23 @@ undeclarable-in-practice even once the field exists.
 
 ### Position on the adoption ladder ([SARC] §13.3)
 
+As first written, and where each rung now stands:
+
 - **Level 1** (PAG, hard constraints at the tool/policy layer, structured trace
-  emission) — substantially met; I3 and I8 outstanding.
-- **Level 2** (PAA, soft constraints with calibrated operating points) — not started.
-- **Level 3** (ATM, ER with declared τ_rev) — not started.
-- **Level 4** (multi-agent) — blocked on quipu multi-tenancy.
+  emission) — was "substantially met; I3 and I8 outstanding". **I3 met** by the
+  Σ-derived trace record; I8 waits on the checker (Phase 5).
+- **Level 2** (PAA, soft constraints with calibrated operating points) — was "not
+  started". **PAA and `throttle` built**; the operating points are *declarable*
+  but not yet *calibrated*, which needs the replay harness in Phase 5. A declared
+  θ that no measurement backs is a number, not a calibration, and the ladder
+  should not be claimed on it.
+- **Level 3** (ATM, ER with declared τ_rev) — **ER built** with a declared window
+  and default-deny past it. **No ATM**: nothing observes an action mid-flight
+  (G6), so this rung is half met.
+- **Level 4** (multi-agent) — was "blocked on quipu multi-tenancy", which
+  misdescribed the blocker. Authority intersection and the attribution tuple are
+  built; the trace is still a sequence rather than a tree, so the
+  attribution-dilution defence is reconstructible rather than structural.
 
 ## Decisions
 
@@ -560,13 +582,18 @@ record: `aegis:freshness` admits only fresh/stale and the conservative reading i
 the only one that cannot overstate, while a trace record is diagnostic and the
 distinction is real. Two audiences, two mappings, each stated where it applies.
 
-**Still open in Phase 2:** the attribution tuple. `α`
-remains partial by design — hank can supply `tool`, `executor` and `C_eval`
-honestly, but the principal chain `P` and intersected authority `auth` need
-multi-tenancy quipu does not have. They are absent from the record rather than
-filled with the single agent id, because a one-element chain asserted where a
-real chain belongs reads as "this action had one principal" to exactly the
-auditor the field exists for.
+**The attribution tuple, since closed.** Phase 2 shipped `α` partial: hank
+supplied `tool`, `executor` and `C_eval`, and left the principal chain `P` and
+the intersected authority `auth` absent rather than filled with the single agent
+id — a one-element chain asserted where a real chain belongs reads as "this
+action had one principal" to exactly the auditor the field exists for. The
+stated blocker was multi-tenancy quipu did not have. **That reading was wrong
+about quipu and is now wrong about hank too**; see [Phase 6](#phase-6-as-built)
+for what named graphs already provided, what authority intersection added, and
+`src/attribution.rs` for the five elements hank now records. `auth` is still not
+one of them, and that is deliberate rather than pending: it is the intersection
+of grants quipu owns, so hank records `P` and the checker derives `auth` from the
+authoritative source.
 
 ### Phase 3 — Make the PAA a real enforcement point
 
@@ -656,6 +683,43 @@ bounded human oversight.*
   [SARC] §5.3 is that `W_q < τ_rev` is a *measurable* property of an M/M/c
   queue, not an assertion.
 
+### Phase 4, as built
+
+`quipu/src/governance/router.rs`, plus `aegis:OperatorGroupShape` and
+`aegis:DecisionRequestShape`. Three things came out differently from the sketch
+above, each because the sketch described something that could not be true.
+
+**The router does not hold the transaction open.** A write gate is synchronous;
+"hold until τ_rev" would convert an approval gate into a lock on the store, and
+a store you cannot write to while a human is at lunch is an outage wearing
+governance's clothes. What actually happens: the refused attempt **mints a
+`DecisionRequest`** naming the policy, the target, the group that can rule, an
+evidence hash and an `expiresAt` derived from the constraint's reversibility
+window; a human signs an `aegis:Decision` bound to the same hash; the **next
+attempt** finds it and proceeds. The hold is the agent retrying, not the engine
+waiting. §5.3's window still governs — past `expiresAt` an unserviced request is
+`Expired`, which is a **denial**, and `Ruling::permits` returns true for
+`Approved` alone so neither `Pending` nor `Expired` can read as a pass.
+
+**A rejection outranks an approval.** When both are bound to the same evidence,
+two humans have disagreed, and resolving that by row order would make the
+outcome depend on storage layout. The safe reading of a disagreement about
+whether to permit something is no.
+
+**The request is staged, not written in place.** The gate runs inside the
+savepoint the refusal is about to roll back, so a request written there would
+vanish with it — leaving an operator a refusal and no request to act on, exactly
+the state the router exists to end. Requests stage on the `Store` and flush after
+the savepoint resolves *either way*, the same mechanism verdicts use rather than
+a second one invented for decisions.
+
+**What it is not:** there is no scheduler and no notification. `routedTo` records
+*which* group should rule; delivering the request to them is a consumer of the
+record. The queue-depth and utilisation metrics of §5.3 need a queue with a
+server attached, and claiming `W_q < τ_rev` from a store that only records
+requests would be the dashboard anti-pattern with extra steps. That measurement
+stays open, and it is named here rather than quietly dropped.
+
 ### Phase 5 — Audit checker and enforcement inventory
 
 *Closes G8 and G10 — the "auditable by construction" claim itself.*
@@ -679,7 +743,9 @@ bounded human oversight.*
 
 ### Phase 6 — Multi-agent
 
-*Closes G7. Gated on quipu enforceable multi-tenancy — do not start before it.*
+*Closes G7. Originally written as "gated on quipu enforceable multi-tenancy — do
+not start before it". That gate was misdescribed; see [Phase 6, as
+built](#phase-6-as-built).*
 
 - Attribution tuple α on every trace record; the trace stored as a **tree**,
   worker subtrees attached to their dispatch node, never summarised.
@@ -692,6 +758,104 @@ bounded human oversight.*
   output, sub-agent responses) with a PAA trust predicate. The zero-trust agent
   gateway of [SARC] §9.5, expressed in the existing constraint vocabulary rather
   than as a separate perimeter layer.
+
+### Phase 6, as built
+
+#### The gate was described wrongly
+
+"Blocked on quipu multi-tenancy" was the framing above, and in G7, and in the
+Phase 2 note about the attribution tuple. It was wrong, and it was wrong in a way
+that cost real work: it made a whole phase look unreachable when the substrate
+was already there.
+
+Quipu's named graphs are not a provenance label. `graphs` is a registry with an
+enforced `committed|overlay` class and a bind-once `parent_branch`, and writes,
+retractions and idempotency are **all graph-scoped in SQL**
+(`store/overlays.rs`, `store/ops.rs`). Partitioning was never the missing piece.
+What was missing is **authorization**: `http_auth::authorize` is one global
+bearer token, all-or-nothing, and nothing checked whether a principal may write
+to graph *N*. "Multi-tenancy is unbuilt" and "multi-tenancy has no access-control
+layer" are different claims, and only the second was true. `quipu`'s
+`docs/design/group-isolation.md` carried the older framing and has been corrected
+in place, because a doc that is being read as a blocker is not a neutral
+inaccuracy.
+
+#### Authority intersection — `quipu/src/governance/authority.rs`
+
+§9.3's rule, `auth_k = ⋂ authority(p_i)` for `i in 0..=k`, as code:
+
+- `Authority::intersect` is monotonically non-increasing, so adding a delegate
+  can only narrow. That is the defence against **authority escalation via tool
+  capability** (§9.5) — a sub-agent whose own credentials are broader cannot use
+  them, because the effective authority is the intersection and not the
+  executor's own.
+- **The wildcard is the identity, not a widening.** A principal may hold `*`,
+  which is how a single-tenant deployment keeps working unchanged; `*`
+  intersected with a narrow authority is the narrow one, so a wildcard-holding
+  orchestrator delegating to a scoped worker yields the *worker's* scope.
+- **An empty intersection fails safe.** A chain narrowed to nothing cannot act,
+  and that is a refusal rather than a fallback to the principal's authority —
+  the fallback would be precisely the escalation the rule exists to stop.
+- **An empty chain is `none()`, not `any()`.** "Nobody said who is acting" must
+  not mean "anybody may act".
+- **An undeclared principal holds nothing.** Reading an absent grant as
+  permission is how an access-control layer becomes decorative.
+
+Enforcement runs in `Store::enforce_graph_authority`, called **before** the
+savepoint in `transact_to_graph` — the real write path, not a helper a caller
+can route around. It is gated by `enforce_authority` (default off) and is inert
+without a principal chain, so every existing caller is untouched: the flag makes
+a *supplied* chain binding rather than making attribution a hard requirement
+beneath a running deployment. The refusal names the chain, the graph, and what
+the chain actually holds, because a refusal that says only "denied" leaves an
+operator guessing which link narrowed it.
+
+#### The attribution tuple — `hank/src/attribution.rs`
+
+`α = ⟨P, planner, executor, tool, auth, C_eval⟩`, on the gate record and the PAA
+record alike. Five of the six:
+
+- **`P`** from `HANK_PRINCIPAL_CHAIN`, comma-separated and caller-first. A
+  dispatcher that spawns a sub-agent appends itself and exports the extended
+  chain. **Absent when undeclared** — an undeclared chain is not a one-link
+  chain, and this is the same distinction that kept the field out of the record
+  in Phase 2.
+- **`planner`** from `HANK_PLANNER`, declared and never derived from the chain's
+  head. Which link deliberated and which executed is a fact about the dispatch;
+  reading it off list position would be an inference wearing a record's clothes.
+- **`executor`** from `$SHANTY_AGENT` — the identity of the process that actually
+  ran, which is ground truth rather than a claim.
+- **`tool`** from the hook payload.
+- **`C_eval`** is the `constraints` array Phase 2 already emits.
+
+`auth` is deliberately **not** recorded by hank, and this is a settled decision
+rather than a pending one: the effective authority is the intersection of grants
+that live in quipu, hank cannot read them inside a 100 ms pre-edit budget, and a
+locally-guessed value would put a number in the field the grant store never
+agreed to. Recording `P` is what lets the checker derive `auth` from the
+authoritative source. The tuple is completed by the audit, not faked by the hook.
+
+**The conflict flag.** `HANK_PRINCIPAL_CHAIN` is a declaration; `$SHANTY_AGENT`
+is what is running. When a chain is declared and its tail disagrees with the
+executor, the record says `attribution_conflict` rather than silently preferring
+one. That disagreement is the observable signature of a laundered chain — an
+agent acting under a dispatch record naming somebody else — and a record that
+resolved it by precedence would delete the only evidence of it. It is emitted
+only when true: a `false` on every line trains a reader to skip the field, which
+is the opposite of what it is for.
+
+#### Still open in Phase 6
+
+- **The trace is still a sequence, not a tree.** `P` makes the dispatch
+  *reconstructible* — worker records now name the chain that spawned them — but
+  nothing attaches a worker subtree to its dispatch node, so §9.5's
+  attribution-dilution defence is one reconstruction step away rather than
+  structural.
+- **Constraint inheritance with decidability rescue** is unbuilt. An inherited
+  constraint that becomes undecidable at a deeper layer is currently just not
+  evaluated there, which is the constraint-laundering path the rescue exists to
+  close.
+- **Trust-boundary tagging on imported state** is unbuilt.
 
 ## Files this touches
 

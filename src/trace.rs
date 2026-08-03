@@ -18,14 +18,13 @@
 //! ## What is honestly recordable today
 //!
 //! [`ConstraintEvaluation`] is the full `E_i` for one constraint. The
-//! attribution tuple `α` is deliberately PARTIAL: SARC §9.6 wants
-//! `⟨P, planner, executor, tool, auth, C_eval⟩`, and hank can supply `tool`,
-//! `executor` and `C_eval` honestly today. The principal-and-agent chain `P` and
-//! the intersected authority `auth` need multi-tenancy quipu does not yet have
-//! (`group_id` is provenance-only), so they are ABSENT from the record rather
-//! than filled with the single agent id — a one-element chain asserted where a
-//! real chain belongs would read as "this action had one principal" to exactly
-//! the auditor the field exists for.
+//! attribution tuple `α` — SARC §9.6's `⟨P, planner, executor, tool, auth,
+//! C_eval⟩` — lives next door in [`crate::attribution`], which composes the
+//! other five elements around the `C_eval` this module emits. Only `auth` is
+//! deliberately not hank's to record: the effective authority is the
+//! intersection of every link's grant, the grants live in quipu, and a
+//! locally-guessed value would put a number in the field the grant store never
+//! agreed to. Recording `P` is what lets the checker derive it.
 
 use serde::{Deserialize, Serialize};
 
