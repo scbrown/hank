@@ -182,10 +182,14 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="sarc-conformance--what-hank--quipu-still-needs"><a class="header" href="#sarc-conformance--what-hank--quipu-still-needs">SARC Conformance — what hank × quipu still needs</a></h1>
-<p>Status: <strong>MVP complete</strong> — Phases 1–3 landed (constraint metadata and placement;
-the Σ-derived trace record and signed verdict emission; a real Post-Action
-Auditor with <code>throttle</code>). Phases 4–6 are scoped but not started. See <a href="#build-order">Build order</a> for what each
-phase covers and <a href="#phase-1-as-built">Phase 1, as built</a> for what shipped.</p>
+<p>Status: <strong>Phases 1–4 landed, Phase 6 substantially landed.</strong> Constraint metadata
+and placement; the Σ-derived trace record and signed verdict emission; a real
+Post-Action Auditor with <code>throttle</code>; an Escalation Router with a bounded
+reversibility window; authority intersection over named graphs and the
+attribution tuple. <strong>Phase 5 (the <code>T ⊨ Σ</code> checker) is the main outstanding
+work</strong>, and each "as built" section below ends with what it did <em>not</em> close. See
+<a href="#build-order">Build order</a> for the phases and the "as built" sections for what
+actually shipped versus what was sketched.</p>
 <h2 id="why-this-document"><a class="header" href="#why-this-document">Why this document</a></h2>
 <p>Besanson <a href="#sources">[SARC]</a> proposes that constraints become a first-class
 specification object alongside state, action space and reward (§3.1):</p>
@@ -302,6 +306,13 @@ constraint-laundering and attribution-dilution failure modes of [SARC] §9.5.
 quipu's <code>group_id</code> is documented as provenance-only, and
 <a href="governance-plane.html">Governance Plane</a> scopes v1 to a single trust domain. This is the deepest gap and the one with a
 real prerequisite.</p>
+<blockquote>
+<p><strong>Correction.</strong> The "real prerequisite" was described as quipu multi-tenancy,
+and that was wrong: named graphs are already a storage-enforced isolation
+substrate, and the actual gap was authorization over them. Mostly closed — see
+<a href="#phase-6-as-built">Phase 6, as built</a> for what landed and what is still open
+(the trace is still a sequence, not a tree).</p>
+</blockquote>
 <p><strong>G8 — Enforcement completeness is unmeasured.</strong> Violates I7 ([SARC] §3.5).</p>
 <p><code>docs/work-scoped-governance.md</code> §"What this cannot reach" is an honest,
 explicit list of bypass surfaces: CI pipelines, cron, the far side of a remote
@@ -333,12 +344,23 @@ measured false-positive rate — so the advise→enforce promotion ladder in
 <code>work-scoped-governance.md</code> §Evals cannot be walked, and θ (G1) would be
 undeclarable-in-practice even once the field exists.</p>
 <h3 id="position-on-the-adoption-ladder-sarc-133"><a class="header" href="#position-on-the-adoption-ladder-sarc-133">Position on the adoption ladder ([SARC] §13.3)</a></h3>
+<p>As first written, and where each rung now stands:</p>
 <ul>
 <li><strong>Level 1</strong> (PAG, hard constraints at the tool/policy layer, structured trace
-emission) — substantially met; I3 and I8 outstanding.</li>
-<li><strong>Level 2</strong> (PAA, soft constraints with calibrated operating points) — not started.</li>
-<li><strong>Level 3</strong> (ATM, ER with declared τ_rev) — not started.</li>
-<li><strong>Level 4</strong> (multi-agent) — blocked on quipu multi-tenancy.</li>
+emission) — was "substantially met; I3 and I8 outstanding". <strong>I3 met</strong> by the
+Σ-derived trace record; I8 waits on the checker (Phase 5).</li>
+<li><strong>Level 2</strong> (PAA, soft constraints with calibrated operating points) — was "not
+started". <strong>PAA and <code>throttle</code> built</strong>; the operating points are <em>declarable</em>
+but not yet <em>calibrated</em>, which needs the replay harness in Phase 5. A declared
+θ that no measurement backs is a number, not a calibration, and the ladder
+should not be claimed on it.</li>
+<li><strong>Level 3</strong> (ATM, ER with declared τ_rev) — <strong>ER built</strong> with a declared window
+and default-deny past it. <strong>No ATM</strong>: nothing observes an action mid-flight
+(G6), so this rung is half met.</li>
+<li><strong>Level 4</strong> (multi-agent) — was "blocked on quipu multi-tenancy", which
+misdescribed the blocker. Authority intersection and the attribution tuple are
+built; the trace is still a sequence rather than a tree, so the
+attribution-dilution defence is reconstructible rather than structural.</li>
 </ul>
 <h2 id="decisions"><a class="header" href="#decisions">Decisions</a></h2>
 <ul>
@@ -676,13 +698,18 @@ against a stale projection as evidence about current policy.</p>
 record: <code>aegis:freshness</code> admits only fresh/stale and the conservative reading is
 the only one that cannot overstate, while a trace record is diagnostic and the
 distinction is real. Two audiences, two mappings, each stated where it applies.</p>
-<p><strong>Still open in Phase 2:</strong> the attribution tuple. <code>α</code>
-remains partial by design — hank can supply <code>tool</code>, <code>executor</code> and <code>C_eval</code>
-honestly, but the principal chain <code>P</code> and intersected authority <code>auth</code> need
-multi-tenancy quipu does not have. They are absent from the record rather than
-filled with the single agent id, because a one-element chain asserted where a
-real chain belongs reads as "this action had one principal" to exactly the
-auditor the field exists for.</p>
+<p><strong>The attribution tuple, since closed.</strong> Phase 2 shipped <code>α</code> partial: hank
+supplied <code>tool</code>, <code>executor</code> and <code>C_eval</code>, and left the principal chain <code>P</code> and
+the intersected authority <code>auth</code> absent rather than filled with the single agent
+id — a one-element chain asserted where a real chain belongs reads as "this
+action had one principal" to exactly the auditor the field exists for. The
+stated blocker was multi-tenancy quipu did not have. <strong>That reading was wrong
+about quipu and is now wrong about hank too</strong>; see <a href="#phase-6-as-built">Phase 6</a>
+for what named graphs already provided, what authority intersection added, and
+<code>src/attribution.rs</code> for the five elements hank now records. <code>auth</code> is still not
+one of them, and that is deliberate rather than pending: it is the intersection
+of grants quipu owns, so hank records <code>P</code> and the checker derives <code>auth</code> from the
+authoritative source.</p>
 <h3 id="phase-3--make-the-paa-a-real-enforcement-point"><a class="header" href="#phase-3--make-the-paa-a-real-enforcement-point">Phase 3 — Make the PAA a real enforcement point</a></h3>
 <p><em>Closes G4.</em></p>
 <p>Give <code>hook/post_edit.rs</code> a constraint-evaluation path alongside its advisory
@@ -759,6 +786,37 @@ says so loudly.</li>
 [SARC] §5.3 is that <code>W_q &lt; τ_rev</code> is a <em>measurable</em> property of an M/M/c
 queue, not an assertion.</li>
 </ul>
+<h3 id="phase-4-as-built"><a class="header" href="#phase-4-as-built">Phase 4, as built</a></h3>
+<p><code>quipu/src/governance/router.rs</code>, plus <code>aegis:OperatorGroupShape</code> and
+<code>aegis:DecisionRequestShape</code>. Three things came out differently from the sketch
+above, each because the sketch described something that could not be true.</p>
+<p><strong>The router does not hold the transaction open.</strong> A write gate is synchronous;
+"hold until τ_rev" would convert an approval gate into a lock on the store, and
+a store you cannot write to while a human is at lunch is an outage wearing
+governance's clothes. What actually happens: the refused attempt <strong>mints a
+<code>DecisionRequest</code></strong> naming the policy, the target, the group that can rule, an
+evidence hash and an <code>expiresAt</code> derived from the constraint's reversibility
+window; a human signs an <code>aegis:Decision</code> bound to the same hash; the <strong>next
+attempt</strong> finds it and proceeds. The hold is the agent retrying, not the engine
+waiting. §5.3's window still governs — past <code>expiresAt</code> an unserviced request is
+<code>Expired</code>, which is a <strong>denial</strong>, and <code>Ruling::permits</code> returns true for
+<code>Approved</code> alone so neither <code>Pending</code> nor <code>Expired</code> can read as a pass.</p>
+<p><strong>A rejection outranks an approval.</strong> When both are bound to the same evidence,
+two humans have disagreed, and resolving that by row order would make the
+outcome depend on storage layout. The safe reading of a disagreement about
+whether to permit something is no.</p>
+<p><strong>The request is staged, not written in place.</strong> The gate runs inside the
+savepoint the refusal is about to roll back, so a request written there would
+vanish with it — leaving an operator a refusal and no request to act on, exactly
+the state the router exists to end. Requests stage on the <code>Store</code> and flush after
+the savepoint resolves <em>either way</em>, the same mechanism verdicts use rather than
+a second one invented for decisions.</p>
+<p><strong>What it is not:</strong> there is no scheduler and no notification. <code>routedTo</code> records
+<em>which</em> group should rule; delivering the request to them is a consumer of the
+record. The queue-depth and utilisation metrics of §5.3 need a queue with a
+server attached, and claiming <code>W_q &lt; τ_rev</code> from a store that only records
+requests would be the dashboard anti-pattern with extra steps. That measurement
+stays open, and it is named here rather than quietly dropped.</p>
 <h3 id="phase-5--audit-checker-and-enforcement-inventory"><a class="header" href="#phase-5--audit-checker-and-enforcement-inventory">Phase 5 — Audit checker and enforcement inventory</a></h3>
 <p><em>Closes G8 and G10 — the "auditable by construction" claim itself.</em></p>
 <ul>
@@ -780,7 +838,9 @@ Phase-1 operating point θ an honest number rather than a declared one, and it
 gates advise→enforce promotion per rule.</li>
 </ul>
 <h3 id="phase-6--multi-agent"><a class="header" href="#phase-6--multi-agent">Phase 6 — Multi-agent</a></h3>
-<p><em>Closes G7. Gated on quipu enforceable multi-tenancy — do not start before it.</em></p>
+<p><em>Closes G7. Originally written as "gated on quipu enforceable multi-tenancy — do
+not start before it". That gate was misdescribed; see <a href="#phase-6-as-built">Phase 6, as
+built</a>.</em></p>
 <ul>
 <li>Attribution tuple α on every trace record; the trace stored as a <strong>tree</strong>,
 worker subtrees attached to their dispatch node, never summarised.</li>
@@ -793,6 +853,95 @@ never silently drop it, which is the constraint-laundering path.</li>
 output, sub-agent responses) with a PAA trust predicate. The zero-trust agent
 gateway of [SARC] §9.5, expressed in the existing constraint vocabulary rather
 than as a separate perimeter layer.</li>
+</ul>
+<h3 id="phase-6-as-built"><a class="header" href="#phase-6-as-built">Phase 6, as built</a></h3>
+<h4 id="the-gate-was-described-wrongly"><a class="header" href="#the-gate-was-described-wrongly">The gate was described wrongly</a></h4>
+<p>"Blocked on quipu multi-tenancy" was the framing above, and in G7, and in the
+Phase 2 note about the attribution tuple. It was wrong, and it was wrong in a way
+that cost real work: it made a whole phase look unreachable when the substrate
+was already there.</p>
+<p>Quipu's named graphs are not a provenance label. <code>graphs</code> is a registry with an
+enforced <code>committed|overlay</code> class and a bind-once <code>parent_branch</code>, and writes,
+retractions and idempotency are <strong>all graph-scoped in SQL</strong>
+(<code>store/overlays.rs</code>, <code>store/ops.rs</code>). Partitioning was never the missing piece.
+What was missing is <strong>authorization</strong>: <code>http_auth::authorize</code> is one global
+bearer token, all-or-nothing, and nothing checked whether a principal may write
+to graph <em>N</em>. "Multi-tenancy is unbuilt" and "multi-tenancy has no access-control
+layer" are different claims, and only the second was true. <code>quipu</code>'s
+<code>docs/design/group-isolation.md</code> carried the older framing and has been corrected
+in place, because a doc that is being read as a blocker is not a neutral
+inaccuracy.</p>
+<h4 id="authority-intersection--quipusrcgovernanceauthorityrs"><a class="header" href="#authority-intersection--quipusrcgovernanceauthorityrs">Authority intersection — <code>quipu/src/governance/authority.rs</code></a></h4>
+<p>§9.3's rule, <code>auth_k = ⋂ authority(p_i)</code> for <code>i in 0..=k</code>, as code:</p>
+<ul>
+<li><code>Authority::intersect</code> is monotonically non-increasing, so adding a delegate
+can only narrow. That is the defence against <strong>authority escalation via tool
+capability</strong> (§9.5) — a sub-agent whose own credentials are broader cannot use
+them, because the effective authority is the intersection and not the
+executor's own.</li>
+<li><strong>The wildcard is the identity, not a widening.</strong> A principal may hold <code>*</code>,
+which is how a single-tenant deployment keeps working unchanged; <code>*</code>
+intersected with a narrow authority is the narrow one, so a wildcard-holding
+orchestrator delegating to a scoped worker yields the <em>worker's</em> scope.</li>
+<li><strong>An empty intersection fails safe.</strong> A chain narrowed to nothing cannot act,
+and that is a refusal rather than a fallback to the principal's authority —
+the fallback would be precisely the escalation the rule exists to stop.</li>
+<li><strong>An empty chain is <code>none()</code>, not <code>any()</code>.</strong> "Nobody said who is acting" must
+not mean "anybody may act".</li>
+<li><strong>An undeclared principal holds nothing.</strong> Reading an absent grant as
+permission is how an access-control layer becomes decorative.</li>
+</ul>
+<p>Enforcement runs in <code>Store::enforce_graph_authority</code>, called <strong>before</strong> the
+savepoint in <code>transact_to_graph</code> — the real write path, not a helper a caller
+can route around. It is gated by <code>enforce_authority</code> (default off) and is inert
+without a principal chain, so every existing caller is untouched: the flag makes
+a <em>supplied</em> chain binding rather than making attribution a hard requirement
+beneath a running deployment. The refusal names the chain, the graph, and what
+the chain actually holds, because a refusal that says only "denied" leaves an
+operator guessing which link narrowed it.</p>
+<h4 id="the-attribution-tuple--hanksrcattributionrs"><a class="header" href="#the-attribution-tuple--hanksrcattributionrs">The attribution tuple — <code>hank/src/attribution.rs</code></a></h4>
+<p><code>α = ⟨P, planner, executor, tool, auth, C_eval⟩</code>, on the gate record and the PAA
+record alike. Five of the six:</p>
+<ul>
+<li><strong><code>P</code></strong> from <code>HANK_PRINCIPAL_CHAIN</code>, comma-separated and caller-first. A
+dispatcher that spawns a sub-agent appends itself and exports the extended
+chain. <strong>Absent when undeclared</strong> — an undeclared chain is not a one-link
+chain, and this is the same distinction that kept the field out of the record
+in Phase 2.</li>
+<li><strong><code>planner</code></strong> from <code>HANK_PLANNER</code>, declared and never derived from the chain's
+head. Which link deliberated and which executed is a fact about the dispatch;
+reading it off list position would be an inference wearing a record's clothes.</li>
+<li><strong><code>executor</code></strong> from <code>$SHANTY_AGENT</code> — the identity of the process that actually
+ran, which is ground truth rather than a claim.</li>
+<li><strong><code>tool</code></strong> from the hook payload.</li>
+<li><strong><code>C_eval</code></strong> is the <code>constraints</code> array Phase 2 already emits.</li>
+</ul>
+<p><code>auth</code> is deliberately <strong>not</strong> recorded by hank, and this is a settled decision
+rather than a pending one: the effective authority is the intersection of grants
+that live in quipu, hank cannot read them inside a 100 ms pre-edit budget, and a
+locally-guessed value would put a number in the field the grant store never
+agreed to. Recording <code>P</code> is what lets the checker derive <code>auth</code> from the
+authoritative source. The tuple is completed by the audit, not faked by the hook.</p>
+<p><strong>The conflict flag.</strong> <code>HANK_PRINCIPAL_CHAIN</code> is a declaration; <code>$SHANTY_AGENT</code>
+is what is running. When a chain is declared and its tail disagrees with the
+executor, the record says <code>attribution_conflict</code> rather than silently preferring
+one. That disagreement is the observable signature of a laundered chain — an
+agent acting under a dispatch record naming somebody else — and a record that
+resolved it by precedence would delete the only evidence of it. It is emitted
+only when true: a <code>false</code> on every line trains a reader to skip the field, which
+is the opposite of what it is for.</p>
+<h4 id="still-open-in-phase-6"><a class="header" href="#still-open-in-phase-6">Still open in Phase 6</a></h4>
+<ul>
+<li><strong>The trace is still a sequence, not a tree.</strong> <code>P</code> makes the dispatch
+<em>reconstructible</em> — worker records now name the chain that spawned them — but
+nothing attaches a worker subtree to its dispatch node, so §9.5's
+attribution-dilution defence is one reconstruction step away rather than
+structural.</li>
+<li><strong>Constraint inheritance with decidability rescue</strong> is unbuilt. An inherited
+constraint that becomes undecidable at a deeper layer is currently just not
+evaluated there, which is the constraint-laundering path the rescue exists to
+close.</li>
+<li><strong>Trust-boundary tagging on imported state</strong> is unbuilt.</li>
 </ul>
 <h2 id="files-this-touches"><a class="header" href="#files-this-touches">Files this touches</a></h2>
 <p><strong>quipu</strong></p>
