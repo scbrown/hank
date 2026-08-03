@@ -3,6 +3,10 @@
 //! its private helpers); size-exempt (`_test.rs`).
 
 use super::*;
+// The decode moved to `project_decode` for size; these tests exercise it
+// through `project`'s re-exports, so name the types it produces explicitly.
+use crate::constraint::{ConstraintClass, VerificationPoint};
+use crate::rules::MatchType;
 
 /// A standard SPARQL-results JSON body with the two shipped policies.
 fn catalog_json() -> String {
@@ -96,10 +100,33 @@ fn evaluate_projected_tags_blocking_by_governed_effect() {
     let policies = decode_policies(&catalog_json()).unwrap();
     // The no-ticket policy has effect "deny" (blocking); todo-needs-ticket is
     // "warn" (advisory). A comment carrying a ticket trips the deny policy.
-    let violations = evaluate_projected(&policies, "// see ABC-123\n", "rust", "src/a.rs");
+    let violations = evaluate_projected(
+        &policies,
+        "// see ABC-123\n",
+        "rust",
+        "src/a.rs",
+        crate::policy::Mode::Enforce,
+    );
     assert_eq!(violations.len(), 1);
     assert!(violations[0].blocking, "a deny-effect policy must block");
     assert!(violations[0].message.contains("no-ticket-in-comment"));
+}
+
+#[test]
+fn advise_mode_is_a_ceiling_no_class_blocks_under_it() {
+    // The staging guarantee. A deployment in advise mode never blocks, whatever
+    // the class or effect says — that is what makes it safe to project a new
+    // hard constraint before anyone has measured its false-positive rate.
+    let policies = decode_policies(&catalog_json()).unwrap();
+    let violations = evaluate_projected(
+        &policies,
+        "// see ABC-123\n",
+        "rust",
+        "src/a.rs",
+        crate::policy::Mode::Advise,
+    );
+    assert_eq!(violations.len(), 1, "it still REPORTS");
+    assert!(!violations[0].blocking, "and does not block");
 }
 
 #[test]
@@ -247,4 +274,198 @@ fn distinct_entities_are_still_distinct_rules() {
     })
     .to_string();
     assert_eq!(decode_text_rules(&body).unwrap().len(), 2);
+}
+
+// ── SARC constraint metadata (Phase 1) ───────────────────────────────────────
+
+/// One policy row, with whatever SARC fields the caller supplies. Built as a
+/// map so a test can express "this binding is ABSENT" — the case that matters
+/// most here — rather than only "this binding is empty".
+fn policy_row(name: &str, effect: &str, extra: &[(&str, &str)]) -> serde_json::Value {
+    let lit = |v: &str| serde_json::json!({ "type": "literal", "value": v });
+    let mut row = serde_json::Map::new();
+    row.insert("policy".into(), lit(&format!("http://aegis/{name}")));
+    row.insert("name".into(), lit(name));
+    row.insert("language".into(), lit("rust"));
+    row.insert("query".into(), lit("(line_comment) @c"));
+    row.insert("pattern".into(), lit("\\b[A-Z]+-[0-9]+\\b"));
+    row.insert("matchType".into(), lit("must-not-match"));
+    row.insert("effect".into(), lit(effect));
+    for (k, v) in extra {
+        row.insert((*k).into(), lit(v));
+    }
+    serde_json::Value::Object(row)
+}
+
+fn body(rows: Vec<serde_json::Value>) -> String {
+    serde_json::json!({ "head": { "vars": [] }, "results": { "bindings": rows } }).to_string()
+}
+
+#[test]
+fn a_catalog_with_no_sarc_fields_still_projects() {
+    // THE REGRESSION THIS SEAM HAS ALREADY SUFFERED ONCE. If the projection
+    // required ?constraintClass, every policy in a quipu whose catalog predates
+    // Q-SARC-CLASS would vanish — both sides shipped, zero rows, and a guard
+    // that reports clean because it is evaluating nothing. Absent fields must
+    // decode to None and behave exactly as they did before the field existed.
+    let policies = decode_policies(&catalog_json()).unwrap();
+    assert_eq!(policies.len(), 2, "a pre-SARC catalog still projects");
+    assert!(policies.iter().all(|p| p.rule.class.is_none()));
+    assert!(policies.iter().all(|p| p.rule.verification_point.is_none()));
+
+    // ... and the governed effect still decides, under Enforce.
+    let violations = evaluate_projected(
+        &policies,
+        "// see ABC-123\n",
+        "rust",
+        "src/a.rs",
+        crate::policy::Mode::Enforce,
+    );
+    assert!(
+        violations[0].blocking,
+        "with no class, a deny-effect policy blocks as it always did"
+    );
+}
+
+#[test]
+fn sarc_fields_decode_when_present() {
+    let json = body(vec![policy_row(
+        "no-ticket-in-comment",
+        "deny",
+        &[
+            ("constraintClass", "hard"),
+            ("verificationPoint", "PAG"),
+            ("latencyBudgetMs", "5"),
+        ],
+    )]);
+    let p = &decode_policies(&json).unwrap()[0];
+    assert_eq!(p.rule.class, Some(ConstraintClass::Hard));
+    assert_eq!(p.rule.verification_point, Some(VerificationPoint::Pag));
+    assert_eq!(p.latency_budget_ms, Some(5));
+}
+
+#[test]
+fn an_unknown_class_is_a_projection_error_not_a_default() {
+    // Defaulting an unrecognised class to `soft` would silently downgrade a
+    // hard constraint; defaulting it to `hard` would block on a typo. Neither
+    // is a reading anyone can defend, so it is an error the guard fails open
+    // on, loudly.
+    let json = body(vec![policy_row(
+        "p",
+        "deny",
+        &[("constraintClass", "catastrophic")],
+    )]);
+    let err = decode_policies(&json).unwrap_err();
+    assert!(
+        matches!(&err, Error::Projection(m) if m.contains("catastrophic")),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn an_unknown_verification_point_is_a_projection_error() {
+    let json = body(vec![policy_row(
+        "p",
+        "deny",
+        &[("verificationPoint", "🤷")],
+    )]);
+    assert!(matches!(
+        decode_policies(&json).unwrap_err(),
+        Error::Projection(_)
+    ));
+}
+
+#[test]
+fn a_soft_class_never_blocks_even_with_a_deny_effect() {
+    // The class outranks the effect. That combination is contradictory and
+    // quipu's placement check now refuses to DEFINE it — but a store predating
+    // the check can hold one, and honouring what the author declared it to BE
+    // is the only reading that is not a guess.
+    let json = body(vec![policy_row(
+        "p",
+        "deny",
+        &[("constraintClass", "soft"), ("verificationPoint", "PAA")],
+    )]);
+    let policies = decode_policies(&json).unwrap();
+    // PAA, so it does not even run at the gate.
+    assert!(!runs_at_pre_edit(&policies[0]));
+    assert!(
+        !policy_blocks(&policies[0], crate::policy::Mode::Enforce),
+        "a soft constraint must not block, whatever its effect says"
+    );
+}
+
+#[test]
+fn a_paa_policy_does_not_fire_at_the_pre_edit_gate() {
+    // Evaluating a post-action rule at the gate would tell the model to fix
+    // something its author scoped to after the fact.
+    let json = body(vec![policy_row(
+        "p",
+        "warn",
+        &[("constraintClass", "soft"), ("verificationPoint", "PAA")],
+    )]);
+    let policies = decode_policies(&json).unwrap();
+    let violations = evaluate_projected(
+        &policies,
+        "// see ABC-123\n",
+        "rust",
+        "src/a.rs",
+        crate::policy::Mode::Enforce,
+    );
+    assert!(
+        violations.is_empty(),
+        "a PAA-declared policy is skipped at pre-edit, not evaluated and ignored"
+    );
+}
+
+#[test]
+fn a_hard_pag_policy_blocks_under_enforce_and_not_under_advise() {
+    // Both outcomes for the same rule — the RED and GREEN pair.
+    let json = body(vec![policy_row(
+        "p",
+        "deny",
+        &[("constraintClass", "hard"), ("verificationPoint", "PAG")],
+    )]);
+    let policies = decode_policies(&json).unwrap();
+    assert!(policy_blocks(&policies[0], crate::policy::Mode::Enforce));
+    assert!(!policy_blocks(&policies[0], crate::policy::Mode::Advise));
+    assert!(!policy_blocks(&policies[0], crate::policy::Mode::Off));
+}
+
+#[test]
+fn throttle_is_advisory_at_the_gate() {
+    // The soft-class PAA response. Until the post-edit auditor applies it
+    // (Phase 3), a throttle policy warns — and must not be read as a block
+    // simply because it is not in the advisory list.
+    assert!(!effect_blocks("throttle"));
+}
+
+#[test]
+fn one_policy_is_one_rule_across_a_cross_product() {
+    // SPARQL returns the cross product of the OPTIONALs, so a policy with two
+    // labels comes back as two rows. The text decoder learned this the
+    // expensive way (7 entities -> 11 rules, 4 duplicates); the SARC fields add
+    // three more multipliers to this one.
+    let a = policy_row("p", "deny", &[("constraintClass", "hard")]);
+    let mut b = a.clone();
+    b["name"] = serde_json::json!({ "type": "literal", "value": "p (also known as)" });
+    let policies = decode_policies(&body(vec![a, b])).unwrap();
+    assert_eq!(
+        policies.len(),
+        1,
+        "two rows for one policy IRI collapse to one rule"
+    );
+}
+
+#[test]
+fn conflicting_rows_for_one_policy_are_refused_not_merged() {
+    // Two different policies wearing one identity. Picking either silently is
+    // how a guard enforces something nobody wrote.
+    let a = policy_row("p", "deny", &[("constraintClass", "hard")]);
+    let b = policy_row("p", "deny", &[("constraintClass", "soft")]);
+    let err = decode_policies(&body(vec![a, b])).unwrap_err();
+    assert!(
+        matches!(&err, Error::Projection(m) if m.contains("conflicting")),
+        "got {err:?}"
+    );
 }

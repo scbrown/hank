@@ -15,10 +15,18 @@
 /// Only policies that carry BOTH atoms and a selector language are returned — a
 /// committed-tier (SPARQL-`claim`-only) policy has no structural evidence to
 /// project and is left for quipu's own write gate.
+/// The SARC constraint metadata (quipu `Q-SARC-CLASS`) is pulled as OPTIONAL,
+/// deliberately. Requiring `?constraintClass` in the WHERE clause would return
+/// ZERO ROWS against any quipu whose catalog has not been backfilled — the
+/// both-sides-shipped-and-the-seam-went-silent failure this module's own
+/// [`TEXT_POLICY_QUERY`] comment records happening once already. A projected
+/// policy that predates the field decodes with `class: None` and falls back to
+/// the ambient mode, which is the behaviour hank had before the field existed.
 pub const POLICY_QUERY: &str = "\
 PREFIX aegis: <http://aegis.gastown.local/ontology/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-SELECT ?name ?language ?query ?pattern ?matchType ?gate ?effect WHERE {
+SELECT ?policy ?name ?language ?query ?pattern ?matchType ?gate ?effect
+       ?constraintClass ?verificationPoint ?latencyBudgetMs WHERE {
   ?policy a aegis:Policy ;
           aegis:boundary \"action\" ;
           aegis:selector ?sel ;
@@ -31,6 +39,9 @@ SELECT ?name ?language ?query ?pattern ?matchType ?gate ?effect WHERE {
   OPTIONAL { ?pred aegis:gate ?gate }
   OPTIONAL { ?policy rdfs:label ?name }
   OPTIONAL { ?policy aegis:effect ?effect }
+  OPTIONAL { ?policy aegis:constraintClass ?constraintClass }
+  OPTIONAL { ?policy aegis:verificationPoint ?verificationPoint }
+  OPTIONAL { ?policy aegis:latencyBudgetMs ?latencyBudgetMs }
 }";
 
 /// The SPARQL SELECT that pulls the governed TEXT-rule catalogue

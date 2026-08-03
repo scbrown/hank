@@ -263,8 +263,19 @@ pub(super) fn governed_check(
         .and_then(OsStr::to_str)
         .and_then(language_for_extension)
     {
-        let violations =
-            crate::project::evaluate_projected(registry.policies(), &introduced, language, rel);
+        // The mode is passed in rather than applied afterwards because the
+        // DECLARED CLASS now decides blocking (SARC §3.1), and only
+        // `evaluate_projected` can see which policy produced which violation.
+        // `Mode::Advise` stays a ceiling on top of it — an advise-mode
+        // deployment never blocks, whatever a hard constraint says, which is
+        // what makes staging a new one safe.
+        let violations = crate::project::evaluate_projected(
+            registry.policies(),
+            &introduced,
+            language,
+            rel,
+            config.policy.mode,
+        );
         structural_count = violations.len();
         for v in &violations {
             if v.blocking {

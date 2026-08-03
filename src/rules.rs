@@ -22,6 +22,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::constraint::{ConstraintClass, VerificationPoint};
 use crate::errors::Error;
 use crate::extract::query::{run_query, Capture};
 use crate::types::Tier;
@@ -89,6 +90,23 @@ pub struct Rule {
     /// [`MatchType`].
     #[serde(default)]
     pub message: Option<String>,
+    /// What KIND of bound this is (SARC §3.1), mirroring quipu's
+    /// `aegis:constraintClass`. Distinct from the governed `effect`, which says
+    /// what happens when it fires: `deny` is a response, `hard` is a class, and
+    /// conflating them is what left "may this ever execute?" unanswerable.
+    ///
+    /// `None` for a rule that does not declare one — a locally-configured rule
+    /// under `[[hank.policy.rules]]`, or a projected policy from a quipu that
+    /// predates the field. Absent means "fall back to the ambient
+    /// [`crate::policy::Mode`]", never a guessed class.
+    #[serde(default)]
+    pub class: Option<ConstraintClass>,
+    /// Where this rule is evaluated (SARC §4.1), mirroring
+    /// `aegis:verificationPoint`. Carried so a verdict can say which point
+    /// produced it; hank evaluates `PAG` rules at `hook pre-edit` and `PAA`
+    /// rules at `hook post-edit`.
+    #[serde(default)]
+    pub verification_point: Option<VerificationPoint>,
 }
 
 /// A single rule violation, with the text shown to the model.
@@ -256,6 +274,8 @@ mod tests {
             pattern: pattern.to_string(),
             applies_to: Vec::new(),
             message: None,
+            class: None,
+            verification_point: None,
         }
     }
 

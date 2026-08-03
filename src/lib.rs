@@ -18,6 +18,7 @@ pub mod cli;
 mod cli_cmds;
 pub mod community;
 pub mod config;
+pub mod constraint;
 pub mod daemon;
 pub mod dataflow;
 pub mod docref;
@@ -39,6 +40,7 @@ pub mod project;
 /// does not have are dead weight, and an ungated half of a gated feature is how
 /// a `--features` matrix starts lying about what a binary can do.
 #[cfg(feature = "quipu")]
+pub mod project_decode;
 pub mod project_queries;
 /// Phase-4 Quipu promotion: SHACL-validate a Turtle projection, then write it.
 #[cfg(feature = "quipu")]

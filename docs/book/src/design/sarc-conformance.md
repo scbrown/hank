@@ -1,7 +1,9 @@
 # SARC Conformance — what hank × quipu still needs
 
-Status: **analysis + build order.** Phases 1–3 are the agreed MVP; Phases 4–6
-are scoped but not started. Nothing here is implemented yet.
+Status: **Phase 1 landed** (quipu `Q-SARC-CLASS` + `Q-SARC-PLACEMENT`, and the
+hank projection that consumes them). Phases 2–3 complete the MVP; Phases 4–6
+are scoped but not started. See [Build order](#build-order) for what each
+phase covers and [Phase 1, as built](#phase-1-as-built) for what shipped.
 
 ## Why this document
 
@@ -227,6 +229,61 @@ and must declare τ_rev. This is [SARC] Table 3 made mechanical, and it is what
   (hard ⇒ block under `Enforce`; soft ⇒ never block; escalation ⇒ route) rather
   than by `project::effect_blocks` alone. `Mode::Advise` keeps its ceiling: it
   never blocks, whatever the class.
+
+### Phase 1, as built
+
+Shipped in quipu (`shapes/governance.ttl`, `src/governance/placement.rs`) and
+hank (`src/constraint.rs`, `src/project_decode.rs`,
+`src/hook/rule_planes.rs`). Three things came out differently from the plan
+above, each because building it surfaced something the analysis had not:
+
+**Two fields are unrepresentable rather than validated.** `aegis:hostedAtLayer`
+has no `"prompt"` value and `aegis:onTimeout` has only `"deny"`. Both started as
+rules the placement pass would enforce; both are better as gaps in the
+vocabulary, because a check that can be configured wrong eventually is, and
+neither of these has a legitimate second value to preserve.
+
+**Multi-valued fields are refused, not resolved.** Asserting
+`constraintClass "hard"` over an existing `"soft"` leaves *both* facts active —
+assertion is not replacement. The first implementation read the last SPARQL row
+and silently picked one, so a re-class would have landed while the old placement
+still validated. This was caught by the write-path test, not by the unit tests
+over the rule table, which is the argument for having both. A policy with two
+classes is now refused as ambiguous, with the retract-in-the-same-transaction
+remedy in the message, and `a_clean_re_placement_retracting_the_old_value_lands`
+is the recoverability half — refusing ambiguity is only safe if there is a way
+to legitimately move a policy.
+
+**The projection decoder got the same collapse the text decoder already had.**
+`POLICY_QUERY` gained three OPTIONALs, and SPARQL returns the cross product of
+them: a policy carrying two `rdfs:label`s comes back as two rows and became two
+identical rules. `decode_text_rules` already carried a comment recording this
+exact failure on the live catalogue — 7 entities projecting as 11 rules, 4
+duplicates, each reported twice to the model with conflicting rationales.
+`decode_policies` was exposed to it the whole time and the new fields made it
+likelier, so it now collapses on the policy IRI and refuses rows that disagree
+on a required field. Identity is the IRI, not the label: an unlabelled policy
+falls back to a row-indexed name, so keying on the name would give every row a
+distinct identity and collapse nothing.
+
+Two behaviour changes worth knowing about when reading a verdict:
+
+- **The declared class outranks the governed effect.** A `soft` policy never
+  blocks, even with `effect "deny"` — that combination is contradictory, quipu's
+  placement check now refuses to define it, and honouring what the author
+  declared it to *be* is the only reading that is not a guess. A policy with no
+  class (projected from a catalog predating the field) still behaves exactly as
+  before: the effect decides.
+- **A policy declared at the PAA does not fire at the pre-edit gate.** It is
+  skipped, not evaluated-and-ignored. Evaluating it there would tell the model
+  to fix something its author scoped to after the fact — and until Phase 3 lands
+  the post-edit auditor, such a policy is *not evaluated at all*. That is the
+  honest state, and it is visible in the projection rather than hidden.
+
+`Mode::Advise` remains a ceiling over all of it: an advise-mode deployment never
+blocks, whatever class a projected constraint declares. That is what makes
+staging a new hard constraint safe before anyone has measured its
+false-positive rate.
 
 ### Phase 2 — Wire the verdict, derive the trace
 
