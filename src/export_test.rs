@@ -467,3 +467,52 @@ fn same_kind_duplicates_collapse_without_a_note() {
         "same-kind sites are not a cross-kind collapse; got:\n{ttl}"
     );
 }
+
+/// EVERY entity this exporter emits carries rdfs:label (aegis-lsv6t).
+///
+/// Regression, not a nicety: this exporter is the sole producer of the live code
+/// plane and emitted no labels at all, so 11,928 of 12,438 nodes were
+/// unreachable from `?s rdfs:label ?l` — the query a person runs to find a thing
+/// by NAME. Nothing caught it, because the shapes for these classes require the
+/// domain predicates (bobbin:heading, bobbin:name, bobbin:filePath) and SHACL
+/// only refuses what a shape requires. So the test asserts the label per class
+/// and, in the same breath, that the count of typed entities and the count of
+/// labels AGREE — a per-class assertion alone passes the moment a fifth class is
+/// added without one, which is exactly how this happened.
+#[test]
+fn every_emitted_entity_carries_an_rdfs_label() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("graph.rs"),
+        "pub fn reachable() {}\npub struct Frontier;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("guide.md"),
+        "# Traversal\n\nThe `reachable` fn walks the graph.\n",
+    )
+    .unwrap();
+
+    let ttl = to_turtle(dir.path(), "demo").unwrap();
+
+    assert!(
+        ttl.contains("@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> ."),
+        "rdfs: must be bound or every label below is unparseable:\n{ttl}"
+    );
+    // The label VALUES are the sibling emitter's (quipu scripts/ingest-repos.py):
+    // heading for a Section, symbol name for a CodeSymbol, file basename — not
+    // the full path, which stays on bobbin:filePath — for a Document/CodeModule.
+    assert!(ttl.contains("a bobbin:CodeModule ;\n    rdfs:label \"graph.rs\""), "got:\n{ttl}");
+    assert!(ttl.contains("a bobbin:CodeSymbol ;\n    rdfs:label \"reachable\""), "got:\n{ttl}");
+    assert!(ttl.contains("a bobbin:Document ;\n    rdfs:label \"guide.md\""), "got:\n{ttl}");
+    assert!(ttl.contains("a bobbin:Section ;\n    rdfs:label \"Traversal\""), "got:\n{ttl}");
+
+    // No entity type may be added without one. `a bobbin:` appears once per
+    // entity and never on an edge line, so these two counts are the whole claim.
+    let entities = ttl.matches(" a bobbin:").count();
+    let labels = ttl.matches("rdfs:label ").count();
+    assert_eq!(
+        entities, labels,
+        "{entities} entities but {labels} labels — an emitted class has no rdfs:label:\n{ttl}"
+    );
+}

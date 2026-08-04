@@ -376,8 +376,25 @@ fn render(
     ref_edges: &BTreeSet<(String, String)>,
     collapsed: &[String],
 ) -> String {
+    // Every entity carries rdfs:label (aegis-lsv6t). This exporter emitted none,
+    // and it is the sole producer of the live code plane: 11,928 of its 12,438
+    // nodes had no label, so `?s rdfs:label ?l` — the query a person runs to find
+    // a thing BY NAME, and the one /ask's labeled_like is built on — returned
+    // nothing for any of them. They were not unnamed; the name was on a domain
+    // predicate (bobbin:heading, bobbin:name, bobbin:filePath) that only someone
+    // who already knew the schema would ask for.
+    //
+    // Nothing failed and nothing warned, because SHACL only refuses what a shape
+    // requires and code-entities.ttl's shapes require the domain predicates, not
+    // the label. Quipu's own walker for these same classes
+    // (quipu:scripts/ingest-repos.py) has always emitted rdfs:label alongside
+    // them — so the values below are not a new convention, they are the sibling
+    // emitter's, which is why no fresh judgement about "what the label should be"
+    // was needed: heading for a Section, symbol name for a CodeSymbol, file
+    // basename for a Document or CodeModule.
     let mut out = String::new();
     out.push_str("@prefix bobbin: <http://aegis.gastown.local/ontology/> .\n");
+    out.push_str("@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n");
     out.push_str("@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\n");
 
     // Emitted BEFORE the data, so it is the first thing a reader of a refused
@@ -392,8 +409,10 @@ fn render(
 
     for (iri, rel, language) in modules {
         out.push_str(&format!(
-            "<{iri}> a bobbin:CodeModule ;\n    bobbin:filePath \"{}\" ;\n    \
+            "<{iri}> a bobbin:CodeModule ;\n    rdfs:label \"{}\" ;\n    \
+             bobbin:filePath \"{}\" ;\n    \
              bobbin:repo \"{}\" ;\n    bobbin:language \"{}\" .\n\n",
+            esc(basename(rel)),
             esc(rel),
             esc(repo),
             esc(language),
@@ -402,9 +421,11 @@ fn render(
 
     for symbol in symbols {
         out.push_str(&format!(
-            "<{}> a bobbin:CodeSymbol ;\n    bobbin:name \"{}\" ;\n    \
+            "<{}> a bobbin:CodeSymbol ;\n    rdfs:label \"{}\" ;\n    \
+             bobbin:name \"{}\" ;\n    \
              bobbin:symbolKind \"{}\" ;\n    bobbin:definedIn <{}> .\n",
             symbol.iri,
+            esc(&symbol.name),
             esc(&symbol.name),
             esc(&symbol.kind),
             symbol.module,
@@ -430,9 +451,11 @@ fn render(
         out.push('\n');
         for doc in docs {
             out.push_str(&format!(
-                "<{}> a bobbin:Document ;\n    bobbin:filePath \"{}\" ;\n    \
+                "<{}> a bobbin:Document ;\n    rdfs:label \"{}\" ;\n    \
+                 bobbin:filePath \"{}\" ;\n    \
                  bobbin:repo \"{}\" .\n\n",
                 doc.iri,
+                esc(basename(&doc.path)),
                 esc(&doc.path),
                 esc(repo),
             ));
@@ -441,9 +464,11 @@ fn render(
 
     for section in sections {
         out.push_str(&format!(
-            "<{}> a bobbin:Section ;\n    bobbin:heading \"{}\" ;\n    \
+            "<{}> a bobbin:Section ;\n    rdfs:label \"{}\" ;\n    \
+             bobbin:heading \"{}\" ;\n    \
              bobbin:headingDepth {} ;\n    bobbin:inDocument <{}> .\n",
             section.iri,
+            esc(&section.heading),
             esc(&section.heading),
             section.depth,
             section.document,
@@ -564,6 +589,13 @@ fn rel_path(file: &Path, root: &Path) -> String {
 /// Escape a Turtle string literal.
 fn esc(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// The last path segment, for the human-readable half of a path-shaped label.
+/// The full path stays on `bobbin:filePath`, which is what disambiguates two
+/// same-named files; the label is what a person types into a name search.
+fn basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
 }
 
 #[cfg(test)]
