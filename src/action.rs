@@ -2,7 +2,7 @@
 //!
 //! The trace half of the work-scoped governance epic (aegis-368cu.1, gap 2). The
 //! spool records `command {cmd: "<raw string>"}`, and a raw string is a thing no
-//! policy can be written against: "who restarted quipu" and "who touched kota"
+//! policy can be written against: "who restarted quipu" and "who touched web.example"
 //! are not answerable by grepping command lines, because the same intent has a
 //! dozen spellings and the same spelling has a dozen intents.
 //!
@@ -71,7 +71,7 @@ impl TargetClass {
 pub struct Action {
     /// The actor's intent (`restart`, `push`, `ssh`). `None` when unresolved.
     pub verb: Option<String>,
-    /// The thing acted on (`kota.lan`, `quipu`). `None` when unresolved — never
+    /// The thing acted on (`web.example`, `quipu`). `None` when unresolved — never
     /// an empty string, which a replayer would read as a real value.
     pub target: Option<String>,
     /// What KIND of thing `target` is; `Unknown` is the honest default.
@@ -130,7 +130,7 @@ fn is_compound(cmd: &str) -> bool {
 
 /// A `host`, `user@host`, or scp `user@host:/path` operand -> the host part.
 ///
-/// The colon is split FIRST, because `root@kota.lan:/opt/x` is the ordinary scp
+/// The colon is split FIRST, because `root@web.example:/opt/x` is the ordinary scp
 /// remote spelling and it carries both a host and a path. Splitting on the colon
 /// isolates the host side, so a slash in the PATH no longer disqualifies an
 /// operand whose host is perfectly unambiguous. (First cut rejected any word
@@ -296,28 +296,28 @@ mod tests {
     #[test]
     fn ssh_and_scp_resolve_a_host() {
         assert_eq!(
-            r("ssh root@kota.lan"),
-            Action::new("ssh", "kota.lan", TargetClass::Host)
+            r("ssh root@web.example"),
+            Action::new("ssh", "web.example", TargetClass::Host)
         );
         assert_eq!(
-            r("ssh -o BatchMode=yes braino@automation.lan"),
-            Action::new("ssh", "automation.lan", TargetClass::Host)
+            r("ssh -o BatchMode=yes braino@build.example"),
+            Action::new("ssh", "build.example", TargetClass::Host)
         );
         assert_eq!(
-            r("scp ./binary root@kota.lan:/opt/x"),
-            Action::new("scp", "kota.lan", TargetClass::Host)
+            r("scp ./binary root@web.example:/opt/x"),
+            Action::new("scp", "web.example", TargetClass::Host)
         );
     }
 
     #[test]
     fn ansible_resolves_only_an_EXPLICIT_limit() {
         assert_eq!(
-            r("ansible-playbook -i inventory.ini site.yml --limit kota.lan"),
-            Action::new("ansible-playbook", "kota.lan", TargetClass::Host)
+            r("ansible-playbook -i inventory.ini site.yml --limit web.example"),
+            Action::new("ansible-playbook", "web.example", TargetClass::Host)
         );
         assert_eq!(
-            r("ansible all -i inventory.ini -l kota.lan -m ping"),
-            Action::new("ansible", "kota.lan", TargetClass::Host)
+            r("ansible all -i inventory.ini -l web.example -m ping"),
+            Action::new("ansible", "web.example", TargetClass::Host)
         );
         // A GROUP is not a host. Resolving `quipu_servers` to a machine would
         // invent a target the operator never wrote — the exact guess this
@@ -374,10 +374,10 @@ mod tests {
         // that command's target would attribute the whole pipeline to it. The
         // observable command is not the whole action.
         for cmd in [
-            "ssh root@kota.lan | tee log",
+            "ssh root@web.example | tee log",
             "systemctl stop rsyslog && journalctl --vacuum-size=200M",
-            "echo $(ssh root@kota.lan hostname)",
-            "ssh root@kota.lan > out.txt",
+            "echo $(ssh root@web.example hostname)",
+            "ssh root@web.example > out.txt",
         ] {
             assert!(!r(cmd).is_known(), "resolved a compound line: {cmd}");
         }
@@ -390,7 +390,7 @@ mod tests {
             "   ",
             "make deploy",
             "./scripts/deploy-cutover.sh /tmp/bobbin",
-            "curl -s http://quipu.svc/query",
+            "curl -s http://graph.example/query",
             "rm -rf /var/log/journal",
         ] {
             let a = r(cmd);
@@ -409,7 +409,7 @@ mod tests {
 
     /// KNOWN-ANSWER TEST — the acceptance case on the bead.
     ///
-    /// aegis-0jv06: quipu was redeployed to kota.lan repeatedly and the audit
+    /// aegis-0jv06: the graph service was redeployed to web.example repeatedly and the audit
     /// trail could not say WHO, because every agent reaches that host as the
     /// same root over the same key. The question "would a record have
     /// identified the actor" splits in two, and only one half is this module's:
@@ -419,16 +419,16 @@ mod tests {
     #[test]
     fn replaying_the_0jv06_deploy_shapes_names_the_target_host() {
         let deploy_shapes = [
-            "ansible-playbook -i inventory.ini site.yml --tags quipu --limit kota.lan",
-            "scp target/release/quipu-server root@kota.lan:/opt/quipu/quipu-server",
-            "ssh root@kota.lan systemctl restart quipu",
+            "ansible-playbook -i inventory.ini site.yml --tags quipu --limit web.example",
+            "scp target/release/quipu-server root@web.example:/opt/quipu/quipu-server",
+            "ssh root@web.example systemctl restart quipu",
         ];
         for cmd in deploy_shapes {
             let a = resolve(cmd);
             assert!(a.is_known(), "deploy-shaped action did not resolve: {cmd}");
             assert_eq!(
                 a.target.as_deref(),
-                Some("kota.lan"),
+                Some("web.example"),
                 "wrong target for: {cmd}"
             );
             assert_eq!(a.target_class, TargetClass::Host);

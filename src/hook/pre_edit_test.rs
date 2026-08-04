@@ -621,7 +621,7 @@ fn text_violation(tier: crate::textrules::TextTier) -> crate::textrules::TextVio
         rule: "pattern_internal-lan-host".into(),
         tier,
         message: "governed text rule `pattern_internal-lan-host`: the edit \
-                  introduces `dolt.lan` (hostname) — internal .lan hostname."
+                  introduces `db.lan` (hostname) — internal .lan hostname."
             .into(),
     }
 }

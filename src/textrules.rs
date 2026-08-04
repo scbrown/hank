@@ -95,7 +95,7 @@ impl TextRule {
 
     /// Evaluate this rule against the text an edit introduces. Every distinct
     /// matched token is one violation, so the verdict can name exactly what
-    /// tripped it — "something matched" is not actionable, "`dolt.lan` at
+    /// tripped it — "something matched" is not actionable, "`db.lan` at
     /// offset 14" is. A pattern that does not compile yields no violations
     /// here; [`errors`] reports it and the guard fails open loudly.
     #[must_use]
@@ -106,7 +106,7 @@ impl TextRule {
         let Ok(re) = regex::Regex::new(&self.pattern) else {
             return Vec::new();
         };
-        // Distinct matches, first-seen order: `dolt.lan` appearing nine times
+        // Distinct matches, first-seen order: `db.lan` appearing nine times
         // in one edit is one fact to tell the model, not nine lines of it.
         let mut seen: Vec<&str> = Vec::new();
         for m in re.find_iter(introduced) {
@@ -212,9 +212,9 @@ mod tests {
         // grammar); the text plane must not. These are the extensions the
         // measured leaks actually used.
         for rel in ["README.md", "deploy.yml", "notes.txt", "src/a.rs"] {
-            let v = lan_rule().violations("host: dolt.lan\n", rel);
+            let v = lan_rule().violations("host: db.lan\n", rel);
             assert_eq!(v.len(), 1, "must fire in {rel}");
-            assert!(v[0].message.contains("`dolt.lan`"));
+            assert!(v[0].message.contains("`db.lan`"));
             assert!(v[0].message.contains("internal .lan hostname"));
         }
     }
@@ -229,11 +229,11 @@ mod tests {
     #[test]
     fn an_exempt_path_is_not_judged() {
         // The ratchet test must be able to NAME the tokens it forbids.
-        let v = lan_rule().violations("assert dolt.lan", "src/no_internal_identifiers.rs");
+        let v = lan_rule().violations("assert db.lan", "src/no_internal_identifiers.rs");
         assert!(v.is_empty());
         // ...but the same content anywhere else still fires.
         assert_eq!(
-            lan_rule().violations("assert dolt.lan", "src/lib.rs").len(),
+            lan_rule().violations("assert db.lan", "src/lib.rs").len(),
             1
         );
     }
@@ -244,7 +244,7 @@ mod tests {
         rule.exempt_path_regex = Some("([unclosed".into());
         // Failing toward enforcement: the rule still applies everywhere...
         assert_eq!(
-            rule.violations("dolt.lan", "src/no_internal_identifiers.rs")
+            rule.violations("db.lan", "src/no_internal_identifiers.rs")
                 .len(),
             1
         );
@@ -258,7 +258,7 @@ mod tests {
     fn a_malformed_pattern_is_an_error_not_a_silent_pass() {
         let mut rule = lan_rule();
         rule.pattern = "([unclosed".into();
-        assert!(rule.violations("dolt.lan", "a.md").is_empty()); // engine yields nothing...
+        assert!(rule.violations("db.lan", "a.md").is_empty()); // engine yields nothing...
         let errs = errors(&[rule]);
         assert_eq!(
             errs.len(),
@@ -269,14 +269,14 @@ mod tests {
 
     #[test]
     fn repeated_tokens_are_one_violation_each_distinct_token() {
-        let v = lan_rule().violations("dolt.lan dolt.lan git.lan", "a.md");
+        let v = lan_rule().violations("db.lan db.lan scm.lan", "a.md");
         assert_eq!(v.len(), 2, "dedup by token, not by occurrence");
     }
 
     #[test]
     fn tiers_ride_the_violation() {
         let rules = [lan_rule(), bead_rule()];
-        let v = evaluate(&rules, "see aegis-x1y2 on dolt.lan", "a.md");
+        let v = evaluate(&rules, "see aegis-x1y2 on db.lan", "a.md");
         assert_eq!(v.len(), 2);
         assert!(v.iter().any(|x| x.tier == TextTier::Block));
         assert!(v.iter().any(|x| x.tier == TextTier::Warn));
@@ -284,11 +284,14 @@ mod tests {
 
     #[test]
     fn word_boundaries_hold_the_false_positive_line() {
-        // The measured trap: unanchored `vati` matched "activation"/"private".
+        // The measured trap: an unanchored short node name matched inside a
+        // longer word ("acti" sits inside "activation"). Synthetic names,
+        // chosen to KEEP that property — a name that is not a substring of
+        // anything would leave this test asserting nothing (aegis-wvuhj).
         let node = TextRule {
             name: "pattern_internal-node-name".into(),
             label: None,
-            pattern: r"\b(?:kota|vati)\b".into(),
+            pattern: r"\b(?:alpha|acti)\b".into(),
             tier: TextTier::Block,
             class: None,
             exempt_path_regex: None,
@@ -297,6 +300,6 @@ mod tests {
         assert!(node
             .violations("activation of a private key", "a.md")
             .is_empty());
-        assert_eq!(node.violations("deploy to vati", "a.md").len(), 1);
+        assert_eq!(node.violations("deploy to acti", "a.md").len(), 1);
     }
 }

@@ -21,7 +21,7 @@ stem, so they over-connect on shared names like any tree-sitter-tier fact; the
 
 ```bash
 hank export src --repo myrepo --format turtle    # dump the referential graph
-hank promote --commit HEAD --to http://quipu.svc .  # SHACL-validate + write it
+hank promote --commit HEAD --to "$QUIPU_URL" .   # SHACL-validate + write it
 ```
 
 `hank promote` needs `--features quipu`; without it the binary says so rather
