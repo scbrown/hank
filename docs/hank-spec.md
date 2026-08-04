@@ -930,7 +930,36 @@ there — that stays Bobbin's). Tracked Quipu-side as
 [scbrown/quipu#37](https://github.com/scbrown/quipu/issues/37); Hank's obligation
 is only to promote the provenance edge in Phase 4.
 
----
+### 9.8 Bounded transitive paths over the promoted graph (Quipu-side follow-up)
+
+> **Sketched Quipu-side in `quipu/docs/design/statement-identity.md`.** Nothing
+> is required of Hank; this records what the promoted graph cannot answer yet, so
+> §9.3's capability claims stay honest.
+
+§9.3 claims bitemporal code archaeology comes "for free once the facts are in the
+graph." That holds for the one-hop question it demonstrates — *who called
+`authenticate()` as of 2026-03-01* — but not for its transitive form, which is
+the one a blast radius actually asks. Quipu today offers two half-answers:
+SPARQL property paths give `calls+` with **no depth cap**, and `quipu impact`
+gives a hop-bounded BFS that is a fixed function rather than something a query
+composes. `quipu/src/impact.rs` says so in its own header: *"property paths
+cannot express a depth cap, so we walk the store directly."*
+
+What the promoted graph needs is therefore a depth bound on path expressions plus
+the traversed path returned, not just the endpoint pair.
+
+**This does not relitigate §9.6.** Hank's interactive dataflow and reachability
+stay in Hank's in-memory graph; that split is deliberate and unchanged. The gap
+here is confined to the *governed, committed* projection — the queries Quipu owns
+because they are temporal and cross-domain, which is exactly where Hank's
+transient store must not answer. Concretely: transitive `calls` archaeology at a
+`--valid-at`, and cross-repo reachability spanning promotions that no single
+tenant view holds.
+
+Nothing blocks Hank's Phase 4 promotion, and the ontology needs no change — the
+edges are already the right ones. The recommendation is only that a transitive
+archaeology query be written against real promoted data before §9.3's wording is
+treated as satisfied.
 
 ## 10. MCP & HTTP Tool Surface
 
