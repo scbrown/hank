@@ -12,6 +12,20 @@
 //! first phase. This module is the correction: a hook event that receives the
 //! harness's Bash payload and feeds it to the resolver.
 //!
+//! TWO-SIDED LIVENESS (aegis-tv9ri). Every invocation emits `pre_bash_invoked`
+//! BEFORE the payload is inspected, so the trace can tell apart the two ways
+//! this hook goes quiet — which need opposite fixes and used to look identical:
+//!
+//! ```text
+//! {"kind":"pre_bash_invoked","parsed":true,"payload_bytes":123,…}
+//! {"kind":"pre_bash_invoked","parsed":false,"payload_bytes":123,
+//!  "payload_keys":"session_id,tool_name,…"}      <- ran, shape unrecognised
+//! ```
+//!
+//! No `pre_bash_invoked` at all across known Bash traffic means the hook is not
+//! wired into the settings THAT SESSION loads — which is a settings-scope
+//! question, not a hank one.
+//!
 //! RECORD-ONLY. This never denies, never warns, and prints NOTHING — not even
 //! on a resolved dangerous-looking command. Enforcement on the action path is a
 //! later phase gated on evals, and a hook that started advising here would be
@@ -52,10 +66,57 @@ pub fn run_pre_bash() -> anyhow::Result<()> {
     // A read failure is not an error worth surfacing: the command the operator
     // asked for must run either way.
     std::io::stdin().lock().read_to_string(&mut buf).ok();
-    if let Some(cmd) = command_of(&buf) {
+
+    let cmd = command_of(&buf);
+    record_invocation(&buf, cmd.is_some());
+
+    if let Some(cmd) = cmd {
         record(&action::resolve(&cmd));
     }
     Ok(())
+}
+
+/// Emit ONE record per invocation, unconditionally, before anything can
+/// suppress it. This is what makes the trace two-sided (aegis-tv9ri).
+///
+/// The `action` record only appears when the payload parsed, so its ABSENCE was
+/// ambiguous in exactly the way that matters: "the hook never ran" and "the hook
+/// ran and did not recognise the payload" produced identical evidence — an
+/// empty trace — and they need opposite fixes. Measured 2026-08-04: 22 action
+/// records total, 21 of them from one 62-second verification burst on 08-02,
+/// while ordinary agent Bash traffic produced none for two days. Nothing in the
+/// trace could say which failure that was.
+///
+/// So: `pre_bash_invoked` present with no `action` means the payload shape is
+/// wrong and this hook is running; `pre_bash_invoked` absent across known Bash
+/// traffic means the hook is not wired into the settings that session loads.
+///
+/// `payload_keys` is recorded ONLY on the failure path, and only the top-level
+/// KEY NAMES — never values. It is the field that names an unexpected payload
+/// shape without putting command text into a record whose whole purpose is to
+/// be readable by someone debugging a hook. `payload_bytes` separates "stdin was
+/// empty" from "stdin was a payload we did not understand"; both are silent
+/// no-ops today and they are not the same bug.
+fn record_invocation(payload: &str, parsed: bool) {
+    crate::metrics::emit("pre_bash_invoked", &invocation_fields(payload, parsed));
+}
+
+/// The fields of a `pre_bash_invoked` record. Pure, so the contract is testable
+/// without touching the process environment or the real spool — the same reason
+/// [`crate::metrics::resolve_path`] is pure (parallel tests race on env vars).
+#[must_use]
+pub fn invocation_fields(payload: &str, parsed: bool) -> Vec<(&'static str, serde_json::Value)> {
+    let mut fields: Vec<(&'static str, serde_json::Value)> = vec![
+        ("parsed", parsed.into()),
+        ("payload_bytes", payload.len().into()),
+    ];
+    if !parsed && !payload.is_empty() {
+        if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(payload) {
+            let keys: Vec<&str> = map.keys().map(String::as_str).collect();
+            fields.push(("payload_keys", keys.join(",").into()));
+        }
+    }
+    fields
 }
 
 /// Pull `tool_input.command` out of a harness payload.
@@ -147,5 +208,87 @@ mod tests {
         let a = action::resolve("frobnicate --wibble");
         assert_eq!(a.target_class.as_str(), "unknown");
         assert!(a.verb.is_none());
+    }
+}
+
+#[cfg(test)]
+mod liveness_tests {
+    use super::*;
+
+    fn field<'a>(f: &'a [(&str, serde_json::Value)], k: &str) -> Option<&'a serde_json::Value> {
+        f.iter().find(|(n, _)| *n == k).map(|(_, v)| v)
+    }
+
+    /// The whole point: a record exists even when nothing was resolvable. Its
+    /// absence must mean "did not run", and that is only true if EVERY
+    /// invocation writes one.
+    #[test]
+    fn an_unrecognised_payload_still_records_that_the_hook_ran() {
+        let p = r#"{"session_id":"abc","tool_name":"Bash","params":{"cmd":"ls"}}"#;
+        let f = invocation_fields(p, false);
+        assert_eq!(field(&f, "parsed"), Some(&serde_json::Value::Bool(false)));
+        assert_eq!(
+            field(&f, "payload_keys").and_then(serde_json::Value::as_str),
+            Some("params,session_id,tool_name"),
+            "an unrecognised shape must NAME itself, or the next reader repeats this diagnosis"
+        );
+    }
+
+    /// Key NAMES only. This record is read by someone debugging a hook; it must
+    /// not become a second copy of every command line.
+    #[test]
+    fn a_failed_parse_records_key_names_never_values() {
+        let p = r#"{"tool_input":{"command":"curl -H 'Authorization: Bearer hunter2' x"}}"#;
+        let f = invocation_fields(p, false);
+        let joined = format!("{f:?}");
+        assert!(!joined.contains("hunter2"), "leaked a value: {joined}");
+        assert!(
+            !joined.contains("Authorization"),
+            "leaked a value: {joined}"
+        );
+        assert!(
+            joined.contains("tool_input"),
+            "must still name the key: {joined}"
+        );
+    }
+
+    /// Empty stdin and an unparseable payload are different bugs — both silent
+    /// no-ops today — so the record has to separate them.
+    #[test]
+    fn empty_stdin_is_distinguishable_from_an_unknown_shape() {
+        let empty = invocation_fields("", false);
+        assert_eq!(
+            field(&empty, "payload_bytes"),
+            Some(&serde_json::Value::from(0))
+        );
+        assert!(
+            field(&empty, "payload_keys").is_none(),
+            "there are no keys in an empty payload; inventing one would be fiction"
+        );
+
+        let unknown = invocation_fields(r#"{"a":1}"#, false);
+        assert_ne!(
+            field(&unknown, "payload_bytes"),
+            Some(&serde_json::Value::from(0))
+        );
+        assert!(field(&unknown, "payload_keys").is_some());
+    }
+
+    /// On the success path the keys field is pointless noise — the action
+    /// record already carries the resolution.
+    #[test]
+    fn a_parsed_payload_records_no_key_list() {
+        let p = r#"{"tool_input":{"command":"ssh build-01 uptime"}}"#;
+        let f = invocation_fields(p, true);
+        assert_eq!(field(&f, "parsed"), Some(&serde_json::Value::Bool(true)));
+        assert!(field(&f, "payload_keys").is_none());
+    }
+
+    /// Non-JSON stdin must not panic and must still record the invocation.
+    #[test]
+    fn garbage_stdin_still_records_and_does_not_panic() {
+        let f = invocation_fields("not json at all", false);
+        assert_eq!(field(&f, "parsed"), Some(&serde_json::Value::Bool(false)));
+        assert!(field(&f, "payload_keys").is_none());
     }
 }
