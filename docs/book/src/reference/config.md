@@ -156,3 +156,10 @@ evaluates them like any rule — a governed `deny` policy blocks under
 `mode = "enforce"`. An unreachable quipu fails open loudly; the verdict declares
 whether the projection was fresh. Hank never defines a governed policy — it only
 projects quipu's. See the design note "Policy edit hooks — the hank side".
+
+**`endpoint` is a READ capability, not a write one.** It is what the guard fetches
+the rule catalogue from, and that is all it grants: `hank promote` will not write
+to a merely-configured endpoint, because setting this key deployment-wide is how
+every checkout in its scope came to be one bare command away from a live,
+un-undoable graph write (aegis-o2h97). A promotion must name its target with
+`--to`. See "`hank promote` — what authorizes the write" in the CLI reference.

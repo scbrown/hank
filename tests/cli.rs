@@ -786,6 +786,136 @@ fn export_to_routes_through_promotion_not_print() {
     }
 }
 
+/// Build a committed one-file git repo with an `origin`, so promotion's identity
+/// and committed-tree preconditions are satisfied and cannot mask what a test is
+/// actually pinning.
+fn promotable_repo() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("x.rs"),
+        "pub fn x() -> u32 { y() }\nfn y() -> u32 { 1 }\n",
+    )
+    .unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &["config", "user.email", "t@t"],
+        &["config", "user.name", "t"],
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://example.com/owner/realname.git",
+        ],
+        &["add", "-A"],
+        &["commit", "-qm", "base"],
+    ] {
+        Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .assert()
+            .success();
+    }
+    dir
+}
+
+/// A DISCOVERED `[hank.quipu] endpoint` must never authorize a write (aegis-o2h97).
+///
+/// `--to`'s help promised "without it, promotion is unwired and refuses" and the
+/// code then fell back to the configured endpoint — so on every host in this
+/// fleet, where that key is set host-wide for the pre-edit guard's READS, a bare
+/// `hank promote` wrote to the live graph. It was found by an operator running it
+/// EXPECTING a dry run and getting a real 25k-triple promotion.
+///
+/// The assertion that matters is not the message: it is that the endpoint is never
+/// CONNECTED to. The config points at a listener this test owns, so a fallback
+/// that survived would show up here as an accepted connection.
+#[test]
+fn promote_refuses_a_discovered_endpoint_and_never_connects_to_it() {
+    if !cfg!(feature = "quipu") {
+        return; // stub build: promotion is a phase notice, nothing to pin
+    }
+    let dir = promotable_repo();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    // The endpoint is configured, exactly as a fleet host configures it.
+    with_config(
+        dir.path(),
+        &format!("[hank.quipu]\nenabled = true\nendpoint = \"http://{addr}\"\n"),
+    );
+
+    // Bare `promote`: refused, naming the discovered endpoint AND both remedies.
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["promote", "--repo", "realname"])
+        // HOME is redirected so the layered user config of whoever runs this
+        // cannot supply a second endpoint and change which one is reported.
+        .env("HOME", dir.path())
+        .current_dir(dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("DISCOVERED endpoint"))
+        .stderr(predicate::str::contains(addr.to_string()))
+        .stderr(predicate::str::contains("--to"))
+        .stderr(predicate::str::contains("--dry-run"));
+
+    // Nothing reached the graph. This is the whole bead: a refusal that still
+    // posted would satisfy every string assertion above.
+    assert!(
+        listener.accept().is_err(),
+        "promote connected to the discovered endpoint — the fallback is back"
+    );
+}
+
+/// `--dry-run` answers "would this projection conform?" without writing — the
+/// capability that did not exist, and the reason the defect above was found by
+/// someone reaching for `promote` and hoping it was inert (aegis-o2h97).
+///
+/// Pointed at a DEAD port on purpose: a dry run that still posted would fail to
+/// connect, so success here is positive evidence of no write, not the absence of
+/// evidence. `promote_refuses_dir_name_identity_and_accepts_origin` is the control
+/// that the same port DOES fail a real promotion.
+#[test]
+fn dry_run_validates_and_writes_nothing() {
+    if !cfg!(feature = "quipu") {
+        return; // stub build: promotion is a phase notice, nothing to pin
+    }
+    let dir = promotable_repo();
+
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args([
+            "promote",
+            "--dry-run",
+            "--repo",
+            "realname",
+            "--to",
+            "http://127.0.0.1:1",
+        ])
+        .env("HOME", dir.path())
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DRY RUN"))
+        .stdout(predicate::str::contains("WROTE NOTHING"))
+        // It names the graph a real run would have hit — the fact the operator
+        // who filed this was missing.
+        .stdout(predicate::str::contains("http://127.0.0.1:1/knot"));
+
+    // And it needs no target at all: validation is in-process, so a checkout with
+    // no endpoint anywhere can still ask the question.
+    Command::cargo_bin("hank")
+        .unwrap()
+        .args(["promote", "--dry-run", "--repo", "realname"])
+        .env("HOME", dir.path())
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("WROTE NOTHING"))
+        .stdout(predicate::str::contains("needs --to"));
+}
+
 /// Repo identity in promoted IRIs comes from `--repo` or the `origin` remote —
 /// NEVER the directory name. An agent worktree named `gennaro` once promoted an
 /// entire real graph as `code/gennaro/…`: structurally fragmented islands no

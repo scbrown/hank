@@ -17,19 +17,50 @@ impl Cli {
         commit: &str,
         to: Option<&str>,
         repo: Option<&str>,
+        dry_run: bool,
     ) -> anyhow::Result<()> {
-        // `--to` overrides config for a one-off; otherwise the deployment's
-        // configured endpoint. Empty on both is a refusal, never a guessed graph.
+        // `--to` IS THE AUTHORIZATION, and it is the only one (aegis-o2h97).
+        //
+        // This used to fall back to a discovered `[hank.quipu] endpoint`, which
+        // reads as reasonable and is not: that key is set in the HOST-WIDE
+        // `~/.config/bobbin/config.toml` so the pre-edit guard can READ quipu's
+        // rule catalogue (aegis-m9ln), so on every agent machine in this fleet a
+        // bare `hank promote` in any checkout wrote to the live graph. It was
+        // found by someone running it expecting a dry run and getting a real
+        // 25k-triple promotion; the write happened to be the wanted one that
+        // time. A config set up to authorize READS must not silently authorize
+        // WRITES, and the flag's own help promised a refusal that never fired.
+        //
+        // Nothing measured depended on the fallback: the one scheduled promoter
+        // in this deployment passes `--to "$QUIPU_URL"` explicitly and refuses to
+        // default it. The MCP tool keeps its own discovery — there the
+        // endpoint comes from a server an operator deliberately started, not from
+        // whatever config is ambient in an agent's shell.
         let cfg = self.load_config(path)?;
-        let endpoint = match to {
-            Some(t) => t.to_string(),
-            None if !cfg.quipu.endpoint.is_empty() => cfg.quipu.endpoint.clone(),
-            None => anyhow::bail!(
-                "no Quipu endpoint: pass --to <url> or set [hank.quipu] endpoint in config. \
-                 Refusing rather than guessing a graph to write into."
-            ),
+        let discovered = Some(cfg.quipu.endpoint.clone()).filter(|e| !e.is_empty());
+        let endpoint: Option<String> = match to {
+            // An empty `--to` is not a target; it would post to `/knot` on the
+            // empty host. Treated as absent so it lands on a refusal, not a URL.
+            Some(t) if !t.is_empty() => Some(t.to_string()),
+            // A dry run writes nothing, so a discovered endpoint is safe to use —
+            // and naming it is the useful half: it tells the operator which graph
+            // a real run would have hit.
+            _ if dry_run => discovered,
+            _ => match discovered {
+                Some(found) => anyhow::bail!(
+                    "refusing to promote into a DISCOVERED endpoint: {found}\n  \
+                     `[hank.quipu] endpoint` is configured so the pre-edit guard can READ the \
+                     rule catalogue. It does not authorize a write, and a promotion is a live \
+                     graph write with no undo.\n  \
+                     To write there, say so:        hank promote --to {found}\n  \
+                     To check it without writing:   hank promote --dry-run"
+                ),
+                None => anyhow::bail!(
+                    "no Quipu endpoint: pass --to <url> for a real promotion, or --dry-run to \
+                     validate without writing. Refusing rather than guessing a graph to write into."
+                ),
+            },
         };
-        let endpoint = endpoint.as_str();
         // Repo identity is DATA IDENTITY: it is a segment of every promoted IRI.
         // Explicit --repo wins; otherwise the origin remote names the repository.
         // With neither, REFUSE — the old fallback (directory basename) minted
@@ -79,7 +110,17 @@ impl Cli {
         let resolved =
             crate::git::resolve_commit(path, commit).unwrap_or_else(|| commit.to_string());
         let source = format!("hank promote {repo}@{resolved} (cli)");
-        let outcome = crate::promote::promote(endpoint, &turtle, &source)?;
+        let outcome = match (dry_run, &endpoint) {
+            (true, ep) => crate::promote::dry_run(ep.as_deref(), &turtle, &source)?,
+            (false, Some(ep)) => crate::promote::promote(ep, &turtle, &source)?,
+            // Unreachable: the resolution above bails on a write with no target.
+            // Spelled as a refusal rather than an `expect` so that if that match
+            // is ever edited, a missing target degrades to a refusal, never a panic
+            // and never a guessed graph.
+            (false, None) => anyhow::bail!(
+                "no Quipu endpoint for a write: pass --to <url>, or --dry-run to validate only."
+            ),
+        };
         let mut out = std::io::stdout();
         let wrote = outcome.report(&mut out)?;
         // A refusal is a could-not-promote, not a success: exit non-zero so a script
@@ -104,6 +145,7 @@ impl Cli {
         _commit: &str,
         _to: Option<&str>,
         _repo: Option<&str>,
+        _dry_run: bool,
     ) -> anyhow::Result<()> {
         self.planned(
             "promote",

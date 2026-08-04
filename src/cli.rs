@@ -208,10 +208,18 @@ enum Commands {
         /// Commit-ish to promote.
         #[arg(long, default_value = "HEAD")]
         commit: String,
-        /// Quipu base URL to promote into (e.g. `http://localhost:8080`). Required
-        /// for a real promotion; without it, promotion is unwired and refuses.
+        /// Quipu base URL to promote into (e.g. `http://localhost:8080`).
+        /// REQUIRED for a write, and it is the ONLY thing that authorizes one: a
+        /// discovered `[hank.quipu] endpoint` is deliberately NOT enough, because
+        /// that key is set host-wide so the pre-edit guard can READ the rule
+        /// catalogue. Without `--to`, promotion refuses and names the endpoint it
+        /// found. `--dry-run` needs no target.
         #[arg(long)]
         to: Option<String>,
+        /// Extract and SHACL-validate the projection, then STOP — write nothing.
+        /// Answers "would this promotion conform?" without touching the graph.
+        #[arg(long)]
+        dry_run: bool,
         /// Repository name to attribute promoted entities to. Defaults to the
         /// `origin` remote's repo name; with no origin, promotion refuses rather
         /// than deriving identity from the directory name (a worktree's dir name
@@ -407,7 +415,7 @@ impl Cli {
                     // from `promote`. It is a write, so honour the guard first.
                     Some(_) => {
                         self.load_config(path)?.write_guard("promotion")?;
-                        self.promote(path, "HEAD", to.as_deref(), repo.as_deref())
+                        self.promote(path, "HEAD", to.as_deref(), repo.as_deref(), false)
                     }
                     None => cli_cmds::export(path, repo.as_deref()),
                 }
@@ -434,14 +442,20 @@ impl Cli {
             Commands::Promote {
                 commit,
                 to,
+                dry_run,
                 repo,
                 path,
             } => {
                 // THE WRITE GUARD, made real (aegis-ltjo). Promotion is the write
                 // hank performs, so `serve.read_only` must refuse it — BEFORE any
                 // work, so the guard holds regardless of feature.
+                //
+                // `--dry-run` is still gated here, deliberately. A dry run writes
+                // nothing and arguably should pass a read-only guard, but that is a
+                // change to what `read_only` MEANS, and this arm is not the place to
+                // make it silently. Tracked on aegis-o2h97.
                 self.load_config(path)?.write_guard("promotion")?;
-                self.promote(path, commit, to.as_deref(), repo.as_deref())
+                self.promote(path, commit, to.as_deref(), repo.as_deref(), *dry_run)
             }
         }
     }

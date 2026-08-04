@@ -154,6 +154,47 @@ fn promote_refuses_without_writing_when_invalid() {
             std::fs::remove_file(&p).ok();
         }
         Promotion::Wrote(_) => panic!("wrote invalid facts to Quipu"),
+        Promotion::Conforms { .. } => panic!("`promote` must never report a dry run"),
+    }
+}
+
+/// `dry_run` runs the SAME gate as `promote` and stops before the write.
+///
+/// Both halves matter (aegis-o2h97). A dry run that under-validated would report a
+/// conformance the write path does not honour; a dry run that still posted would
+/// be the very hazard `--dry-run` exists to remove. The endpoint here is a dead
+/// port, so a write would fail to connect — success is positive evidence of no
+/// write, and `promote_refuses_without_writing_when_invalid` above is the control
+/// that this module's write path really does reach the network.
+#[test]
+fn dry_run_validates_like_promote_and_never_writes() {
+    // Conforming input: reports what a real write would post, and posts nothing.
+    match dry_run(Some("http://127.0.0.1:1"), CONFORMING, "dry-run-fixture").expect("no write") {
+        Promotion::Conforms {
+            chunks,
+            bytes,
+            endpoint,
+        } => {
+            assert_eq!(chunks, 1, "a small projection is a single post");
+            assert_eq!(bytes, CONFORMING.len());
+            assert_eq!(endpoint.as_deref(), Some("http://127.0.0.1:1"));
+        }
+        other => panic!("conforming input must report a dry run, got {other:?}"),
+    }
+
+    // Non-conforming input: the SAME refusal `promote` gives, so a dry run cannot
+    // green-light a projection the real promotion would reject.
+    match dry_run(None, VIOLATING, "dry-run-violating-fixture").expect("no write") {
+        Promotion::Refused {
+            violations,
+            payload,
+        } => {
+            assert!(!violations.is_empty());
+            if let Some(p) = payload {
+                std::fs::remove_file(&p).ok();
+            }
+        }
+        other => panic!("violating input must be refused, got {other:?}"),
     }
 }
 

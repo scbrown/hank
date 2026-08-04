@@ -519,10 +519,24 @@ pub struct WriteSummary {
     pub chunks: usize,
 }
 
-/// The full promotion: validate the WHOLE graph, then write iff it conforms —
-/// in one `/knot` post when it fits, in idempotent chunks when it would 413.
-/// On non-conformance it writes NOTHING and returns the violations.
-pub fn promote(endpoint: &str, turtle: &str, source: &str) -> Result<Promotion> {
+/// The outcome of the pre-write half of a promotion.
+enum Prepared {
+    /// Conformed; carries the chunks a write would post, in order.
+    Ready(Vec<String>),
+    /// Did not conform. Always a [`Promotion::Refused`]; the caller returns it
+    /// verbatim so the refusal reads identically whether or not a write followed.
+    Refused(Promotion),
+}
+
+/// Everything a promotion does BEFORE it touches the network: SHACL-validate the
+/// whole graph, retain the payload on any failure, and chunk it for the wire.
+///
+/// Factored out so [`dry_run`] runs the byte-identical gate rather than a second
+/// implementation of it. A dry run whose validation could drift from the real
+/// one is worse than no dry run at all — it would report a conformance the write
+/// path does not honour, which is the same lie in the other direction as the help
+/// text this replaces (aegis-o2h97).
+fn prepare(turtle: &str, source: &str) -> Result<Prepared> {
     // Every failure path below retains the payload first: the projection is
     // generated on the fly and dropped after the post, so a failure that does
     // not write it out destroys the only copy of the document that failed.
@@ -535,12 +549,44 @@ pub fn promote(endpoint: &str, turtle: &str, source: &str) -> Result<Promotion> 
         Err(e) => return Err(e),
     };
     if !v.conforms {
-        return Ok(Promotion::Refused {
+        return Ok(Prepared::Refused(Promotion::Refused {
             violations: v.violations,
             payload: dump_payload(turtle, source),
-        });
+        }));
     }
-    let chunks = chunk_turtle(turtle, CHUNK_LIMIT)?;
+    Ok(Prepared::Ready(chunk_turtle(turtle, CHUNK_LIMIT)?))
+}
+
+/// Validate a projection exactly as [`promote`] does and STOP before the write.
+///
+/// The capability that was missing entirely (aegis-o2h97): there was no way to
+/// ask "would this projection conform?" without writing it, so the only way to
+/// find out was to promote — 25k+ triples into a live graph, with no undo
+/// (`/episode/retract` is episode-scoped and does not unwind a `promote`).
+///
+/// `endpoint` is for the REPORT only and is optional: validation is in-process,
+/// so a dry run needs no target and works from a checkout with no config at all.
+/// Naming the endpoint it *would* have written to is the point — that is the fact
+/// the operator was missing.
+pub fn dry_run(endpoint: Option<&str>, turtle: &str, source: &str) -> Result<Promotion> {
+    match prepare(turtle, source)? {
+        Prepared::Ready(chunks) => Ok(Promotion::Conforms {
+            chunks: chunks.len(),
+            bytes: turtle.len(),
+            endpoint: endpoint.map(str::to_string),
+        }),
+        Prepared::Refused(refusal) => Ok(refusal),
+    }
+}
+
+/// The full promotion: validate the WHOLE graph, then write iff it conforms —
+/// in one `/knot` post when it fits, in idempotent chunks when it would 413.
+/// On non-conformance it writes NOTHING and returns the violations.
+pub fn promote(endpoint: &str, turtle: &str, source: &str) -> Result<Promotion> {
+    let chunks = match prepare(turtle, source)? {
+        Prepared::Ready(chunks) => chunks,
+        Prepared::Refused(refusal) => return Ok(refusal),
+    };
     let total = chunks.len();
     let mut summary = WriteSummary {
         count: 0,
@@ -581,6 +627,15 @@ pub enum Promotion {
         /// Where the refused projection was retained, if it could be written.
         payload: Option<std::path::PathBuf>,
     },
+    /// `--dry-run`: passed SHACL and STOPPED. Nothing was written.
+    Conforms {
+        /// How many `/knot` posts a real write would take.
+        chunks: usize,
+        /// Size of the projection that would be posted.
+        bytes: usize,
+        /// The graph a real write would have gone to, when one was resolvable.
+        endpoint: Option<String>,
+    },
 }
 
 impl Promotion {
@@ -620,6 +675,30 @@ impl Promotion {
                     None => writeln!(w, "    payload NOT retained (could not write a dump file)")?,
                 }
                 Ok(false)
+            }
+            // A conforming dry run is a SUCCESS (exit 0): the question asked was
+            // "would this conform?" and the answer is yes. The word WROTE NOTHING
+            // is on the line because the whole defect this closes was an operator
+            // believing a command was inert when it was not — so the inert one
+            // says so out loud rather than reading like a landed promotion.
+            Promotion::Conforms {
+                chunks,
+                bytes,
+                endpoint,
+            } => {
+                writeln!(w, "  DRY RUN — conforms. WROTE NOTHING.")?;
+                writeln!(
+                    w,
+                    "    would post: {bytes} bytes of Turtle in {chunks} chunk(s)"
+                )?;
+                match endpoint {
+                    Some(e) => writeln!(w, "    would target: {e}/knot")?,
+                    None => writeln!(
+                        w,
+                        "    would target: nothing resolved — a real run needs --to <url>"
+                    )?,
+                }
+                Ok(true)
             }
         }
     }
