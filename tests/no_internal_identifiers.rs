@@ -50,9 +50,35 @@ fn patterns() -> Vec<(&'static str, Regex)> {
         ),
         (
             "operator home path",
-            Regex::new(r"/home/(?:braino|stiwi)\b").unwrap(),
+            Regex::new(r"/home/([a-z][a-z0-9_-]*)").unwrap(),
         ),
     ]
+}
+
+/// Home-directory names that are obviously stand-ins, not real operators.
+///
+/// THIS LIST IS WHY THE PATTERN IS GENERIC. The first version of this file
+/// matched `/home/(?:braino|stiwi)` — it named the two real operators, IN A
+/// PUBLIC REPO, inside the test written to stop exactly that. It was caught by
+/// grepping the pushed branch rather than by any test, because this file is
+/// `exempt()` and so is the one place the ratchet cannot see itself.
+///
+/// Matching ANY `/home/<name>` and subtracting known placeholders is both safer
+/// and strictly more general: it catches an operator this fleet has not hired
+/// yet, and it publishes nobody's username.
+const PLACEHOLDER_HOMES: &[&str] = &[
+    "agent", "x", "user", "you", "me", "jsmith", "example", "someone",
+];
+
+/// True when a capture is a real finding rather than a documentation stand-in.
+fn is_real_hit(label: &str, caps: &regex::Captures<'_>) -> bool {
+    if label != "operator home path" {
+        return true;
+    }
+    match caps.get(1) {
+        Some(name) => !PLACEHOLDER_HOMES.contains(&name.as_str()),
+        None => true,
+    }
 }
 
 fn root() -> PathBuf {
@@ -119,7 +145,7 @@ fn no_internal_identifiers_in_any_tracked_file() {
             for caps in rx.captures_iter(&text) {
                 let hit = caps.get(0).unwrap().as_str();
                 // The namespace is a data contract, tracked separately below.
-                if hit.contains(ONTOLOGY_NS) {
+                if hit.contains(ONTOLOGY_NS) || !is_real_hit(label, &caps) {
                     continue;
                 }
                 offenders.insert(format!("{}: {label} {hit:?}", rel.display()));
@@ -149,12 +175,29 @@ fn the_ratchet_catches_each_class() {
         ("internal hostname", "connect to db.lan now"),
         ("internal service host", "http://thing.svc/knot"),
         ("private address", "addr 192.168.0.1"),
-        ("operator home path", "/home/braino/src/x"),
+        // A NON-placeholder home, spelled so it is obviously not a real
+        // operator here — the control must prove the class is caught without
+        // naming anyone (see PLACEHOLDER_HOMES).
+        ("operator home path", "/home/opnametwo/src/x"),
     ] {
-        let caught = pats
-            .iter()
-            .any(|(label, rx)| *label == expect && rx.is_match(sample));
+        let caught = pats.iter().any(|(label, rx)| {
+            *label == expect && rx.captures_iter(sample).any(|c| is_real_hit(label, &c))
+        });
         assert!(caught, "the ratchet missed a planted {expect}: {sample:?}");
+    }
+}
+
+#[test]
+fn placeholder_home_paths_are_not_flagged() {
+    // The other half of the control: the tree legitimately documents
+    // `/home/agent` and `/home/x`, and a ratchet that screamed about those
+    // would be switched off within a day.
+    let pats = patterns();
+    for sample in ["/home/agent/work", "/home/x/bin", "/home/jsmith/src"] {
+        let flagged = pats
+            .iter()
+            .any(|(label, rx)| rx.captures_iter(sample).any(|c| is_real_hit(label, &c)));
+        assert!(!flagged, "a placeholder home was flagged: {sample:?}");
     }
 }
 
