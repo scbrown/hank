@@ -332,3 +332,32 @@ fn to_turtle_at_reads_an_older_commit_not_just_head() {
     let head = to_turtle_at(dir.path(), "demo", "HEAD").unwrap();
     assert!(head.contains("a.rs::renamed"), "HEAD's facts");
 }
+
+/// Brackets in a symbol name must be percent-encoded (aegis-r5xta).
+///
+/// A raw `[` is a gen-delim, illegal in an IRI path segment, and it makes the
+/// WHOLE promoted document unparseable rather than just its own triple — which is
+/// why one vendored JavaScript file could freeze the entire code graph. The hourly
+/// quipu code-promote failed on 55 runs across 12 days with
+/// `Invalid IRI code point '['`, and CodeSymbol/CodeModule stayed at their
+/// 2026-07-23 state for quipu and hank the whole time.
+///
+/// Every real offender was a JS computed method name, `[Symbol.iterator]`, not the
+/// Rust slice type one would predict — so this asserts the actual shape observed.
+#[test]
+fn bracket_segments_are_encoded_so_the_document_stays_parseable() {
+    assert_eq!(iri_segment("[Symbol.iterator]"), "%5BSymbol.iterator%5D");
+    assert_eq!(iri_segment("[u8; 32]"), "%5Bu8;%2032%5D");
+
+    // No raw bracket may survive into a minted symbol IRI.
+    let iri = symbol_iri("m", &["Ii".to_string()], "[Symbol.iterator]");
+    assert!(
+        !iri.contains('[') && !iri.contains(']'),
+        "symbol IRI still carries a raw bracket: {iri}"
+    );
+    assert_eq!(iri, "m::Ii::%5BSymbol.iterator%5D");
+
+    // Injectivity holds across the new characters too: a segment containing the
+    // literal text "%5B" must not collide with one containing "[".
+    assert_ne!(iri_segment("x%5B"), iri_segment("x["));
+}

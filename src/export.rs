@@ -439,6 +439,18 @@ fn iri_segment(raw: &str) -> String {
             '\\' => out.push_str("%5C"),
             '^' => out.push_str("%5E"),
             '`' => out.push_str("%60"),
+            // `[` and `]` are gen-delims reserved for IPv6 literals in the
+            // authority and are ILLEGAL in a path segment, so a raw one makes the
+            // whole document unparseable — not just its own triple.
+            //
+            // MEASURED (aegis-r5xta): the hourly quipu code-promote failed on
+            // 55 runs over 12 days with `Invalid IRI code point '['`, leaving
+            // CodeSymbol/CodeModule frozen at their 2026-07-23 state for quipu and
+            // hank. Every offender was a JavaScript computed method name —
+            // `[Symbol.iterator]` in vendored three.module.min.js and
+            // mermaid.min.js — not the Rust slice types one would guess.
+            '[' => out.push_str("%5B"),
+            ']' => out.push_str("%5D"),
             '\n' | '\t' => {}
             _ => out.push(c),
         }
