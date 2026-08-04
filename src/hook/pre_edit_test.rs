@@ -25,9 +25,34 @@ fn wide_repo() -> tempfile::TempDir {
     dir
 }
 
+/// Write a fixture policy — HERMETIC BY DEFAULT (aegis-enbzz).
+///
+/// hank's config discovery falls back to a HOST-level `~/.config/bobbin/config.toml`,
+/// which on a crew machine carries a LIVE quipu endpoint. A fixture that said
+/// nothing about quipu therefore inherited it and made real network calls. Under
+/// cargo's parallelism those contend on quipu's effectively-serialised `/query`
+/// and time out, the guard fails open, and the assertion under test — about blast
+/// radius, path scope or rule matching, none of which involve quipu — fails for a
+/// reason that has nothing to do with what it tests.
+///
+/// Measured 2026-08-04 on an unmodified tree: 36/36 pass with `--test-threads=1`
+/// (twice), while parallel runs failed 8, 9, 12, 14 and 18 tests across runs, and
+/// EVERY failure carried `could not project governed policy from quipu … timed out
+/// reading response`. The flakiness was never in the guard logic.
+///
+/// A fixture that reaches the network is not a fixture: it imports the load of
+/// every other agent on the host into a unit test. Tests that genuinely exercise
+/// projection declare `[hank.quipu]` themselves and are left untouched — see
+/// `an_unreachable_quipu_projection_fails_open_loudly`, which pins its own
+/// endpoint at `127.0.0.1:1` precisely so it does not need a live server.
 fn write_policy(dir: &Path, body: &str) {
     let bobbin = dir.join(".bobbin");
     std::fs::create_dir_all(&bobbin).unwrap();
+    let body = if body.contains("[hank.quipu]") {
+        body.to_string()
+    } else {
+        format!("{body}\n\n[hank.quipu]\nenabled = false\n")
+    };
     std::fs::write(bobbin.join("config.toml"), body).unwrap();
 }
 
