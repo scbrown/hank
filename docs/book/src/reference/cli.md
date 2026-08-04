@@ -52,8 +52,55 @@ hank status                    # resolves base_ref to a commit SHA (in a git rep
 hank impact authenticate src --hops 5   # lookup is by bare symbol name, not file::symbol
 hank communities src --json         # symbol clusters, largest-first
 hank verify --file src/auth.rs --buffer /tmp/edited.rs
-hank promote --commit HEAD
+hank promote --dry-run                  # would this projection conform? writes nothing
+hank promote --to $QUIPU --commit HEAD  # the write; --to is what authorizes it
 ```
+
+## `hank promote` — what authorizes the write
+
+**`--to` is the only thing that authorizes a promotion.** A configured
+`[hank.quipu] endpoint` is deliberately *not* enough, and a bare `hank promote`
+refuses even where one is set — naming the endpoint it found and both remedies:
+
+```console
+$ hank promote
+Error: refusing to promote into a DISCOVERED endpoint: http://quipu.example
+  `[hank.quipu] endpoint` is configured so the pre-edit guard can READ the rule
+  catalogue. It does not authorize a write, and a promotion is a live graph write
+  with no undo.
+  To write there, say so:        hank promote --to http://quipu.example
+  To check it without writing:   hank promote --dry-run
+```
+
+That asymmetry is the point. The endpoint key is set once, deployment-wide, so
+the *guard* can read the governed rule catalogue on every edit — a READ. Letting
+it double as a write target meant a bare `promote` from any checkout in scope of
+that config posted tens of thousands of triples into the live graph, and there is
+no undo (`/episode/retract` is episode-scoped and does not unwind a promotion).
+It was found by an operator who ran it expecting a dry run (aegis-o2h97). One
+config supplying both a read capability and a write capability is the defect;
+requiring the write to be spelled out on the command line is the fix.
+
+The MCP `hank_promote` tool keeps its own fallback to the configured endpoint:
+there the target comes from a server an operator deliberately started and pointed
+somewhere, not from whatever config happens to be ambient in an agent's shell.
+
+## `hank promote --dry-run` — validate without writing
+
+`--dry-run` extracts the projection and runs the **same** SHACL gate a real
+promotion runs, then stops. It needs no target — validation is in-process — and
+reports the graph a real run *would* have written to:
+
+```console
+$ hank promote --dry-run
+  DRY RUN — conforms. WROTE NOTHING.
+    would post: 4041881 bytes of Turtle in 4 chunk(s)
+    would target: http://quipu.example/knot
+```
+
+A non-conforming projection produces the identical refusal (and identical
+retained payload) that `promote` would produce, so a dry run cannot green-light
+something the write path would reject.
 
 ## `hank promote` — diagnosing a refusal
 
