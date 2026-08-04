@@ -505,7 +505,7 @@ from <code>use</code>/<code>mod</code> declarations at the tree-sitter tier — 
 stem, so they over-connect on shared names like any tree-sitter-tier fact; the
 <code>lsp</code> tier refines them.</p>
 <pre><code class="language-bash">hank export src --repo myrepo --format turtle    # dump the referential graph
-hank promote --commit HEAD --to http://quipu.svc .  # SHACL-validate + write it
+hank promote --commit HEAD --to "$QUIPU_URL" .   # SHACL-validate + write it
 </code></pre>
 <p><code>hank promote</code> needs <code>--features quipu</code>; without it the binary says so rather
 than pretending. It emits the Turtle, SHACL-validates in-process against
