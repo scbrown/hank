@@ -250,10 +250,14 @@ between runs because the content is regenerated — without the payload, the one
 fact the error gives you is unusable.</li>
 </ul>
 <p>The dump also lands on an invalid-Turtle failure and on a partial chunked write.
-It goes to <code>$HANK_PROMOTE_DUMP_DIR</code>, else the system temp dir; the name is
-derived from the promotion source, so re-runs overwrite one file rather than
-filling the disk. Retention is best-effort: a promotion that is already failing
-never fails <em>differently</em> because a dump could not be written.</p>
+It goes to <code>$HANK_PROMOTE_DUMP_DIR</code>, else the system temp dir.</p>
+<p>The name carries the repo and the resolved commit, so a scheduled promotion
+refusing the same commit hour after hour overwrites <strong>one</strong> file. A <em>different</em>
+failing commit gets its own dump — the SHA is what tells you which projection
+you are holding, and reusing one name would overwrite the payload you were still
+reading. So the bound is distinct failing commits, not runs.</p>
+<p>Retention is best-effort: a promotion that is already failing never fails
+<em>differently</em> because a dump could not be written.</p>
 <h2 id="hank-status"><a class="header" href="#hank-status"><code>hank status</code></a></h2>
 <p>Reports the resolved baseline, the tiers this binary serves, and — the part a
 script gates on — <strong>the state of the policy rule plane</strong>.</p>
