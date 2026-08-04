@@ -79,13 +79,24 @@ pub(super) fn promote(
                     chunks: Some(k.chunks),
                     violations: Vec::new(),
                 },
-                crate::promote::Promotion::Refused(violations) => PromoteResponse {
-                    wrote: false,
-                    count: None,
-                    tx_id: None,
-                    chunks: None,
-                    violations,
-                },
+                crate::promote::Promotion::Refused {
+                    mut violations,
+                    payload,
+                } => {
+                    // An MCP client sees only this response, so the retained
+                    // payload has to ride in it or the path is lost to the
+                    // caller who most needs it.
+                    if let Some(p) = payload {
+                        violations.push(format!("payload retained at: {}", p.display()));
+                    }
+                    PromoteResponse {
+                        wrote: false,
+                        count: None,
+                        tx_id: None,
+                        chunks: None,
+                        violations,
+                    }
+                }
             };
         json_result(&response)
     }

@@ -82,6 +82,24 @@ bobbin:code_bad a bobbin:CodeSymbol ;
   bobbin:hasTier "vibes" .
 "#;
 
+// The IRI-collision shape, in the form the emitter really produces it: ONE
+// symbol IRI carrying two distinct `symbolKind` values, which is what
+// `CodeSymbolShape`'s maxCount exists to catch. Taken from a real refusal —
+// two mutually-exclusive `#[cfg]` declarations of one name, which the extractor
+// sees both of (aegis-4ba2e). Kept here because this is the projection whose
+// refusal used to be unreadable.
+const COLLIDING: &str = r#"
+@prefix bobbin: <http://aegis.gastown.local/ontology/> .
+bobbin:code_mod a bobbin:CodeModule ;
+  bobbin:filePath "m.rs" ; bobbin:repo "fixture" ; bobbin:language "rust" .
+bobbin:code_dup a bobbin:CodeSymbol ;
+  bobbin:name "Dup" ; bobbin:definedIn bobbin:code_mod ;
+  bobbin:symbolKind "struct" .
+bobbin:code_dup a bobbin:CodeSymbol ;
+  bobbin:name "Dup" ; bobbin:definedIn bobbin:code_mod ;
+  bobbin:symbolKind "type_alias" .
+"#;
+
 #[test]
 fn conforming_projection_validates() {
     let v = validate(CONFORMING, SHAPES).expect("validation ran");
@@ -112,11 +130,128 @@ fn a_refusal_never_reads_as_empty_success() {
 fn promote_refuses_without_writing_when_invalid() {
     // endpoint is deliberately unreachable; a valid refusal must return BEFORE
     // any network call, so this must not error on the bad endpoint.
-    let out = promote("http://127.0.0.1:1", VIOLATING, "test").expect("no write attempted");
+    // A distinctive source keeps this test's dump off any other test's name.
+    let out = promote(
+        "http://127.0.0.1:1",
+        VIOLATING,
+        "promote-refuses-without-writing-fixture",
+    )
+    .expect("no write attempted");
     match out {
-        Promotion::Refused(vs) => assert!(!vs.is_empty()),
+        Promotion::Refused {
+            violations,
+            payload,
+        } => {
+            assert!(!violations.is_empty());
+            // The refusal must leave the document behind: without it the reader
+            // has a constraint name and no way to find what tripped it.
+            let p = payload.expect("a refused promotion must retain its payload");
+            assert_eq!(
+                std::fs::read_to_string(&p).expect("dump is readable"),
+                VIOLATING,
+                "the retained payload must be the exact projection that was refused"
+            );
+            std::fs::remove_file(&p).ok();
+        }
         Promotion::Wrote(_) => panic!("wrote invalid facts to Quipu"),
     }
+}
+
+#[test]
+fn a_retained_payload_is_byte_identical_and_overwrites_in_place() {
+    // Two failures of the same promotion must not accumulate files — a
+    // diagnostic that grows without bound is its own outage — and the retained
+    // bytes must be the projection itself, not a summary of it.
+    let dir = tempfile::tempdir().unwrap();
+    let first = dump_payload_to(dir.path(), CONFORMING, "hank promote demo@abc (cli)")
+        .expect("dump written");
+    let second = dump_payload_to(dir.path(), VIOLATING, "hank promote demo@abc (cli)")
+        .expect("dump written");
+    assert_eq!(first, second, "the same source must reuse one dump path");
+    assert_eq!(std::fs::read_to_string(&second).unwrap(), VIOLATING);
+    assert!(second.starts_with(dir.path()), "dump escaped its directory");
+    let files: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+    assert_eq!(files.len(), 1, "a re-run must overwrite, not accumulate");
+}
+
+#[test]
+fn a_refused_promotion_names_the_offending_node_and_property() {
+    // The regression this pins (aegis-o8rq8): violations used to read only
+    // "MaxCount(1) not satisfied" — true of every maxCount shape in the file and
+    // identifying nothing. A scheduled promotion refused for a day on one
+    // symbol and the log never named it. Focus node and path must survive.
+    let v = validate(COLLIDING, SHAPES).expect("validation ran");
+    assert!(!v.conforms, "two symbolKinds on one IRI must be refused");
+    let joined = v.violations.join(" | ");
+    assert!(
+        joined.contains("code_dup"),
+        "a violation must name its focus node; got {joined:?}"
+    );
+    assert!(
+        joined.contains("symbolKind"),
+        "a violation must name the property path; got {joined:?}"
+    );
+}
+
+#[test]
+fn a_violation_message_does_not_leak_turtle_punctuation() {
+    // Measured in production logs: `MaxCount(1) not satisfied" .` — the message
+    // was the LAST property of its block, so it ended `.` not `;` and the old
+    // `trim_end_matches(';')` left the quote and terminator in the text.
+    let report = r#"
+[] a sh:ValidationReport ;
+   sh:conforms false ;
+   sh:result [ a sh:ValidationResult ;
+     sh:focusNode <http://example.invalid/n> ;
+     sh:resultPath <http://example.invalid/p> ;
+     sh:resultMessage "MaxCount(1) not satisfied" ] .
+"#;
+    let v = parse_report(report);
+    assert!(!v.conforms);
+    assert_eq!(v.violations.len(), 1);
+    let msg = &v.violations[0];
+    assert!(
+        msg.starts_with("MaxCount(1) not satisfied"),
+        "punctuation leaked into the message: {msg:?}"
+    );
+    assert!(!msg.contains('"'), "quote leaked into the message: {msg:?}");
+    assert!(msg.contains("http://example.invalid/n"), "{msg:?}");
+    assert!(msg.contains("http://example.invalid/p"), "{msg:?}");
+}
+
+#[test]
+fn one_results_focus_node_never_bleeds_into_the_next() {
+    // A result carrying no focusNode must not inherit the previous result's and
+    // blame the wrong node — a misattributed violation is worse than a bare one.
+    let report = r#"
+[] a sh:ValidationReport ;
+   sh:conforms false ;
+   sh:result [ a sh:ValidationResult ;
+     sh:focusNode <http://example.invalid/first> ;
+     sh:resultMessage "First broke" ] ;
+   sh:result [ a sh:ValidationResult ;
+     sh:resultMessage "Second broke" ] .
+"#;
+    let v = parse_report(report);
+    assert_eq!(v.violations.len(), 2);
+    assert!(v.violations[0].contains("first"), "{:?}", v.violations);
+    assert!(
+        !v.violations[1].contains("first"),
+        "focus node bled into the next result: {:?}",
+        v.violations
+    );
+}
+
+#[test]
+fn a_dump_slug_cannot_escape_its_directory() {
+    // `source` is caller-supplied and reaches a filename; a path separator or a
+    // parent-dir hop must not steer the write outside the dump dir.
+    let slug = payload_slug("hank promote ../../etc/passwd@HEAD (cli)");
+    assert!(!slug.contains('/'), "{slug:?}");
+    assert!(!slug.contains(".."), "{slug:?}");
+    assert!(!slug.is_empty());
+    assert_eq!(payload_slug(""), "payload");
+    assert_eq!(payload_slug("///"), "payload");
 }
 
 /// Build a synthetic Turtle doc in `to_turtle`'s shape: prefix header, then

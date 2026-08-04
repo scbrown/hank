@@ -55,6 +55,35 @@ hank verify --file src/auth.rs --buffer /tmp/edited.rs
 hank promote --commit HEAD
 ```
 
+## `hank promote` — diagnosing a refusal
+
+A promotion is all-or-nothing: one SHACL violation refuses the whole commit and
+writes nothing. So the refusal has to say enough to act on, because the
+projection it refused is generated on the fly and would otherwise be gone.
+
+```console
+$ hank promote --to $QUIPU
+  REFUSED — promotion did not pass SHACL, wrote nothing:
+    - MaxCount(1) not satisfied — on …/code/hank/src%2Fmcp%2Fstate_tools.rs::StateIngestRequest (path …/symbolKind)
+    payload retained at: /tmp/hank-promote-hank-promote-hank-45c7b660….ttl
+```
+
+Two things make that actionable, and both are load-bearing:
+
+- **The violation names its focus node and property path.** A bare
+  `MaxCount(1) not satisfied` is true of every `maxCount` shape in the file and
+  identifies nothing.
+- **The refused projection is written to disk**, so you can read the document
+  that failed. Parse errors are positional (`line 8656`) and the line MOVES
+  between runs because the content is regenerated — without the payload, the one
+  fact the error gives you is unusable.
+
+The dump also lands on an invalid-Turtle failure and on a partial chunked write.
+It goes to `$HANK_PROMOTE_DUMP_DIR`, else the system temp dir; the name is
+derived from the promotion source, so re-runs overwrite one file rather than
+filling the disk. Retention is best-effort: a promotion that is already failing
+never fails *differently* because a dump could not be written.
+
 ## `hank status`
 
 Reports the resolved baseline, the tiers this binary serves, and — the part a

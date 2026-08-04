@@ -92,20 +92,105 @@ pub fn validate(data_ttl: &str, shapes_ttl: &str) -> Result<Validation> {
     Ok(parse_report(&report))
 }
 
-/// Read `sh:conforms` and any `sh:resultMessage`s out of a SHACL report in Turtle.
+/// Strip a Turtle object's trailing punctuation and quoting.
+///
+/// A property line ends `;` mid-block but `.` (or `] .`) on the LAST property of
+/// a block, so trimming only `;` leaked the terminator into the value — real
+/// promotions logged `MaxCount(1) not satisfied" .` for exactly this reason.
+fn turtle_object(raw: &str) -> String {
+    raw.trim()
+        .trim_end_matches(['.', ';', ']', ' ', '\t'])
+        .trim()
+        .trim_matches('"')
+        .trim()
+        .to_string()
+}
+
+/// Read one `sh:`-prefixed property's object out of a report line, wherever it
+/// sits on that line.
+///
+/// Matches anywhere rather than at the line start because the FIRST property of
+/// a result shares its line with the subject (`_:2 sh:resultSeverity … ;`). The
+/// whitespace check after the name is what keeps `sh:result` from matching
+/// inside `sh:resultMessage`.
+fn report_field(line: &str, name: &str) -> Option<String> {
+    let at = line.find(name)?;
+    let rest = &line[at + name.len()..];
+    if !rest.starts_with([' ', '\t']) {
+        return None;
+    }
+    let value = turtle_object(rest.split(';').next().unwrap_or(rest));
+    let value = value.trim_matches(['<', '>']).trim().to_string();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+/// Read `sh:conforms` and the per-result diagnostics out of a SHACL report in
+/// Turtle.
+///
+/// WHY THIS READS MORE THAN `sh:resultMessage`. A SHACL message names the
+/// CONSTRAINT and nothing else — "MaxCount(1) not satisfied" is true of every
+/// `maxCount` shape in the file and identifies no node, so a refusal built from
+/// it alone cannot be acted on. Measured (aegis-o8rq8): the hourly promotion
+/// refused every run for a day on one symbol, and the log named neither the
+/// symbol, the file, nor the property; the offender was found only by exporting
+/// the payload by hand and diffing cardinalities. The report already carries
+/// `sh:focusNode` and `sh:resultPath` — Quipu's own `/validate` returns both —
+/// so hank was discarding the two fields that make a refusal actionable.
+///
+/// Absent fields degrade to the message alone rather than erroring: a report
+/// shape we did not anticipate must still surface its violation.
 fn parse_report(report: &str) -> Validation {
     let conforms = report.contains("sh:conforms true") || report.contains("sh:conforms  true");
     let mut violations = Vec::new();
-    for line in report.lines() {
-        let l = line.trim();
-        if let Some(rest) = l.strip_prefix("sh:resultMessage") {
-            // sh:resultMessage "MinCount(1) not satisfied" ;
-            let msg = rest.trim().trim_end_matches(';').trim().trim_matches('"');
-            if !msg.is_empty() {
-                violations.push(msg.to_string());
+    // Collect per RESULT SCOPE rather than per line, because the order of
+    // properties inside a result is NOT stable: rudof serializes `sh:resultPath`
+    // AFTER `sh:resultMessage` and moves `a sh:ValidationResult` around between
+    // runs, so a scanner that emits when it meets the message drops the path,
+    // and one that resets on the type line drops the focus node — each
+    // intermittently. A scope ends at a statement terminator (`.`) or at the
+    // close of a bracketed blank node (`]`), which covers both the flat
+    // subject-per-result form rudof emits and the nested `sh:result [ … ]` form
+    // the SHACL spec's examples use.
+    let mut focus: Option<String> = None;
+    let mut path: Option<String> = None;
+    let mut message: Option<String> = None;
+    let mut flush =
+        |focus: &mut Option<String>, path: &mut Option<String>, msg: &mut Option<String>| {
+            if let Some(m) = msg.take() {
+                if !m.is_empty() {
+                    let mut out = m;
+                    if let Some(f) = focus.take() {
+                        out.push_str(&format!(" — on {f}"));
+                    }
+                    if let Some(p) = path.take() {
+                        out.push_str(&format!(" (path {p})"));
+                    }
+                    violations.push(out);
+                }
             }
+            *focus = None;
+            *path = None;
+        };
+    for line in report.lines() {
+        if let Some(v) = report_field(line, "sh:focusNode") {
+            focus = Some(v);
+        }
+        if let Some(v) = report_field(line, "sh:resultPath") {
+            path = Some(v);
+        }
+        if let Some(v) = report_field(line, "sh:resultMessage") {
+            message = Some(v);
+        }
+        let end = line.trim_end();
+        if end.ends_with('.') || end.contains(']') {
+            flush(&mut focus, &mut path, &mut message);
         }
     }
+    flush(&mut focus, &mut path, &mut message);
     // Belt and braces: a report that does not conform but whose messages we failed
     // to parse must still be non-empty, or a caller could read "conforms=false,
     // violations=[]" as "nothing wrong". A refusal must always carry a reason.
@@ -270,6 +355,80 @@ pub struct KnotResult {
     pub tx_id: Option<u64>,
 }
 
+/// Write the projection that failed to disk, and return where it landed.
+///
+/// WHY A FAILED PROMOTION MUST LEAVE ITS PAYLOAD BEHIND. The Turtle is generated,
+/// posted and dropped; when it does not parse or does not conform, the document
+/// that failed no longer exists anywhere. The parse errors are positional —
+/// "line 8656 between columns 1 and 97" — so without the payload the one fact the
+/// error gives you is unusable, and the line MOVES between runs because the
+/// content is regenerated. Measured (aegis-o8rq8): a scheduled promotion failed
+/// every hour for a day and the payload's absence was most of why diagnosing it
+/// was hard.
+///
+/// Best-effort BY DESIGN: a promotion already failing must not fail differently
+/// because a dump could not be written, so every error here collapses to `None`
+/// and the caller reports the original failure without a path.
+///
+/// The filename is derived from `source`, so re-runs of the same repo overwrite
+/// one file instead of growing without bound — a diagnostic that fills a disk is
+/// its own outage. `HANK_PROMOTE_DUMP_DIR` overrides the temp-dir default.
+fn dump_payload(turtle: &str, source: &str) -> Option<std::path::PathBuf> {
+    let dir = std::env::var("HANK_PROMOTE_DUMP_DIR")
+        .ok()
+        .filter(|d| !d.is_empty())
+        .map_or_else(std::env::temp_dir, std::path::PathBuf::from);
+    dump_payload_to(&dir, turtle, source)
+}
+
+/// [`dump_payload`] with the directory passed in.
+///
+/// Split so the whole of the write — the naming, the directory creation, the
+/// best-effort contract — is testable without setting `HANK_PROMOTE_DUMP_DIR`:
+/// parallel tests race on env vars, and this crate denies `unsafe_code`, which
+/// `std::env::set_var` now requires.
+fn dump_payload_to(
+    dir: &std::path::Path,
+    turtle: &str,
+    source: &str,
+) -> Option<std::path::PathBuf> {
+    std::fs::create_dir_all(dir).ok()?;
+    let path = dir.join(format!("hank-promote-{}.ttl", payload_slug(source)));
+    std::fs::write(&path, turtle).ok()?;
+    Some(path)
+}
+
+/// A filesystem-safe stem for a dump file, from the promotion's `source` string.
+///
+/// Anything outside `[A-Za-z0-9-]` becomes `-`, so a source carrying a path, a
+/// URL or a shell metacharacter cannot escape the dump directory or produce a
+/// name the shell would re-interpret. `.` is excluded too, deliberately: keeping
+/// it would let a source spelling `..` survive into the name, which is harmless
+/// only for as long as no separator ever survives with it. Bounded length keeps
+/// the name under filesystem limits; an empty result falls back to a constant
+/// rather than to a bare extension.
+fn payload_slug(source: &str) -> String {
+    let mut s: String = source
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    s.truncate(80);
+    let s = s.trim_matches('-').to_string();
+    if s.is_empty() {
+        "payload".to_string()
+    } else {
+        s
+    }
+}
+
+/// Append the retained-payload path to a failure message, when one was written.
+fn with_payload(message: String, payload: Option<&std::path::Path>) -> String {
+    match payload {
+        Some(p) => format!("{message}\n  payload retained at: {}", p.display()),
+        None => message,
+    }
+}
+
 /// Stay safely under axum's 2 MiB default body limit: the Turtle is JSON-string
 /// encoded (quotes/newlines escape to two bytes) before it travels, so leave
 /// headroom for that inflation plus the JSON envelope.
@@ -358,9 +517,22 @@ pub struct WriteSummary {
 /// in one `/knot` post when it fits, in idempotent chunks when it would 413.
 /// On non-conformance it writes NOTHING and returns the violations.
 pub fn promote(endpoint: &str, turtle: &str, source: &str) -> Result<Promotion> {
-    let v = validate(turtle, CODE_EDGE_SHAPES)?;
+    // Every failure path below retains the payload first: the projection is
+    // generated on the fly and dropped after the post, so a failure that does
+    // not write it out destroys the only copy of the document that failed.
+    let v = match validate(turtle, CODE_EDGE_SHAPES) {
+        Ok(v) => v,
+        Err(Error::Promote(msg)) => {
+            let dump = dump_payload(turtle, source);
+            return Err(Error::Promote(with_payload(msg, dump.as_deref())));
+        }
+        Err(e) => return Err(e),
+    };
     if !v.conforms {
-        return Ok(Promotion::Refused(v.violations));
+        return Ok(Promotion::Refused {
+            violations: v.violations,
+            payload: dump_payload(turtle, source),
+        });
     }
     let chunks = chunk_turtle(turtle, CHUNK_LIMIT)?;
     let total = chunks.len();
@@ -371,10 +543,16 @@ pub fn promote(endpoint: &str, turtle: &str, source: &str) -> Result<Promotion> 
     };
     for (i, chunk) in chunks.iter().enumerate() {
         let knot = write_knot(endpoint, chunk, source).map_err(|e| {
-            Error::Promote(format!(
-                "chunk {}/{total} failed after {} chunk(s) landed — re-running is safe (deterministic IRIs supersede): {e}",
-                i + 1,
-                i
+            // A server-side refusal names a focus node in a payload only hank
+            // held, so this failure needs the projection retained too.
+            let dump = dump_payload(turtle, source);
+            Error::Promote(with_payload(
+                format!(
+                    "chunk {}/{total} failed after {} chunk(s) landed — re-running is safe (deterministic IRIs supersede): {e}",
+                    i + 1,
+                    i
+                ),
+                dump.as_deref(),
             ))
         })?;
         summary.count += knot.count;
@@ -391,7 +569,12 @@ pub enum Promotion {
     /// Validated and written; carries the aggregated write result.
     Wrote(WriteSummary),
     /// Did not pass SHACL; carries the violations and wrote nothing.
-    Refused(Vec<String>),
+    Refused {
+        /// Why it was refused, one entry per SHACL result.
+        violations: Vec<String>,
+        /// Where the refused projection was retained, if it could be written.
+        payload: Option<std::path::PathBuf>,
+    },
 }
 
 impl Promotion {
@@ -413,13 +596,22 @@ impl Promotion {
                 writeln!(w, "  promoted: {} triples present{txs}{chunked}", k.count)?;
                 Ok(true)
             }
-            Promotion::Refused(vs) => {
+            Promotion::Refused {
+                violations,
+                payload,
+            } => {
                 writeln!(
                     w,
                     "  REFUSED — promotion did not pass SHACL, wrote nothing:"
                 )?;
-                for v in vs {
+                for v in violations {
                     writeln!(w, "    - {v}")?;
+                }
+                // The path is the difference between a refusal a reader can act
+                // on and one they can only re-observe.
+                match payload {
+                    Some(p) => writeln!(w, "    payload retained at: {}", p.display())?,
+                    None => writeln!(w, "    payload NOT retained (could not write a dump file)")?,
                 }
                 Ok(false)
             }
