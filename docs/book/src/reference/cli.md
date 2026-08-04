@@ -79,10 +79,16 @@ Two things make that actionable, and both are load-bearing:
   fact the error gives you is unusable.
 
 The dump also lands on an invalid-Turtle failure and on a partial chunked write.
-It goes to `$HANK_PROMOTE_DUMP_DIR`, else the system temp dir; the name is
-derived from the promotion source, so re-runs overwrite one file rather than
-filling the disk. Retention is best-effort: a promotion that is already failing
-never fails *differently* because a dump could not be written.
+It goes to `$HANK_PROMOTE_DUMP_DIR`, else the system temp dir.
+
+The name carries the repo and the resolved commit, so a scheduled promotion
+refusing the same commit hour after hour overwrites **one** file. A *different*
+failing commit gets its own dump — the SHA is what tells you which projection
+you are holding, and reusing one name would overwrite the payload you were still
+reading. So the bound is distinct failing commits, not runs.
+
+Retention is best-effort: a promotion that is already failing never fails
+*differently* because a dump could not be written.
 
 ## `hank status`
 

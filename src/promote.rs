@@ -370,9 +370,15 @@ pub struct KnotResult {
 /// because a dump could not be written, so every error here collapses to `None`
 /// and the caller reports the original failure without a path.
 ///
-/// The filename is derived from `source`, so re-runs of the same repo overwrite
-/// one file instead of growing without bound — a diagnostic that fills a disk is
-/// its own outage. `HANK_PROMOTE_DUMP_DIR` overrides the temp-dir default.
+/// The filename is derived from `source`, which for a CLI promotion carries the
+/// repo AND the resolved commit. So the hourly case — the same commit refused
+/// over and over because the marker did not advance — overwrites ONE file rather
+/// than growing without bound; a diagnostic that fills a disk is its own outage.
+/// Across DIFFERENT failing commits it is one dump each, deliberately: the SHA is
+/// what tells you which projection you are holding, and reusing one name would
+/// overwrite the payload you were still reading. That bound is
+/// distinct-failing-commits, not runs. `HANK_PROMOTE_DUMP_DIR` overrides the
+/// temp-dir default.
 fn dump_payload(turtle: &str, source: &str) -> Option<std::path::PathBuf> {
     let dir = std::env::var("HANK_PROMOTE_DUMP_DIR")
         .ok()
