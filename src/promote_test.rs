@@ -352,3 +352,46 @@ fn multi_chunk_report_names_the_chunk_count() {
     assert!(s.contains("tx 801..803"), "{s}");
     assert!(s.contains("in 3 chunks"), "{s}");
 }
+
+#[test]
+fn a_cfg_duplicate_source_tree_now_conforms_end_to_end() {
+    // THE MONEY TEST for aegis-4ba2e. The two tests above prove the refusal is
+    // now READABLE; this one proves there is nothing left to refuse. It runs the
+    // real extractor over the real shape that froze hank — two mutually
+    // exclusive `#[cfg]` declarations of one name, which tree-sitter sees both
+    // of because it parses rather than evaluating cfg — and validates the
+    // projection against the shipped shapes.
+    //
+    // Deliberately an END-TO-END test on a source tree, not a hand-written
+    // Turtle constant: COLLIDING above is a fixture of what the emitter USED to
+    // produce, so it can only ever prove SHACL still refuses that shape. Only
+    // driving the extractor can prove the emitter stopped producing it.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("state_tools.rs"),
+        "#[cfg(feature = \"game-state\")]\n\
+         pub type StateIngestRequest = crate::state::IngestRequest;\n\
+         #[cfg(not(feature = \"game-state\"))]\n\
+         pub struct StateIngestRequest { pub game_id: String }\n",
+    )
+    .unwrap();
+
+    let turtle = crate::export::to_turtle(dir.path(), "demo").expect("export ran");
+    assert_eq!(
+        turtle.matches("bobbin:symbolKind").count(),
+        1,
+        "one IRI must carry exactly one symbolKind; got:\n{turtle}"
+    );
+    assert!(
+        turtle.contains("more than one symbolKind"),
+        "the collapse must be recorded in the payload, not done silently; got:\n{turtle}"
+    );
+
+    let v = validate(&turtle, SHAPES).expect("validation ran");
+    assert!(
+        v.conforms,
+        "a cfg-duplicate tree must project a CONFORMING document — this is the \
+         freeze aegis-4ba2e lifted; violations: {:?}",
+        v.violations
+    );
+}

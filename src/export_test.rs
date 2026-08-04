@@ -361,3 +361,109 @@ fn bracket_segments_are_encoded_so_the_document_stays_parseable() {
     // literal text "%5B" must not collide with one containing "[".
     assert_ne!(iri_segment("x%5B"), iri_segment("x["));
 }
+
+/// aegis-4ba2e: two declarations of one name under mutually exclusive `#[cfg]`
+/// mint ONE IRI. The extractor sees both (it parses, it does not evaluate cfg),
+/// so the emitter must collapse them or SHACL refuses the whole promotion.
+#[test]
+fn cfg_alternatives_collapse_to_one_symbol_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("m.rs"),
+        "#[cfg(feature = \"x\")]\n\
+         pub type Dup = crate::other::Thing;\n\
+         #[cfg(not(feature = \"x\"))]\n\
+         pub struct Dup { pub a: String }\n",
+    )
+    .unwrap();
+
+    let ttl = to_turtle(dir.path(), "demo").unwrap();
+    assert_eq!(
+        ttl.matches("bobbin:symbolKind").count(),
+        1,
+        "exactly one symbolKind must survive; got:\n{ttl}"
+    );
+    // First in file order wins. Asserting WHICH one is the point: "one of them"
+    // is not a contract, and a re-promotion that picks differently forks the
+    // graph instead of superseding it.
+    assert!(
+        ttl.contains("bobbin:symbolKind \"type_alias\""),
+        "the FIRST declaration must win; got:\n{ttl}"
+    );
+}
+
+/// The collapse must not be silent — it would hide a genuine IRI collision as
+/// effectively as it hides a cfg pair.
+#[test]
+fn a_collapsed_symbol_is_recorded_in_the_payload() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("m.rs"),
+        "#[cfg(feature = \"x\")]\n\
+         pub type Dup = crate::other::Thing;\n\
+         #[cfg(not(feature = \"x\"))]\n\
+         pub struct Dup { pub a: String }\n",
+    )
+    .unwrap();
+
+    let ttl = to_turtle(dir.path(), "demo").unwrap();
+    let note = ttl
+        .lines()
+        .find(|l| l.contains("more than one symbolKind"))
+        .unwrap_or_else(|| panic!("no collapse note in payload:\n{ttl}"));
+    assert!(note.starts_with('#'), "the note must be a Turtle comment");
+    assert!(
+        note.contains("m.rs::Dup"),
+        "the note must name the IRI: {note}"
+    );
+    assert!(
+        note.contains("\"type_alias\""),
+        "must name the winner: {note}"
+    );
+    assert!(
+        note.contains("\"struct\""),
+        "must name the dropped kind: {note}"
+    );
+}
+
+/// Determinism is the whole requirement: the same tree must project the same
+/// bytes, or a re-promotion forks the graph instead of superseding it.
+#[test]
+fn a_cfg_duplicate_tree_projects_identical_bytes_every_time() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("m.rs"),
+        "#[cfg(feature = \"x\")]\n\
+         pub type Dup = crate::other::Thing;\n\
+         #[cfg(not(feature = \"x\"))]\n\
+         pub struct Dup { pub a: String }\n",
+    )
+    .unwrap();
+    let first = to_turtle(dir.path(), "demo").unwrap();
+    for _ in 0..8 {
+        assert_eq!(first, to_turtle(dir.path(), "demo").unwrap());
+    }
+}
+
+/// Same name, same kind, two sites: NOT a maxCount violation (RDF is a set, so
+/// the two symbolKind triples were always one value) and so NOT something this
+/// function should report. Reporting it would make the note noise, and noise is
+/// how a real collapse stops being read.
+#[test]
+fn same_kind_duplicates_collapse_without_a_note() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("m.rs"),
+        "#[cfg(feature = \"x\")]\n\
+         pub struct Dup { pub a: String }\n\
+         #[cfg(not(feature = \"x\"))]\n\
+         pub struct Dup { pub b: String }\n",
+    )
+    .unwrap();
+    let ttl = to_turtle(dir.path(), "demo").unwrap();
+    assert_eq!(ttl.matches("bobbin:symbolKind").count(), 1);
+    assert!(
+        !ttl.contains("more than one symbolKind"),
+        "same-kind sites are not a cross-kind collapse; got:\n{ttl}"
+    );
+}

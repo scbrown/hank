@@ -211,6 +211,8 @@ fn to_turtle_from(
         }
     }
 
+    let (symbols, collapsed) = dedupe_by_iri(symbols);
+
     Ok(render(
         repo,
         &modules,
@@ -220,7 +222,78 @@ fn to_turtle_from(
         &docs,
         &sections,
         &ref_edges,
+        &collapsed,
     ))
+}
+
+/// Collapse symbols sharing an IRI to ONE, deterministically, and say which.
+///
+/// Two mutually-exclusive `#[cfg]` declarations of one name are BOTH seen by
+/// the extractor — tree-sitter parses, it does not evaluate `cfg` — so they
+/// mint a single IRI carrying two `symbolKind` values. `code-entities.ttl` puts
+/// `sh:maxCount 1` on `symbolKind`, so SHACL refuses the ENTIRE promotion and
+/// the repo's structure freezes at its last good commit. hank's own
+/// `src/mcp/state_tools.rs` did exactly this and froze hank's own code graph
+/// for a day (aegis-4ba2e).
+///
+/// FIRST DECLARATION WINS, in file order. Without evaluating `cfg` there is no
+/// correct choice between the two, so the requirement here is determinism, not
+/// cleverness: the same tree must always project the same bytes, or a
+/// re-promotion forks the graph instead of superseding it. `git ls-tree` output
+/// is sorted and parse order within a file is stable, so first-wins is stable.
+///
+/// Only a CROSS-KIND collision is recorded. Two sites with the same kind emit
+/// byte-identical `symbolKind` triples, and RDF is a set — they were never a
+/// maxCount violation. (`hank collisions` reports those separately; they are
+/// the aegis-1q14 class, and this function is not the place to relitigate it.)
+///
+/// **The drop is not silent.** Dropping a declaration quietly would trade a
+/// loud freeze for a quiet wrong answer, and would hide a GENUINE IRI collision
+/// just as effectively as a `cfg` pair — which is why this landed only after a
+/// refusal learned to name its focus node (aegis-o8rq8). Each collapse is
+/// written into the payload as a Turtle comment, so it travels with the
+/// artifact that gets promoted and survives in the one that gets refused.
+fn dedupe_by_iri(symbols: Vec<SymbolTriple>) -> (Vec<SymbolTriple>, Vec<String>) {
+    let mut first_at: HashMap<String, usize> = HashMap::new();
+    let mut kept: Vec<SymbolTriple> = Vec::new();
+    // BTreeMap: the notes are part of the emitted bytes, so their order has to
+    // be stable too, not just the symbols'.
+    let mut collapsed: std::collections::BTreeMap<String, (String, BTreeSet<String>)> =
+        std::collections::BTreeMap::new();
+
+    for symbol in symbols {
+        if let Some(&i) = first_at.get(&symbol.iri) {
+            if kept[i].kind != symbol.kind {
+                collapsed
+                    .entry(symbol.iri.clone())
+                    .or_insert_with(|| (kept[i].kind.clone(), BTreeSet::new()))
+                    .1
+                    .insert(symbol.kind);
+            }
+            continue;
+        }
+        first_at.insert(symbol.iri.clone(), kept.len());
+        kept.push(symbol);
+    }
+
+    let notes = collapsed
+        .into_iter()
+        .map(|(iri, (winner, dropped))| {
+            format!(
+                "# hank: <{iri}> was declared with more than one symbolKind — kept \
+                 \"{winner}\" (first in file order), dropped {}. Mutually-exclusive \
+                 #[cfg] declarations of one name look like this; so does a genuine \
+                 IRI collision. See aegis-4ba2e.",
+                dropped
+                    .iter()
+                    .map(|k| format!("\"{k}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+        .collect();
+
+    (kept, notes)
 }
 
 /// Resolve a doc [`Mention`] to concrete `CodeSymbol` IRIs, never inventing one:
@@ -301,10 +374,21 @@ fn render(
     docs: &[DocTriple],
     sections: &[SectionTriple],
     ref_edges: &BTreeSet<(String, String)>,
+    collapsed: &[String],
 ) -> String {
     let mut out = String::new();
     out.push_str("@prefix bobbin: <http://aegis.gastown.local/ontology/> .\n");
     out.push_str("@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\n");
+
+    // Emitted BEFORE the data, so it is the first thing a reader of a refused
+    // payload sees rather than something buried mid-file (aegis-4ba2e).
+    if !collapsed.is_empty() {
+        for note in collapsed {
+            out.push_str(note);
+            out.push('\n');
+        }
+        out.push('\n');
+    }
 
     for (iri, rel, language) in modules {
         out.push_str(&format!(
