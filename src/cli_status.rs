@@ -23,6 +23,13 @@ impl Cli {
                 "base_commit": base_commit,
                 "tenant": tenant,
                 "tiers": Tier::served(),
+                // WHICH LANGUAGES THIS BUILD CAN PARSE (aegis-ah0q1). A build
+                // without `langs-extra` extracts Rust and silently skips the
+                // other five: `export`/`promote` still exit 0 with a valid
+                // document, so "no symbols" is indistinguishable from "no code
+                // in that language" from the outside. This is the field that
+                // makes a Rust-only deploy detectable without a probe repo.
+                "languages": crate::extract::languages(),
                 "quipu": { "enabled": config.quipu.enabled, "branch_model": config.quipu.branch_model },
                 "policy": policy,
                 // Whether guard records will carry their subject (hank #77). An
@@ -77,6 +84,23 @@ impl Cli {
             println!("  base commit : {commit}");
             println!("  tenant      : {tenant}");
             println!("  tiers       : {}", Tier::served().join(", "));
+            // A PARTIAL grammar set is the loud case, not the quiet one
+            // (aegis-ah0q1). A Rust-only build answers every Python/TS/Go/Java/
+            // C++ question with a confident empty — same shape, exit 0, valid
+            // output — so the deficit has to announce itself here or it is
+            // invisible until someone builds a probe repo to find it.
+            let languages = crate::extract::languages();
+            print!("  languages   : {}", languages.join(", "));
+            if languages.contains(&"python") {
+                println!();
+            } else {
+                println!(
+                    "{}",
+                    "  ← PARTIAL: built without `langs-extra`; every other \
+                     language extracts ZERO symbols, silently"
+                        .yellow()
+                );
+            }
             println!(
                 "  quipu       : enabled={} branch_model={}",
                 config.quipu.enabled, config.quipu.branch_model

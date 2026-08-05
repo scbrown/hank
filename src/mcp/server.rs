@@ -82,7 +82,7 @@ impl HankMcpServer {
 #[tool_router]
 impl HankMcpServer {
     #[tool(
-        description = "Show Hank's base ref, tenant, available extraction tiers, and Quipu promotion settings."
+        description = "Show Hank's base ref, tenant, available extraction tiers, the languages this build can parse, and Quipu promotion settings. Check `languages` before trusting an empty impact/callers answer: a language absent there yields no symbols at all."
     )]
     async fn hank_status(&self) -> Result<CallToolResult, McpError> {
         let config = HankConfig::resolve(self.config.as_deref(), &self.root).map_err(internal)?;
@@ -93,6 +93,10 @@ impl HankMcpServer {
                 .clone()
                 .unwrap_or_else(|| "(single-tenant)".to_string()),
             tiers: Tier::served(),
+            languages: crate::extract::languages()
+                .into_iter()
+                .map(String::from)
+                .collect(),
             quipu_enabled: config.quipu.enabled,
             branch_model: config.quipu.branch_model,
             tenant_layer: super::resident::tenant_layer(self.config.as_deref(), &self.root),

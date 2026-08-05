@@ -111,6 +111,43 @@ fn grammar_spec(language: &str) -> Option<GrammarSpec> {
     }
 }
 
+/// The languages this BUILD can actually extract, in a stable order.
+///
+/// This exists to be REPORTED (`hank status`), because the failure it guards is
+/// silent by construction: a build without `langs-extra` has no grammar for five
+/// of the six languages, so [`source_files`] never selects those files, the
+/// extractor is never asked, and `export`/`promote` emit a well-formed document
+/// that is simply missing them. Exit 0, valid Turtle, zero symbols — which is
+/// indistinguishable from "that repo has no code in those languages" (aegis-ah0q1:
+/// the deployed binary was Rust-only for an undated period and nothing said so).
+///
+/// Same principle as [`Tier::served`](crate::types::Tier::served) and the reason
+/// the empty `cpg`/`lsp` features were removed (aegis-qe5z): a build must not
+/// advertise a capability it does not have. The inverse is just as costly — a
+/// build must not stay SILENT about a capability it is missing, because the
+/// consumer cannot tell an empty answer from an unsupported one.
+///
+/// Gated identically to [`grammar_spec`]; `advertised_languages_all_resolve`
+/// asserts the two cannot drift.
+#[must_use]
+pub fn languages() -> Vec<&'static str> {
+    vec![
+        "rust",
+        #[cfg(feature = "langs-extra")]
+        "typescript",
+        #[cfg(feature = "langs-extra")]
+        "tsx",
+        #[cfg(feature = "langs-extra")]
+        "python",
+        #[cfg(feature = "langs-extra")]
+        "go",
+        #[cfg(feature = "langs-extra")]
+        "java",
+        #[cfg(feature = "langs-extra")]
+        "cpp",
+    ]
+}
+
 /// Map a source-file extension to the canonical language name understood by
 /// [`extract_structure`], or `None` if this build has no grammar for it.
 ///

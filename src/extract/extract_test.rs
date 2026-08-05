@@ -205,3 +205,58 @@ fn rust_extension_maps() {
     assert_eq!(language_for_extension("rs"), Some("rust"));
     assert_eq!(language_for_extension("cobol"), None);
 }
+
+/// Every language `languages()` advertises must actually resolve to a grammar in
+/// THIS build. This is the drift guard: `languages()` and `grammar_spec` carry
+/// the same `cfg` gates in two places, and a list that outran its grammars would
+/// re-create aegis-ah0q1 one layer up — `hank status` claiming a language the
+/// extractor still silently skips.
+#[test]
+fn advertised_languages_all_resolve() {
+    for language in languages() {
+        assert!(
+            grammar_spec(language).is_some(),
+            "status advertises `{language}` but this build has no grammar for it"
+        );
+    }
+}
+
+/// The extra grammars are advertised EXACTLY when they are compiled in —
+/// asserted in both directions, because the failure is symmetric. Claiming them
+/// without `langs-extra` is the empty-feature lie (aegis-qe5z); staying silent
+/// WITH them makes a correct build look like a deficient one, which is what
+/// makes a Rust-only deploy undetectable from the outside (aegis-ah0q1).
+#[test]
+fn extra_languages_advertised_exactly_when_built() {
+    let langs = languages();
+    assert!(langs.contains(&"rust"), "rust is unconditional");
+    for language in ["typescript", "tsx", "python", "go", "java", "cpp"] {
+        assert_eq!(
+            langs.contains(&language),
+            cfg!(feature = "langs-extra"),
+            "`{language}` advertisement must match the langs-extra feature"
+        );
+    }
+}
+
+/// The extension map and the advertised set must agree: a language nobody can
+/// SELECT a file for is not served, whatever the list says. `source_files` is
+/// driven by `language_for_extension`, so this is the path an actual repo takes.
+#[test]
+fn advertised_languages_are_reachable_from_an_extension() {
+    for (ext, language) in [
+        ("rs", "rust"),
+        ("ts", "typescript"),
+        ("tsx", "tsx"),
+        ("py", "python"),
+        ("go", "go"),
+        ("java", "java"),
+        ("cpp", "cpp"),
+    ] {
+        assert_eq!(
+            language_for_extension(ext) == Some(language),
+            languages().contains(&language),
+            "`.{ext}` selection and `{language}` advertisement disagree"
+        );
+    }
+}

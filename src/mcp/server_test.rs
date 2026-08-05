@@ -354,6 +354,37 @@ async fn status_advertises_only_implemented_tiers() {
     );
 }
 
+/// The MCP surface must report the parseable language set, in step with the
+/// grammars compiled in (aegis-ah0q1).
+///
+/// This is the tier test's sibling and it exists for the mirror-image reason.
+/// The tier lie was advertising a capability that was absent; this one is
+/// STAYING SILENT about an absence — an agent that asks `hank_impact` about a
+/// Python symbol on a Rust-only build is told "no callers", which reads as
+/// "safe to change" rather than "this build cannot see Python at all". Asserted
+/// in both directions so a Rust-only build cannot claim the extra languages and
+/// a complete one cannot hide them.
+#[tokio::test]
+async fn status_advertises_the_languages_it_can_parse() {
+    let dir = fixture();
+    let payload = served(server(&dir).hank_status().await);
+    let languages = payload["languages"]
+        .as_array()
+        .expect("status must report a language set")
+        .clone();
+    assert!(
+        languages.contains(&serde_json::json!("rust")),
+        "rust is unconditional: {payload}"
+    );
+    for language in ["typescript", "tsx", "python", "go", "java", "cpp"] {
+        assert_eq!(
+            languages.contains(&serde_json::json!(language)),
+            cfg!(feature = "langs-extra"),
+            "`{language}` advertisement is out of step with langs-extra: {payload}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn references_declares_its_tier_at_the_top_level() {
     // The empty-answer hole, on the references surface. `ReferencesResponse`

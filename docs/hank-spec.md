@@ -1335,7 +1335,15 @@ feature). Over stdio + streamable-HTTP.
 
 **Cargo features:** `default = []`; `mcp`, `langs-extra`, `quipu`, `game-state`
 (all off by default; `mcp`, `quipu` and `game-state` in the CI matrix).
-`langs-extra` deps are declared but extractors are Rust-only so far. `cpg` and
+`langs-extra` gates REAL extractors — TypeScript, TSX, Python, Go, Java and C++
+all produce modules, symbols and call edges (measured 2026-08-04 against a
+7-language probe repo, 3–4 symbols each). A build WITHOUT it is Rust-only and
+says so in `hank status` (`languages`); it does not error on the other five, it
+silently extracts nothing from them, which is why the deployed binary was
+Rust-only for an undated period without anyone noticing. This paragraph
+previously read "deps are declared but extractors are Rust-only so far" — that
+was true early in Phase 1, went stale, and is the likeliest reason a release was
+hand-built without the flag. `cpg` and
 `lsp` are planned but are NOT features yet — an empty feature that gates nothing
 lets a build advertise a tier it cannot serve; each returns when it
 gates a real extractor. `game-state` is not that shape: it gates `src/state/`,
@@ -1349,8 +1357,7 @@ markdownlint, mdBook.
 **Not yet built:** the resident daemon / per-tenant overlays (Phase 3); LSP
 precision tier (planned `lsp` feature); CPG control-dependence + inter-procedural
 taint (planned `cpg` feature); doc→code reference extraction
-(FR-33); `pre-edit` guard; position-based tool variants; the `langs-extra`
-grammar extractors.
+(FR-33); `pre-edit` guard; position-based tool variants.
 
 **Phase 4 (graph-export → Quipu) — status (2026-07-23, harding; verified by
 mechanism against `src/`, cross-refs the open GitHub issues):**
@@ -1443,8 +1450,8 @@ Recommended order:
    agents (§5.5).
 
 **Then:** `pre-edit` guard (FR-30, needs #1); `hank export --to quipu` + doc→code
-references (FR-33/34, Phase 4); the `lsp`/`cpg` precision tiers; and filling in
-the `langs-extra` extractors.
+references (FR-33/34, Phase 4); and the `lsp`/`cpg` precision tiers. (The
+`langs-extra` extractors are DONE — see Appendix E's Cargo-features note.)
 
 **Beyond code (Phase 4+):** a general in-memory fact graph + policy harness for
 the NeuralAmplifier project — generic non-code ingestion, a game-state policy

@@ -365,6 +365,12 @@ pub struct StatusResponse {
     pub tenant: String,
     /// Extraction tiers this build can serve.
     pub tiers: Vec<String>,
+    /// The languages this build can actually PARSE (aegis-ah0q1). An agent
+    /// asking `hank_impact` about a Python symbol on a Rust-only build gets a
+    /// confident empty answer, not an error — so the served set has to be
+    /// visible here, next to the tiers, or "no callers" cannot be told apart
+    /// from "this build cannot read that language".
+    pub languages: Vec<String>,
     /// Whether Quipu promotion is enabled.
     pub quipu_enabled: bool,
     /// The configured branch model.
