@@ -97,6 +97,25 @@ pub(super) fn promote(
                         violations,
                     }
                 }
+                // `promote` is the WRITING spelling — the dry run is a separate
+                // entry point, and `promote_never_reports_a_dry_run` in
+                // promote_test.rs asserts this variant cannot come back from it.
+                // So this arm is unreachable, and it is written as a REFUSAL
+                // rather than a panic or a `wrote: true`: an MCP client sees
+                // only this response, and if the invariant ever breaks, the one
+                // unacceptable outcome is reporting a write that did not happen.
+                // Fail closed and name the invariant.
+                crate::promote::Promotion::Conforms { chunks, bytes, .. } => PromoteResponse {
+                    wrote: false,
+                    count: None,
+                    tx_id: None,
+                    chunks: Some(chunks),
+                    violations: vec![format!(
+                        "internal invariant broken: `promote` returned a dry-run result \
+                         ({chunks} chunks, {bytes} bytes) instead of writing. NOTHING WAS \
+                         WRITTEN. This is a bug in hank, not in the projection — please report it."
+                    )],
+                },
             };
         json_result(&response)
     }

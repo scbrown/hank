@@ -502,10 +502,22 @@ fn every_emitted_entity_carries_an_rdfs_label() {
     // The label VALUES are the sibling emitter's (quipu scripts/ingest-repos.py):
     // heading for a Section, symbol name for a CodeSymbol, file basename — not
     // the full path, which stays on bobbin:filePath — for a Document/CodeModule.
-    assert!(ttl.contains("a bobbin:CodeModule ;\n    rdfs:label \"graph.rs\""), "got:\n{ttl}");
-    assert!(ttl.contains("a bobbin:CodeSymbol ;\n    rdfs:label \"reachable\""), "got:\n{ttl}");
-    assert!(ttl.contains("a bobbin:Document ;\n    rdfs:label \"guide.md\""), "got:\n{ttl}");
-    assert!(ttl.contains("a bobbin:Section ;\n    rdfs:label \"Traversal\""), "got:\n{ttl}");
+    assert!(
+        ttl.contains("a bobbin:CodeModule ;\n    rdfs:label \"graph.rs\""),
+        "got:\n{ttl}"
+    );
+    assert!(
+        ttl.contains("a bobbin:CodeSymbol ;\n    rdfs:label \"reachable\""),
+        "got:\n{ttl}"
+    );
+    assert!(
+        ttl.contains("a bobbin:Document ;\n    rdfs:label \"guide.md\""),
+        "got:\n{ttl}"
+    );
+    assert!(
+        ttl.contains("a bobbin:Section ;\n    rdfs:label \"Traversal\""),
+        "got:\n{ttl}"
+    );
 
     // No entity type may be added without one. `a bobbin:` appears once per
     // entity and never on an edge line, so these two counts are the whole claim.
