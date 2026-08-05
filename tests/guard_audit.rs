@@ -28,6 +28,18 @@ fn guarded_project(policy: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     }
     let bobbin = dir.path().join(".bobbin");
     std::fs::create_dir_all(&bobbin).unwrap();
+    // HERMETIC (aegis-0upyu): pin the graph plane OFF unless the fixture
+    // declares its own. Without this the fixture inherits the developer's
+    // `~/.config/bobbin/config.toml`, which on this fleet enables the graph
+    // against a live endpoint — so every assertion here about the AUDIT RECORD
+    // silently depended on a shared service answering within 2s. When it did
+    // not, the guard failed open and `result` was `notify` instead of the
+    // `deny` under test, in five tests at once.
+    let policy = if policy.contains("[hank.quipu]") {
+        policy.to_string()
+    } else {
+        format!("{policy}\n\n[hank.quipu]\nenabled = false\n")
+    };
     std::fs::write(bobbin.join("config.toml"), policy).unwrap();
     let spool = dir.path().join("metrics.jsonl");
     (dir, spool)

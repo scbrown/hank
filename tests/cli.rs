@@ -407,8 +407,12 @@ fn pre_edit_fails_open_on_garbage_and_on_no_policy() {
         .success()
         .stdout(predicate::str::is_empty());
 
-    // A repo with no policy configured at all.
+    // A repo with no policy configured at all. The config is WRITTEN (empty of
+    // policy) rather than omitted: an omitted file falls through to the host's,
+    // which enables the graph plane, so this test asserted on a network service
+    // instead of on the fail-open contract it is named for.
     let dir = project_with("a.rs", "fn foo() {}\n");
+    with_config(dir.path(), "");
     Command::cargo_bin("hank")
         .unwrap()
         .args(["hook", "pre-edit", "--tenant", "polecat"])
@@ -567,14 +571,21 @@ fn config_flag_makes_status_read_the_named_file() {
 /// allowed. Distinguishes "the override was read" from "the guard failed open".
 #[test]
 fn config_flag_points_the_guard_at_a_scope_file() {
-    // No `.bobbin/config.toml` here, so the ambient config allows everything.
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("leaf.rs"), "fn leaf() {}\n").unwrap();
+    // An ambient config declaring NO POLICY — which is what the negative
+    // control below actually depends on. It is written rather than omitted
+    // because "omitted" does not mean "empty": hank layers the developer's
+    // `~/.config/bobbin/config.toml`, so an absent file made this test reach a
+    // live graph and assert on whether it answered within 2s.
+    with_config(dir.path(), "");
     let scope = dir.path().join("scope.toml");
     std::fs::write(
         &scope,
-        "[hank.policy]\nmode = \"enforce\"\n\
-         [hank.policy.scopes.polecat]\nallow_paths = [\"src/**\"]\n",
+        hermetic(
+            "[hank.policy]\nmode = \"enforce\"\n\
+             [hank.policy.scopes.polecat]\nallow_paths = [\"src/**\"]\n",
+        ),
     )
     .unwrap();
     let payload = pre_edit_payload(dir.path(), "leaf.rs", "fn leaf() {}");
