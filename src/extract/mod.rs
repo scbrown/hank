@@ -189,11 +189,81 @@ pub fn source_files(path: &Path) -> Vec<(PathBuf, &'static str)> {
         .filter_map(std::result::Result::ok)
         .map(ignore::DirEntry::into_path)
         .filter_map(|p| {
-            let ext = p.extension().and_then(std::ffi::OsStr::to_str)?;
-            let language = language_for_extension(ext)?;
+            let language = selectable_language(&p)?;
             Some((p, language))
         })
         .collect()
+}
+
+/// The language this path should be extracted as, or `None` if it must not be
+/// extracted at all.
+///
+/// THE ONE SELECTION RULE, shared by both projection entry points. `to_turtle`
+/// walks the working tree and `to_turtle_at` lists a git commit; they were
+/// documented as unable to drift "in what they emit, only in where the bytes
+/// come from", but each applied its own selection, so a filter added to the
+/// walker left the commit path untouched — which is precisely how a vendored
+/// bundle reached the graph through `promote` while `export` was already clean.
+/// Selection lives here so that cannot recur.
+#[must_use]
+pub fn selectable_language(path: &Path) -> Option<&'static str> {
+    if is_vendored_or_minified(path) {
+        return None;
+    }
+    let ext = path.extension().and_then(std::ffi::OsStr::to_str)?;
+    language_for_extension(ext)
+}
+
+/// Should this path be ingested as a DOCUMENT (markdown)?
+///
+/// Same vendoring exclusion as [`selectable_language`] — a README inside
+/// `node_modules/` is third-party noise for the same reason its `.js` is.
+#[must_use]
+pub fn is_selectable_doc(path: &Path) -> bool {
+    !is_vendored_or_minified(path)
+        && path
+            .extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|ext| ext == "md" || ext == "markdown")
+}
+
+/// Is this a VENDORED or MINIFIED artefact — third-party or machine-generated
+/// code that happens to sit in the tree?
+///
+/// These are not authored source and must never reach the graph. Minified
+/// bundles in particular are catastrophic rather than merely noisy: every
+/// mangled short name (`xGe`, `Art`) becomes a `CodeSymbol`, and the resulting
+/// entities are both meaningless to a reader and numerous enough to bury the
+/// real ones.
+///
+/// MEASURED on the quipu repo when `langs-extra` was first deployed: two files —
+/// `ui/vendor/three.module.min.js` and `docs/book/mermaid.min.js` — produced
+/// 574k of ~590k symbol references, 97% of the projection. That inflated the
+/// promotion from 4.3 MB in 5 chunks to 65 MB in 71, and the write was REFUSED
+/// server-side. So this filter is not a tidiness preference; without it the
+/// extra grammars cannot be promoted at all.
+///
+/// Deliberately name/path-based rather than content-sniffing (e.g. "very long
+/// lines"): a path rule is predictable, cheap, and a reader can tell from the
+/// filename alone whether a file is included. `.gitignore` does NOT cover this —
+/// vendored bundles are usually COMMITTED, which is the whole point of vendoring.
+fn is_vendored_or_minified(path: &Path) -> bool {
+    // `foo.min.js`, `foo.min.css`, `bundle.min.mjs` — the conventional marker
+    // for machine-minified output, checked on the file STEM so it catches any
+    // extension.
+    if let Some(stem) = path.file_stem().and_then(std::ffi::OsStr::to_str) {
+        if stem.ends_with(".min") || stem.ends_with("-min") {
+            return true;
+        }
+    }
+    // Directories that by convention hold third-party or generated code. Matched
+    // on a full path COMPONENT so `myvendor/` or `src/distance.rs` do not trip it.
+    path.components().any(|c| {
+        matches!(
+            c.as_os_str().to_str(),
+            Some("vendor" | "vendored" | "node_modules" | "third_party" | "thirdparty")
+        )
+    })
 }
 
 /// Like [`source_files`], but restricted to the languages named in `allowed`.

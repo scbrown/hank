@@ -49,10 +49,9 @@ pub fn doc_files(path: &Path) -> Vec<PathBuf> {
         .build()
         .filter_map(std::result::Result::ok)
         .map(ignore::DirEntry::into_path)
-        .filter(|p| {
-            p.extension()
-                .is_some_and(|ext| ext == "md" || ext == "markdown")
-        })
+        // One selection rule, shared with the commit-tree path — a README under
+        // `node_modules/` is third-party noise for the same reason its `.js` is.
+        .filter(|p| crate::extract::is_selectable_doc(p))
         .collect()
 }
 

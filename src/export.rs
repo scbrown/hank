@@ -59,15 +59,17 @@ pub fn to_turtle_at(root: &Path, repo: &str, reference: &str) -> Result<String> 
     let sources: Vec<(String, String, &'static str)> = files
         .iter()
         .filter_map(|path| {
-            let ext = path.extension().and_then(std::ffi::OsStr::to_str)?;
-            let language = crate::extract::language_for_extension(ext)?;
+            // Selection is `extract`'s call, NOT a second copy of the rule here
+            // — the copy is what let a vendored bundle through this path while
+            // the working-tree path already excluded it.
+            let language = crate::extract::selectable_language(path)?;
             let source = crate::git::read_blob_at(root, reference, path)?;
             Some((path.display().to_string(), source, language))
         })
         .collect();
     let docs: Vec<(String, String)> = files
         .iter()
-        .filter(|p| p.extension().and_then(std::ffi::OsStr::to_str) == Some("md"))
+        .filter(|p| crate::extract::is_selectable_doc(p))
         .filter_map(|path| {
             let source = crate::git::read_blob_at(root, reference, path)?;
             Some((path.display().to_string(), source))

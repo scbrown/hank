@@ -260,3 +260,68 @@ fn advertised_languages_are_reachable_from_an_extension() {
         );
     }
 }
+
+/// Vendored and minified artefacts are NOT source and must never be walked.
+///
+/// Both directions, because each failure is real: letting a minified bundle in
+/// buries the graph in mangled names (measured: 97% of one repo's projection,
+/// which made the promotion unwritable), while excluding real source silently
+/// shrinks every blast radius computed from it — and a small radius reads as
+/// "safe to change".
+#[test]
+fn vendored_and_minified_paths_are_excluded() {
+    for excluded in [
+        "ui/vendor/three.module.min.js",
+        "docs/book/mermaid.min.js",
+        "web/node_modules/left-pad/index.js",
+        "third_party/zlib/zlib.c",
+        "vendor/rack/rack.rb",
+        "assets/app-min.js",
+    ] {
+        assert!(
+            is_vendored_or_minified(Path::new(excluded)),
+            "`{excluded}` must be excluded from the walk"
+        );
+    }
+    for included in [
+        "src/extract/mod.rs",
+        "ui/graph-canvas.js",
+        "src/distance.rs",            // `dist`-prefixed, not a `dist` component
+        "crates/myvendor/src/lib.rs", // `myvendor`, not `vendor`
+        "docs/book/src/reference/cli.md",
+        "src/minify.rs", // `min` is a prefix here, not the suffix
+    ] {
+        assert!(
+            !is_vendored_or_minified(Path::new(included)),
+            "`{included}` is real source and must be walked"
+        );
+    }
+}
+
+/// The exclusion is wired into the WALK, not merely available as a helper — the
+/// bug was that a bundle reached the graph, so the test has to exercise the path
+/// that puts files there.
+#[test]
+fn source_files_skips_a_vendored_bundle() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("ui/vendor")).unwrap();
+    std::fs::write(
+        root.join("ui/vendor/three.module.min.js"),
+        "function xGe(){}",
+    )
+    .unwrap();
+    std::fs::write(root.join("real.rs"), "pub fn alpha() -> i32 { 1 }").unwrap();
+
+    let found = source_files(root);
+    assert!(
+        found.iter().any(|(p, _)| p.ends_with("real.rs")),
+        "the walk must still find real source: {found:?}"
+    );
+    assert!(
+        !found
+            .iter()
+            .any(|(p, _)| p.to_string_lossy().contains("three.module.min.js")),
+        "a vendored minified bundle reached the walk: {found:?}"
+    );
+}

@@ -528,3 +528,59 @@ fn every_emitted_entity_carries_an_rdfs_label() {
         "{entities} entities but {labels} labels — an emitted class has no rdfs:label:\n{ttl}"
     );
 }
+
+/// BOTH projection entry points must exclude vendored/minified artefacts —
+/// asserted together, because the bug was that they DISAGREED.
+///
+/// `to_turtle` (working tree) and `to_turtle_at` (committed tree) are documented
+/// as differing only in where the bytes come from. They also each applied their
+/// own file selection, so when the walker learned to skip vendored bundles the
+/// commit path did not — and the commit path is the one `promote` uses. Measured
+/// on the quipu repo: `export` emitted 4.5 MB while `promote` still emitted 65 MB
+/// from the same tree, 97% of it mangled names out of two `.min.js` bundles, and
+/// the write was refused server-side.
+#[test]
+fn both_projections_exclude_vendored_bundles() {
+    let dir = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        assert!(std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(args)
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    run(&["init", "-q", "-b", "main"]);
+    run(&["config", "user.email", "t@t"]);
+    run(&["config", "user.name", "t"]);
+
+    std::fs::create_dir_all(dir.path().join("ui/vendor")).unwrap();
+    std::fs::write(
+        dir.path().join("ui/vendor/three.module.min.js"),
+        "function xGe(){};function Art(){}",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("real.rs"), "pub fn alpha() -> i32 { 1 }\n").unwrap();
+    run(&["add", "-A"]);
+    run(&["commit", "-qm", "base"]);
+
+    let working = to_turtle(dir.path(), "demo").unwrap();
+    let committed = to_turtle_at(dir.path(), "demo", "HEAD").unwrap();
+
+    for (name, ttl) in [("to_turtle", &working), ("to_turtle_at", &committed)] {
+        assert!(
+            ttl.contains("bobbin:name \"alpha\""),
+            "{name} dropped real source"
+        );
+        assert!(
+            !ttl.contains("three.module.min.js"),
+            "{name} emitted a vendored minified bundle:\n{ttl}"
+        );
+        assert!(
+            !ttl.contains("xGe"),
+            "{name} emitted a mangled name:\n{ttl}"
+        );
+    }
+}
