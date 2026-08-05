@@ -45,9 +45,27 @@ fn guarded_project(policy: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     (dir, spool)
 }
 
+/// The session id is unique PER CALL: the fail-open notice records "already
+/// warned" in a temp-dir file keyed by (session, kind) that outlives the
+/// process, so a shared id makes tests suppress each other's notices and turns
+/// which-test-fails into a race (aegis-w99qp).
 fn pre_edit_payload(dir: &std::path::Path, file: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    // The nanosecond stamp defeats PID recycling — the markers outlive the
+    // process and nothing prunes them. See `unique_session` in
+    // `src/hook/pre_edit_test.rs` for the measurement.
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let session = format!(
+        "audit-{}-{nanos}-{}-{file}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
     serde_json::json!({
-        "session_id": format!("audit-{}-{file}", std::process::id()),
+        "session_id": session,
         "cwd": dir.to_str().unwrap(),
         "hook_event_name": "PreToolUse",
         "tool_name": "Edit",

@@ -87,11 +87,32 @@ fn write_policy(dir: &Path, body: &str) {
 /// A session id unique to this call, so the once-per-session fail-open
 /// marker (a file in the temp dir, which outlives the test process) cannot
 /// leak state between tests or between `cargo test` runs.
+///
+/// The nanosecond stamp is load-bearing, not decoration. This was `{pid}-{counter}`,
+/// and the "or between `cargo test` runs" half of that promise was FALSE: PIDs
+/// recycle, the marker files do not, and 1,335 `hank-guard-failopen-test-*` markers
+/// had accumulated in `/tmp` on this host (oldest three days old, nothing prunes
+/// them). A run that drew a recycled PID found its marker already present, the
+/// notice was suppressed as "already warned", and
+/// `an_unreachable_quipu_projection_fails_open_loudly` — whose whole assertion is
+/// that the notice FIRES — failed. Measured 2026-08-04 (aegis-w99qp): it failed
+/// once and passed on the next invocation of the identical command.
+///
+/// That is the same defect class the hermetic-fixture work above cures — a
+/// verdict that depends on state outside the test — but reached via `/tmp`
+/// rather than via a socket, so NO amount of config pinning touches it. It is
+/// also outside the `.cargo/config.toml` `[env]` seal, which pins
+/// `HANK_METRICS_PATH` / `HANK_VERDICT_PATH` / `HANK_PROJECTION_CACHE_PATH`:
+/// this marker resolves through `std::env::temp_dir()`, which has no override.
 fn unique_session() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
     format!(
-        "test-{}-{}",
+        "test-{}-{nanos}-{}",
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::Relaxed)
     )

@@ -309,9 +309,33 @@ fn guarded_project(policy: &str) -> tempfile::TempDir {
 }
 
 /// A `PreToolUse` payload editing `file` in `dir`.
+///
+/// The session id is unique PER CALL, not per (process, file). The fail-open
+/// notice fires once per (session, kind) and records that in a file under
+/// `std::env::temp_dir()` which outlives the process, so tests sharing a session
+/// id couple through it: with a stale marker present the notice is suppressed,
+/// and only the first test to run sees it. That made WHICH test failed a race —
+/// the aegis-w99qp report saw 5 failures in one run and 2 in another from an
+/// unchanged tree, and one `leaf.rs` test always "passed" merely by losing it.
+/// `pre_edit_test.rs` already solved this with `unique_session`; this is that fix
+/// on the integration side.
 fn pre_edit_payload(dir: &std::path::Path, file: &str, old: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    // The nanosecond stamp defeats PID recycling: the marker files outlive the
+    // process and nothing prunes them, so pid+counter alone collides across runs.
+    // See `unique_session` in `src/hook/pre_edit_test.rs` for the measurement.
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let session = format!(
+        "it-{}-{nanos}-{}-{file}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
     serde_json::json!({
-        "session_id": format!("it-{}-{file}", std::process::id()),
+        "session_id": session,
         "cwd": dir.to_str().unwrap(),
         "hook_event_name": "PreToolUse",
         "tool_name": "Edit",
