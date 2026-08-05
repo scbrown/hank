@@ -269,9 +269,44 @@ unavailable.</p>
 <tr><td>Hank panics</td><td>exit <code>101</code> → non-blocking error → edit proceeds</td></tr>
 <tr><td>Deadline exceeded</td><td>exit <code>0</code>, silent → edit proceeds</td></tr>
 <tr><td>Daemon unreachable, unreadable config, unparseable payload</td><td>exit <code>0</code> + loud line → edit proceeds</td></tr>
+<tr><td>quipu unprojectable, cache servable</td><td>exit <code>0</code> → <strong>rules still evaluated</strong>, verdict marked STALE</td></tr>
+<tr><td>quipu unprojectable, no servable cache</td><td>exit <code>0</code> + loud line → edit proceeds</td></tr>
 <tr><td>Policy says deny</td><td>exit <code>0</code> + deny JSON → <strong>edit blocked</strong></td></tr>
 </tbody></table>
 </div>
+<h3 id="failing-open-is-a-last-resort-not-the-first-response-to-a-slow-quipu"><a class="header" href="#failing-open-is-a-last-resort-not-the-first-response-to-a-slow-quipu">Failing open is a LAST resort, not the first response to a slow quipu</a></h3>
+<p>Fail-open is non-negotiable, but it is not free, and for one failure it was
+being reached far too eagerly. The governed plane projects its rule catalogue
+from quipu over HTTP, and the hook is a short-lived process <strong>per edit</strong> — so
+before aegis-0upyu every edit by every agent issued a live <code>/query</code>, and any
+one that could not complete in the 2s budget dropped that edit straight to
+"allow".</p>
+<p>Measured 2026-08-04 on this fleet: <strong>5.2% of all pre-edit invocations, and 19%
+of one day's</strong>, failed open on projection timeouts alone. The failure
+self-interferes — quipu serves <code>/query</code> effectively one at a time, so heavy
+graph work is exactly what starves the guard that reads the graph, and the
+guard was least available precisely when it mattered most.</p>
+<p>The guard now keeps a <strong>durable projection cache</strong> (<code>projection.json</code>, beside
+<code>metrics.jsonl</code> under <code>$XDG_STATE_HOME/hank</code>, overridable with
+<code>$HANK_PROJECTION_CACHE_PATH</code>). Every successful projection writes it; a failed
+one serves it. The contract around it is what keeps a cache from becoming its
+own silent failure:</p>
+<ul>
+<li>a cache-served verdict is <strong>STALE, never fresh</strong>, and states the cache's AGE
+in seconds — "stale" alone cannot distinguish a slow quipu from a week-old
+catalogue, and those warrant opposite reactions;</li>
+<li>past <code>[hank.quipu] projection_cache_ttl_secs</code> (default 3600, <code>0</code> disables
+serving) the cache is <strong>refused</strong> and the guard fails open loudly. A retired
+rule that keeps firing from disk is worse than no rule, because it is
+unfalsifiable from the outside;</li>
+<li>a cache written against a <strong>different endpoint</strong> is refused outright, rather
+than enforcing another deployment's policy while claiming to enforce this
+one's;</li>
+<li><strong><code>served_from_cache</code> and <code>fail_open</code> are different record kinds</strong> and must
+stay that way. One is the guard enforcing last-known policy; the other is the
+guard not running. Collapsing them is what made a soak count unguarded edits
+as clean ones.</li>
+</ul>
 <h3 id="invoke-it-so-version-skew-cannot-block-the-fleet"><a class="header" href="#invoke-it-so-version-skew-cannot-block-the-fleet">Invoke it so version skew cannot block the fleet</a></h3>
 <p>Every row above fails open except one, and that one is not exotic: it is what
 you get by rolling the hook out ahead of the binary, which is the normal
