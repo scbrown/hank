@@ -368,6 +368,237 @@ fn a_contiguous_edge_section_chunks_at_statement_boundaries() {
     }
 }
 
+/// A projection in `to_turtle`'s exact shape: module blocks separated by blank
+/// lines, then the symbols run together in one contiguous block. That layout is
+/// the bug's precondition — the modules all land in chunk 1 and the symbols
+/// after them.
+fn modules_and_symbols(modules: usize, symbols_each: usize) -> String {
+    let mut t = String::from(
+        "@prefix bobbin: <http://aegis.gastown.local/ontology/> .\n\
+         @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+         @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .",
+    );
+    for m in 0..modules {
+        t.push_str(&format!(
+            "\n\n<http://aegis.gastown.local/ontology/code/r/src%2Fm{m}.rs> a bobbin:CodeModule ;\n    \
+             rdfs:label \"m{m}.rs\" ;\n    bobbin:filePath \"src/m{m}.rs\" ;\n    \
+             bobbin:repo \"r\" ;\n    bobbin:language \"rust\" ."
+        ));
+    }
+    t.push_str("\n\n");
+    for m in 0..modules {
+        for s in 0..symbols_each {
+            t.push_str(&format!(
+                "<http://aegis.gastown.local/ontology/code/r/src%2Fm{m}.rs::sym{s}> a bobbin:CodeSymbol ;\n    \
+                 rdfs:label \"sym{s}\" ;\n    bobbin:name \"sym{s}\" ;\n    \
+                 bobbin:symbolKind \"function\" ;\n    \
+                 bobbin:definedIn <http://aegis.gastown.local/ontology/code/r/src%2Fm{m}.rs> .\n"
+            ));
+        }
+    }
+    t
+}
+
+/// THE BUG (aegis-sd5fj), as an executable control and its fix in one test.
+///
+/// The control half matters more than the assertion half: chunking that is
+/// merely syntactically valid produces chunks quipu refuses, and without a
+/// control proving these chunks USED to fail SHACL, "they all conform" could
+/// just mean the fixture never exercised the constraint.
+#[test]
+fn every_chunk_validates_on_its_own_and_the_unfixed_split_would_not() {
+    let t = modules_and_symbols(6, 8);
+    // Control: split at the same boundaries WITHOUT carrying the definitions —
+    // what the chunker did before this fix. At least one chunk must be refused
+    // for `sh:class`, or the fixture is not reproducing the bug.
+    let header = t.split("\n\n").next().unwrap();
+    let mut naive = vec![String::from(header)];
+    for block in t.split("\n\n").skip(1) {
+        let last = naive.last_mut().unwrap();
+        if last.len() + 2 + block.len() > 2_000 {
+            naive.push(String::from(header));
+        }
+        let last = naive.last_mut().unwrap();
+        last.push_str("\n\n");
+        last.push_str(block);
+    }
+    let refused: Vec<String> = naive
+        .iter()
+        .flat_map(|c| validate(c, SHAPES).expect("validated").violations)
+        .collect();
+    assert!(
+        refused.iter().any(|v| v.contains("CodeModule")),
+        "CONTROL FAILED: the un-carried split must be refused for sh:class on \
+         definedIn, else this test proves nothing. got: {refused:?}"
+    );
+
+    // The fix: every chunk the assembler emits conforms BY ITSELF.
+    let chunks = chunk_turtle(&t, 2_000).expect("chunked");
+    assert!(chunks.len() > 1, "expected a real split");
+    for (i, c) in chunks.iter().enumerate() {
+        let v = validate(c, SHAPES).expect("validated");
+        assert!(
+            v.conforms,
+            "chunk {}/{} does not stand alone: {:?}",
+            i + 1,
+            chunks.len(),
+            v.violations
+        );
+        assert!(c.len() <= 2_000, "chunk over limit: {} bytes", c.len());
+    }
+}
+
+/// Acceptance is NOT "promotion succeeds" — a promotion that succeeds by
+/// dropping symbols is worse than one that fails loudly. So: every symbol
+/// statement of the projection must appear across the chunks, exactly once.
+/// Definitions may be REPEATED (that is the fix); facts may not be LOST.
+#[test]
+fn carrying_definitions_repeats_them_without_losing_a_single_fact() {
+    let t = modules_and_symbols(6, 8);
+    let chunks = chunk_turtle(&t, 2_000).expect("chunked");
+
+    let count = |hay: &str, needle: &str| hay.matches(needle).count();
+    let all: String = chunks.join("\n");
+    for m in 0..6 {
+        for s in 0..8 {
+            let iri = format!("code/r/src%2Fm{m}.rs::sym{s}> a bobbin:CodeSymbol");
+            assert_eq!(
+                count(&all, &iri),
+                1,
+                "symbol m{m}/sym{s} lost or duplicated across chunks"
+            );
+        }
+    }
+    // Control on the counter itself: a string that IS present, and one that is
+    // not, so an all-zero count cannot read as a pass.
+    assert_eq!(count(&t, "a bobbin:CodeSymbol"), 48);
+    assert_eq!(count(&all, "a bobbin:CodeModule ;"), {
+        // 6 originals + one repeat per chunk that references a module it does
+        // not already carry. Assert the repetition is real, not that it is a
+        // specific number: the boundaries move with the limit.
+        let n = count(&all, "a bobbin:CodeModule ;");
+        assert!(n > 6, "definitions were not repeated at all: {n}");
+        n
+    });
+}
+
+/// The at-scale soak: chunk a REAL retained payload and validate every chunk on
+/// its own. Ignored by default because it needs a payload on disk and takes
+/// minutes; this is the harness that answers "does it hold at 65 MB / 71 chunks",
+/// which a synthetic fixture cannot.
+///
+///     HANK_CHUNK_SOAK_PAYLOAD=/tmp/hank-promote-….ttl \
+///       cargo test --features quipu --lib -- --ignored --nocapture chunk_soak
+///
+/// `HANK_CHUNK_SOAK_DUMP=<dir>` also writes each chunk out. This verdict is
+/// rudof's, and rudof is not the engine that refused in production — dumping is
+/// what lets the same chunk be put to quipu's own SHACL, so "hank says it
+/// conforms" can be checked against the validator that actually gates the write.
+#[test]
+#[ignore = "needs HANK_CHUNK_SOAK_PAYLOAD; minutes, not milliseconds"]
+fn chunk_soak_every_chunk_of_a_real_payload_stands_alone() {
+    let Ok(path) = std::env::var("HANK_CHUNK_SOAK_PAYLOAD") else {
+        panic!("set HANK_CHUNK_SOAK_PAYLOAD to a retained .ttl payload");
+    };
+    let dump = std::env::var("HANK_CHUNK_SOAK_DUMP").ok();
+    let t = std::fs::read_to_string(&path).expect("read payload");
+    let chunks = chunk_turtle(&t, CHUNK_LIMIT).expect("chunked");
+    println!("payload {} bytes -> {} chunks", t.len(), chunks.len());
+    let mut bad = 0;
+    for (i, c) in chunks.iter().enumerate() {
+        if let Some(dir) = &dump {
+            std::fs::create_dir_all(dir).expect("dump dir");
+            std::fs::write(format!("{dir}/chunk-{:03}.ttl", i + 1), c).expect("dump chunk");
+        }
+        assert!(
+            c.len() <= CHUNK_LIMIT,
+            "chunk {}/{} over limit: {} bytes",
+            i + 1,
+            chunks.len(),
+            c.len()
+        );
+        let v = validate(c, SHAPES).expect("validated");
+        if !v.conforms {
+            bad += 1;
+            println!(
+                "chunk {}/{} REFUSED ({} violations): {:?}",
+                i + 1,
+                chunks.len(),
+                v.violations.len(),
+                v.violations.first()
+            );
+        }
+    }
+    // Every symbol must still be there exactly once — a chunking that conforms
+    // by shedding facts is the failure this whole bead warns about.
+    let emitted: usize = chunks
+        .iter()
+        .map(|c| c.matches("a bobbin:CodeSymbol").count())
+        .sum();
+    let original = t.matches("a bobbin:CodeSymbol").count();
+    println!("symbols: {original} in payload, {emitted} across chunks");
+    assert!(
+        original > 0,
+        "CONTROL FAILED: payload has no symbols at all"
+    );
+    assert_eq!(emitted, original, "symbols lost or duplicated");
+    assert_eq!(bad, 0, "{bad} chunk(s) do not stand alone");
+}
+
+/// The set in `CLASS_CONSTRAINED_PREDICATES` is a copy of a rule that lives in
+/// the shapes. Derive it from the compiled shapes and fail on drift — the day
+/// someone enables a `TIGHTEN LATER: sh:class`, this test tells them the chunker
+/// needs the predicate too, instead of a promotion telling them in production.
+#[test]
+fn class_constrained_predicates_match_the_shapes() {
+    // Strip comments first, so a `# TIGHTEN LATER: sh:class ...` line does not
+    // read as an active constraint.
+    let live: String = SHAPES
+        .lines()
+        .map(|l| match l.find('#') {
+            // `#` inside an IRI (<...#>) is not a comment; those only occur in
+            // @prefix lines here, which carry no property shapes.
+            Some(i) if !l[..i].contains('<') => &l[..i],
+            _ => l,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mut found: Vec<String> = Vec::new();
+    for unit in live.split('[').skip(1) {
+        let unit = unit.split(']').next().unwrap_or("");
+        if !unit.contains("sh:class") {
+            continue;
+        }
+        let Some(after) = unit.split("sh:path").nth(1) else {
+            continue;
+        };
+        if let Some(path) = after.split_whitespace().next() {
+            found.push(path.trim_end_matches(';').to_string());
+        }
+    }
+    found.sort();
+    found.dedup();
+
+    let mut declared: Vec<String> = CLASS_CONSTRAINED_PREDICATES
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
+    declared.sort();
+
+    assert!(
+        !found.is_empty(),
+        "CONTROL FAILED: found no active sh:class property shape in the compiled \
+         shapes — the deriver is broken, not the constant"
+    );
+    assert_eq!(
+        found, declared,
+        "shapes/code-edges.ttl and CLASS_CONSTRAINED_PREDICATES disagree. A \
+         predicate with sh:class needs its object's type carried in the same \
+         chunk (aegis-sd5fj); add it to the constant."
+    );
+}
+
 #[test]
 fn a_block_bigger_than_the_limit_errors_loudly() {
     let t = synthetic_turtle(2, 5_000);
