@@ -12,6 +12,38 @@
 set -euo pipefail
 WARN_LIMIT=400
 ERROR_LIMIT=500
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BASELINE="${FILE_SIZE_BASELINE:-$SELF_DIR/file-size-baseline.txt}"
+
+# THE RATCHET (aegis-1gy64). Five files were already over the hard limit, so this hook
+# failed on EVERY CI run — and a check that is always red is not a check. It made hank's
+# CI permanently red, which is why the mcp+quipu arms going red on cc2c213 was invisible:
+# the run went from one failure to three and nothing about the result changed. The lint
+# was correct and useless at the same time.
+#
+# So: files listed in the baseline are FROZEN AT THEIR SIZE, not exempted. A listed file
+# may shrink, never grow. A file not listed may not exceed the limit at all. Existing debt
+# can only go down; new debt cannot be added. That makes the signal TRUE today, which is
+# the prerequisite for anyone ever gating on it.
+baseline_lines() { # $1=path -> frozen size, or empty
+  [ -r "$BASELINE" ] || return 0
+  awk -F'\t' -v f="$1" '$1==f {print $2; exit}' "$BASELINE"
+}
+
+if [ "${1:-}" = "--update-baseline" ]; then
+    # Rewrite the baseline from the current tree. Keeps the header comment.
+    tmp="$BASELINE.$$"
+    awk '/^#/ {print; next} {exit}' "$BASELINE" > "$tmp" 2>/dev/null || true
+    git ls-files '*.rs' | while read -r f; do
+        case "$f" in *tests.rs|*_test.rs|tests/*) continue;; esac
+        [ -f "$f" ] || continue
+        n=$(wc -l < "$f")
+        [ "$n" -gt "$ERROR_LIMIT" ] && printf '%s\t%s\n' "$f" "$n"
+    done | sort >> "$tmp"
+    mv -f "$tmp" "$BASELINE"
+    echo "check-file-size: baseline rewritten from the working tree -> $BASELINE"
+    exit 0
+fi
 
 if [ "$#" -gt 0 ]; then
     files=("$@")
@@ -30,7 +62,16 @@ for file in "${files[@]:-}"; do
     if [[ "$file" =~ tests\.rs$ ]] || [[ "$file" =~ _test\.rs$ ]] || [[ "$file" == tests/* ]]; then continue; fi
     checked=$((checked + 1))
     lines=$(wc -l < "$file")
-    if [ "$lines" -gt "$ERROR_LIMIT" ]; then echo "ERROR: $file has $lines lines (limit: $ERROR_LIMIT)"; errors=$((errors + 1))
+    frozen="$(baseline_lines "$file")"
+    if [ -n "$frozen" ]; then
+        # Grandfathered. The only failure is GROWTH past the frozen size.
+        if [ "$lines" -gt "$frozen" ]; then
+            echo "ERROR: $file has $lines lines, above its frozen baseline of $frozen — grandfathered files may shrink, never grow"
+            errors=$((errors + 1))
+        elif [ "$lines" -le "$ERROR_LIMIT" ]; then
+            echo "NOTICE: $file is now $lines lines, under the $ERROR_LIMIT limit — drop it from $(basename "$BASELINE") (scripts/check-file-size.sh --update-baseline)"
+        fi
+    elif [ "$lines" -gt "$ERROR_LIMIT" ]; then echo "ERROR: $file has $lines lines (limit: $ERROR_LIMIT)"; errors=$((errors + 1))
     elif [ "$lines" -gt "$WARN_LIMIT" ]; then echo "WARNING: $file has $lines lines (warn: $WARN_LIMIT)"; warnings=$((warnings + 1)); fi
 done
 # Report the SUBJECT COUNT, always (hank #84). A green check is two claims — "I

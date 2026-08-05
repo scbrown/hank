@@ -1,0 +1,15 @@
+# Files already over the hard limit when the ratchet was introduced (aegis-1gy64).
+# FORMAT: <path><TAB><lines at freeze>
+#
+# These are FROZEN, not forgiven: a listed file may shrink but must never grow past
+# the number here, and a file NOT listed must never exceed the limit at all. So the
+# debt can only go down, and no new debt can be added.
+#
+# Regenerate with: scripts/check-file-size.sh --update-baseline
+# Removing a line once its file is under the limit is the point; do not add lines by
+# hand to silence a new violation — that is what the limit is for.
+src/cli.rs	510
+src/cli_status.rs	619
+src/export.rs	605
+src/hook/rule_planes.rs	567
+src/promote.rs	709
