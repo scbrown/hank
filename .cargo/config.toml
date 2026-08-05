@@ -1,0 +1,35 @@
+# Cargo-invoked processes must never write hank's REAL state (aegis-0upyu).
+#
+# hank's spools resolve to `$XDG_STATE_HOME/hank/...`, else `~/.local/state/hank/...`,
+# unless an explicit env var overrides them. On a crew machine that default is the
+# LIVE fleet spool — the same file the aegis-mqnl advise-soak is measured from and
+# the same one the guard's durable projection cache lives in. So every `cargo test`
+# run appended test traffic to production measurement data.
+#
+# That is not hypothetical and it is not small. MEASURED 2026-08-04 while fixing
+# aegis-0upyu: one session's repeated `cargo test` runs injected **1,591 `guard`
+# records and 281 `fail_open` records** into the host spool in ~45 minutes —
+# against 1,159 `guard` evaluations measured for the WHOLE of that day. A single
+# afternoon of ordinary test-driven development silently became the majority of
+# the day's "evidence".
+#
+# The damage is specifically to a GATE: aegis-mqnl flips rule #1 from advise to
+# block on "a measured false-positive rate of zero", and aegis-0upyu additionally
+# requires the fail-open rate beside it. Both are computed from this spool. Test
+# records carry the same `agent`/`tenant` envs as real ones (they come from the
+# process environment, not from the guard), so they are INDISTINGUISHABLE after
+# the fact except by burst-density heuristics. A soak cannot be adjudicated
+# against a denominator anyone can inflate by running the test suite.
+#
+# Why config and not code: this crate denies `unsafe_code`, and `std::env::set_var`
+# now requires it, so a test cannot scope these variables for itself. Cargo's
+# `[env]` applies to every process cargo launches, which is exactly the boundary
+# that needs sealing — and it seals future tests nobody has written yet, rather
+# than asking each author to remember.
+#
+# `relative = true` resolves against this file's parent, so the paths land under
+# the build directory and are cleaned by `cargo clean` like any other build output.
+[env]
+HANK_METRICS_PATH = { value = "target/test-state/metrics.jsonl", relative = true }
+HANK_VERDICT_PATH = { value = "target/test-state/verdicts.jsonl", relative = true }
+HANK_PROJECTION_CACHE_PATH = { value = "target/test-state/projection.json", relative = true }

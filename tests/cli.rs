@@ -25,6 +25,30 @@ fn pinned_config(dir: &tempfile::TempDir) -> std::path::PathBuf {
     path
 }
 
+/// Seal a fixture's `[hank]` body against the host's live graph the same way
+/// [`pinned_config`] seals `status` — appending the OFF stanza unless the body
+/// declares its own `[hank.quipu]`, so tests that genuinely exercise projection
+/// (which pin their own endpoint, usually `127.0.0.1:*`) are untouched.
+///
+/// `pinned_config` existed and was applied only where it was remembered. Every
+/// fixture that wrote a config WITHOUT it still inherited the developer's
+/// `~/.config/bobbin/config.toml` and made real network calls, so five guard
+/// tests here asserted on whether a shared service happened to answer within
+/// 2s. Measured 2026-08-04: they fail together whenever it does not, each
+/// reporting the guard "failed open" in place of the deny/allow under test.
+///
+/// This is the same seal `hook::pre_edit::pre_edit_test::write_policy` applies
+/// to the unit fixtures. Routing every writer through one helper is the point —
+/// the previous arrangement depended on each author remembering, and the
+/// failure it produces is a timeout in an unrelated assertion.
+fn hermetic(body: &str) -> String {
+    if body.contains("[hank.quipu]") {
+        body.to_string()
+    } else {
+        format!("{body}\n\n[hank.quipu]\nenabled = false\n")
+    }
+}
+
 #[test]
 fn status_json_reports_base_ref() {
     let dir = tempfile::tempdir().unwrap();
@@ -280,7 +304,7 @@ fn guarded_project(policy: &str) -> tempfile::TempDir {
     }
     let bobbin = dir.path().join(".bobbin");
     std::fs::create_dir_all(&bobbin).unwrap();
-    std::fs::write(bobbin.join("config.toml"), policy).unwrap();
+    std::fs::write(bobbin.join("config.toml"), hermetic(policy)).unwrap();
     dir
 }
 
@@ -519,7 +543,7 @@ fn config_flag_makes_status_read_the_named_file() {
     std::fs::create_dir_all(&bobbin).unwrap();
     std::fs::write(
         bobbin.join("config.toml"),
-        "[hank]\nbase_ref = \"from-cwd\"\n",
+        hermetic("[hank]\nbase_ref = \"from-cwd\"\n"),
     )
     .unwrap();
     // ...the override file says another.
@@ -649,7 +673,7 @@ fn status_warns_on_enforce_without_a_scope_for_the_tenant() {
 fn with_config(dir: &std::path::Path, body: &str) {
     let bobbin = dir.join(".bobbin");
     std::fs::create_dir_all(&bobbin).unwrap();
-    std::fs::write(bobbin.join("config.toml"), body).unwrap();
+    std::fs::write(bobbin.join("config.toml"), hermetic(body)).unwrap();
 }
 
 #[cfg(feature = "langs-extra")] // needs the python grammar compiled in
