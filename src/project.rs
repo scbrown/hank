@@ -27,7 +27,13 @@ pub use crate::project_queries::{EXPOSURE_POLICY_IRI, POLICY_QUERY, TEXT_POLICY_
 /// A policy projected from quipu: the [`Rule`] Hank evaluates, plus the governed
 /// `effect` that decides what a violation does (independent of the local
 /// `[hank.policy] mode`, so a quipu `deny` denies and a `warn` advises).
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Serializable so the projection can be PERSISTED between hook invocations
+/// ([`crate::projection_cache`]). Every field round-trips: a cache that dropped
+/// `effect`, the declared class or the hosting claim would serve a policy that
+/// blocks differently from the one quipu declared, which is a worse failure
+/// than not caching at all.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ProjectedPolicy {
     /// The structural rule, decoded into the same shape local config uses.
     pub rule: Rule,
@@ -265,6 +271,30 @@ pub struct ProjectionRegistry {
     freshness: Freshness,
 }
 
+/// Where the policies a verdict was computed against actually came from.
+///
+/// A separate type from [`Freshness`] and not folded into it: freshness says
+/// how CURRENT the set is, this says WHICH PATH produced it. The record needs
+/// both, and `served_from_cache` must never be reported as `fail_open` — that
+/// collapse is the ambiguity aegis-tv9ri removed from the sibling hook, and
+/// re-creating it would make the aegis-mqnl advise-soak unadjudicable a second
+/// time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectionSource {
+    /// Projected live from quipu on this invocation.
+    Live,
+    /// quipu could not be projected; the persisted last-known policy set was
+    /// served instead. The guard ENFORCED — staleness is not absence.
+    Cache {
+        /// How old the served projection is, in seconds. Carried into the
+        /// record: a guard silently enforcing week-old rules is the next
+        /// version of the bug the cache fixes.
+        age_secs: u64,
+        /// The live-projection error that caused the fallback.
+        error: String,
+    },
+}
+
 impl ProjectionRegistry {
     /// A registry pointed at `endpoint`, not yet synced — so it starts
     /// [`Freshness::Stale`] with no policies, never a fresh-looking empty set.
@@ -328,6 +358,80 @@ impl ProjectionRegistry {
                 self.freshness = Freshness::Stale;
                 Err(e)
             }
+        }
+    }
+
+    /// Refresh from quipu, falling back to the DURABLE cache when the live
+    /// projection fails — the aegis-0upyu fix.
+    ///
+    /// This is the method the hook path must call. [`Self::refresh`] alone
+    /// cannot survive the failure it is most likely to hit, because the hook is
+    /// a short-lived process per edit: its in-memory "keeps the last-known
+    /// policies" branch retains a set this process never had. Measured
+    /// consequence before this existed: 5.2% of all pre-edit invocations, and
+    /// 19% of one day's, degraded from *enforcing* to *allowing*.
+    ///
+    /// Three outcomes, and the caller must be able to tell them apart:
+    ///
+    /// - `Ok(`[`ProjectionSource::Live`]`)` — projected from quipu, cache
+    ///   rewritten, [`Freshness::Fresh`].
+    /// - `Ok(`[`ProjectionSource::Cache`]`)` — quipu failed, last-known policy
+    ///   served, [`Freshness::Stale`], with the AGE carried so the record can
+    ///   state it. The guard still enforces.
+    /// - `Err(reason)` — quipu failed AND no cache may be served. The reason
+    ///   names BOTH halves, because "the guard failed open" and "the guard
+    ///   failed open because the cache was 4h old against a 1h TTL" send an
+    ///   operator to different places.
+    ///
+    /// The cache WRITE rides behind the successful refresh and is fail-silent
+    /// ([`crate::projection_cache::save`]): bookkeeping about enforcement must
+    /// never be able to change an enforcement outcome.
+    pub fn refresh_or_cached(
+        &mut self,
+        cache_path: Option<&std::path::Path>,
+        ttl_secs: u64,
+        now: u64,
+    ) -> std::result::Result<ProjectionSource, String> {
+        let live_error = match self.refresh() {
+            Ok(()) => {
+                if let Some(path) = cache_path {
+                    crate::projection_cache::save(
+                        path,
+                        &crate::projection_cache::CachedProjection {
+                            version: crate::projection_cache::CACHE_VERSION,
+                            written_at: now,
+                            endpoint: self.endpoint.clone(),
+                            policies: self.policies.clone(),
+                            text_rules: self.text_rules.clone(),
+                        },
+                    );
+                }
+                return Ok(ProjectionSource::Live);
+            }
+            Err(e) => e.to_string(),
+        };
+
+        let Some(path) = cache_path else {
+            return Err(format!(
+                "{live_error}; and no cache path could be resolved (no \
+                 $HANK_PROJECTION_CACHE_PATH, $XDG_STATE_HOME or $HOME)"
+            ));
+        };
+        match crate::projection_cache::load_servable(path, &self.endpoint, ttl_secs, now) {
+            Ok(cached) => {
+                let age_secs = cached.age_secs(now);
+                self.policies = cached.policies;
+                self.text_rules = cached.text_rules;
+                // STALE, never Fresh. The policies are real and worth
+                // enforcing; the claim that they are current is not ours to
+                // make, and every verdict computed against them says so.
+                self.freshness = Freshness::Stale;
+                Ok(ProjectionSource::Cache {
+                    age_secs,
+                    error: live_error,
+                })
+            }
+            Err(miss) => Err(format!("{live_error}; and {miss}")),
         }
     }
 

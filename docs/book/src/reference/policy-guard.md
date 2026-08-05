@@ -112,7 +112,45 @@ unavailable.
 | Hank panics | exit `101` → non-blocking error → edit proceeds |
 | Deadline exceeded | exit `0`, silent → edit proceeds |
 | Daemon unreachable, unreadable config, unparseable payload | exit `0` + loud line → edit proceeds |
+| quipu unprojectable, cache servable | exit `0` → **rules still evaluated**, verdict marked STALE |
+| quipu unprojectable, no servable cache | exit `0` + loud line → edit proceeds |
 | Policy says deny | exit `0` + deny JSON → **edit blocked** |
+
+### Failing open is a LAST resort, not the first response to a slow quipu
+
+Fail-open is non-negotiable, but it is not free, and for one failure it was
+being reached far too eagerly. The governed plane projects its rule catalogue
+from quipu over HTTP, and the hook is a short-lived process **per edit** — so
+before aegis-0upyu every edit by every agent issued a live `/query`, and any
+one that could not complete in the 2s budget dropped that edit straight to
+"allow".
+
+Measured 2026-08-04 on this fleet: **5.2% of all pre-edit invocations, and 19%
+of one day's**, failed open on projection timeouts alone. The failure
+self-interferes — quipu serves `/query` effectively one at a time, so heavy
+graph work is exactly what starves the guard that reads the graph, and the
+guard was least available precisely when it mattered most.
+
+The guard now keeps a **durable projection cache** (`projection.json`, beside
+`metrics.jsonl` under `$XDG_STATE_HOME/hank`, overridable with
+`$HANK_PROJECTION_CACHE_PATH`). Every successful projection writes it; a failed
+one serves it. The contract around it is what keeps a cache from becoming its
+own silent failure:
+
+- a cache-served verdict is **STALE, never fresh**, and states the cache's AGE
+  in seconds — "stale" alone cannot distinguish a slow quipu from a week-old
+  catalogue, and those warrant opposite reactions;
+- past `[hank.quipu] projection_cache_ttl_secs` (default 3600, `0` disables
+  serving) the cache is **refused** and the guard fails open loudly. A retired
+  rule that keeps firing from disk is worse than no rule, because it is
+  unfalsifiable from the outside;
+- a cache written against a **different endpoint** is refused outright, rather
+  than enforcing another deployment's policy while claiming to enforce this
+  one's;
+- **`served_from_cache` and `fail_open` are different record kinds** and must
+  stay that way. One is the guard enforcing last-known policy; the other is the
+  guard not running. Collapsing them is what made a soak count unguarded edits
+  as clean ones.
 
 ### Invoke it so version skew cannot block the fleet
 

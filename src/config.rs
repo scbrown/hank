@@ -161,6 +161,24 @@ pub struct QuipuConfig {
     /// one, because a key materialising as a side effect of an agent's edit is
     /// not something that should happen quietly. `hank verifier` creates it.
     pub signing_key_path: String,
+    /// How old the persisted projection (`crate::projection_cache`) may be and
+    /// still be SERVED when quipu cannot be projected live. Past it the guard
+    /// fails open loudly instead of enforcing a catalogue nobody has confirmed
+    /// since.
+    ///
+    /// One hour by default, and the number is chosen against the measured
+    /// failure rather than picked round. The projection failures this cache
+    /// exists for are `/query` TIMEOUTS UNDER CONCURRENCY, not outages: even on
+    /// the worst measured day 81% of invocations succeeded, so in practice the
+    /// cache a failing edit falls back on is seconds old. An hour is slack for
+    /// a genuinely bad patch, not a licence to enforce yesterday's policy — the
+    /// failure it bounds is a RETIRED rule that keeps firing from cache, which
+    /// is worse than no rule because it is unfalsifiable from the outside.
+    ///
+    /// `0` disables cache serving: every projection failure fails open, which
+    /// is the pre-aegis-0upyu behaviour and is offered as an escape hatch, not
+    /// as a recommendation.
+    pub projection_cache_ttl_secs: u64,
 }
 
 impl Default for QuipuConfig {
@@ -172,6 +190,7 @@ impl Default for QuipuConfig {
             shapes_path: "shapes/".to_string(),
             endpoint: String::new(),
             signing_key_path: "hank-signing.pk8".to_string(),
+            projection_cache_ttl_secs: 3600,
         }
     }
 }

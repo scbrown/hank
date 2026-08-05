@@ -545,3 +545,232 @@ fn an_overclaiming_policy_still_projects_and_still_blocks() {
         "and the claim is still reported"
     );
 }
+
+// ---------------------------------------------------------------------------
+// refresh_or_cached — the aegis-0upyu seam.
+//
+// Both outcomes, because the bug being fixed was a SILENT degradation: the guard
+// stopped enforcing and nothing said so. A test that only proves the cache is
+// served would leave the other half — the loud refusal past TTL — unmeasured,
+// and that half is what stops a retired rule firing forever from disk.
+//
+// `127.0.0.1:1` is the unreachable endpoint throughout: a port nothing binds, so
+// the connection is refused immediately and deterministically. Deliberately
+// explicit rather than inherited from the environment — a fixture that picks up
+// the host's live quipu is the aegis-enbzz flake.
+// ---------------------------------------------------------------------------
+
+const UNREACHABLE: &str = "http://127.0.0.1:1";
+
+/// A stub quipu serving `serve` requests, answering the text-rule query and the
+/// structural-policy query from the same canned catalogue. Returns its base URL.
+fn stub_quipu(serve: usize) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for _ in 0..serve {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            // Read headers, then exactly Content-Length body bytes: ureq may
+            // split them across writes, and replying early would race.
+            let mut raw = Vec::new();
+            let mut chunk = [0u8; 4096];
+            while let Ok(n) = stream.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                raw.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&raw).to_string();
+                if let Some(head_end) = text.find("\r\n\r\n") {
+                    let len: usize = text
+                        .to_ascii_lowercase()
+                        .split("content-length:")
+                        .nth(1)
+                        .and_then(|t| t.split("\r\n").next())
+                        .and_then(|t| t.trim().parse().ok())
+                        .unwrap_or(0);
+                    if raw.len() >= head_end + 4 + len {
+                        break;
+                    }
+                }
+            }
+            let request = String::from_utf8_lossy(&raw).to_string();
+            // The two queries are told apart by the class they target — the
+            // same distinction quipu itself makes.
+            let body = if request.contains("aegis:TextRule") {
+                empty_results_json()
+            } else {
+                catalog_json()
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/sparql-results+json\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    format!("http://{addr}")
+}
+
+/// A well-formed SPARQL result with no bindings — a real, empty catalogue.
+fn empty_results_json() -> String {
+    serde_json::json!({
+        "head": { "vars": ["s", "regex", "tier"] },
+        "results": { "bindings": [] }
+    })
+    .to_string()
+}
+
+/// A cache file holding `policies`, stamped `written_at` and bound to `endpoint`.
+fn seed_cache(path: &std::path::Path, endpoint: &str, written_at: u64) {
+    crate::projection_cache::save(
+        path,
+        &crate::projection_cache::CachedProjection {
+            version: crate::projection_cache::CACHE_VERSION,
+            written_at,
+            endpoint: endpoint.to_string(),
+            policies: decode_policies(&catalog_json()).unwrap(),
+            text_rules: Vec::new(),
+        },
+    );
+}
+
+/// THE FIX. quipu cannot be projected, but the last-known catalogue is on disk
+/// and recent — so the guard ENFORCES rather than failing open, and says the
+/// verdict is stale. Before this, the same conditions produced zero policies and
+/// an allow.
+#[test]
+fn a_failed_projection_serves_the_cache_and_declares_it_stale() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("projection.json");
+    seed_cache(&cache, UNREACHABLE, 1_000);
+
+    let mut registry = ProjectionRegistry::new(UNREACHABLE);
+    let source = registry
+        .refresh_or_cached(Some(&cache), 3600, 1_030)
+        .expect("a recent cache is servable when quipu is not");
+
+    match source {
+        ProjectionSource::Cache { age_secs, error } => {
+            assert_eq!(age_secs, 30, "the age is carried, not merely implied");
+            assert!(
+                !error.is_empty(),
+                "the live failure is carried too — the record must name why"
+            );
+        }
+        ProjectionSource::Live => panic!("nothing was live; 127.0.0.1:1 is refused"),
+    }
+    assert_eq!(
+        registry.policies().len(),
+        2,
+        "the policies are REALLY loaded — this is the difference between \
+         enforcing and not"
+    );
+    assert_eq!(
+        registry.freshness(),
+        Freshness::Stale,
+        "served from cache is STALE, never Fresh"
+    );
+}
+
+/// The other half, and the one that keeps this cache honest: past the TTL the
+/// guard refuses to enforce a catalogue nobody has confirmed since, and the
+/// error names BOTH the live failure and the cache's age. A retired rule that
+/// keeps firing from disk is worse than no rule — it is unfalsifiable from the
+/// outside.
+#[test]
+fn a_cache_past_the_ttl_fails_open_and_the_reason_names_both_halves() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("projection.json");
+    seed_cache(&cache, UNREACHABLE, 1_000);
+
+    let mut registry = ProjectionRegistry::new(UNREACHABLE);
+    let err = registry
+        .refresh_or_cached(Some(&cache), 60, 5_000)
+        .expect_err("a cache 4000s old must not be served under a 60s TTL");
+
+    assert!(
+        err.contains("127.0.0.1:1"),
+        "the live failure is named: {err}"
+    );
+    assert!(
+        err.contains("3999") || err.contains("4000"),
+        "the cache's age is named: {err}"
+    );
+    assert!(err.contains("60"), "and the TTL it exceeded: {err}");
+    assert!(
+        registry.policies().is_empty(),
+        "an expired cache is not quietly enforced anyway"
+    );
+}
+
+/// No cache at all — the ordinary state before the first successful refresh, and
+/// the one case that must still fail open. It reports as a MISS, not as a
+/// success with an empty catalogue: a fresh-looking empty policy set is the
+/// silent-no-enforcement failure one layer down.
+#[test]
+fn no_cache_and_no_quipu_fails_open_rather_than_serving_an_empty_catalogue() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("never-written.json");
+
+    let mut registry = ProjectionRegistry::new(UNREACHABLE);
+    let err = registry
+        .refresh_or_cached(Some(&cache), 3600, 1_000)
+        .expect_err("nothing to serve");
+    assert!(
+        err.contains("no cached projection has been written yet"),
+        "the miss is named, so the record can say which one: {err}"
+    );
+}
+
+/// A successful projection WRITES the cache — the step that makes every
+/// fallback above possible. Without it the registry is what it was before this
+/// change: a cache that caches nothing, because the hook is a short-lived
+/// process per edit.
+#[test]
+fn a_successful_refresh_persists_the_projection_for_the_next_process() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("projection.json");
+    // Two requests per refresh: the structural catalogue and the text rules.
+    let endpoint = stub_quipu(2);
+
+    let mut registry = ProjectionRegistry::new(&endpoint);
+    assert_eq!(
+        registry
+            .refresh_or_cached(Some(&cache), 3600, 9_000)
+            .unwrap(),
+        ProjectionSource::Live
+    );
+    assert_eq!(registry.freshness(), Freshness::Fresh);
+
+    // The NEXT process — a separate registry, as the hook really is — finds it.
+    let served = crate::projection_cache::load_servable(&cache, &endpoint, 3600, 9_010).unwrap();
+    assert_eq!(served.written_at, 9_000);
+    assert_eq!(
+        served.policies.len(),
+        2,
+        "both projected policies survived the round trip to disk"
+    );
+    assert_eq!(served.policies[0].rule.name, "todo-needs-ticket");
+}
+
+/// The cache is bound to the quipu it came from. Serving another deployment's
+/// catalogue would enforce policy this endpoint never declared, while the
+/// verdict claimed to be enforcing this one's.
+#[test]
+fn a_cache_written_against_another_quipu_is_not_served_here() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("projection.json");
+    seed_cache(&cache, "http://someone-elses-quipu.invalid", 1_000);
+
+    let mut registry = ProjectionRegistry::new(UNREACHABLE);
+    let err = registry
+        .refresh_or_cached(Some(&cache), 3600, 1_010)
+        .expect_err("another deployment's policy is not ours to enforce");
+    assert!(err.contains("different quipu"), "{err}");
+    assert!(registry.policies().is_empty());
+}

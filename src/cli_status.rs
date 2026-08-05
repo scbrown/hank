@@ -42,11 +42,18 @@ impl Cli {
                     "error": rule_set.error,
                     // The field `st doctor` gates on. `degraded` is the state in
                     // which the guard FAILS OPEN, and it is deliberately not the
-                    // same value as `empty` (aegis-hac0).
+                    // same value as `empty` (aegis-hac0) nor as `stale`
+                    // (aegis-0upyu: rules in force from the durable cache).
                     "state": rule_set.state().as_str(),
                     // WHICH rule set, not just how many.
                     "digest": rule_set.digest,
                     "attempts": rule_set.attempts,
+                    // Age of the cache these rules came from, when live
+                    // projection failed and the cache answered. Null when live.
+                    // A consumer that treats `stale` as fine without reading
+                    // this cannot tell a 30-second lag from a week-old
+                    // catalogue, and those warrant opposite reactions.
+                    "cache_age_secs": rule_set.cache_age_secs,
                     // No signed cache => nothing is verified. Said out loud
                     // rather than omitted, so the field a signed cache will fill
                     // exists and reads honestly today.
@@ -192,6 +199,13 @@ pub(super) struct RuleSetStatus {
     pub digest: Option<String>,
     /// How many projection attempts it took (see [`PROJECTION_ATTEMPTS`]).
     pub attempts: usize,
+    /// Age in seconds of the DURABLE cache these rules were served from, when
+    /// the live projection failed and the cache answered instead (aegis-0upyu).
+    ///
+    /// `None` means the rules are live (or that there are none). Its presence is
+    /// what separates [`RuleSetState::Stale`] from [`RuleSetState::Degraded`]:
+    /// rules in force but unconfirmed, versus no rules at all.
+    pub cache_age_secs: Option<u64>,
 }
 
 /// What state the rule plane is in — the field an operator and `st doctor` gate
@@ -210,8 +224,18 @@ pub(super) enum RuleSetState {
     Loaded,
     /// The graph answered, and answered with nothing. Armed and empty.
     Empty,
-    /// The graph could not be reached or its answer did not decode. The guard
-    /// FAILS OPEN in this state, so it is a failure surface, not a note.
+    /// The graph could not be reached, but the DURABLE projection cache
+    /// answered — so rules ARE in force, computed against a catalogue nobody
+    /// has confirmed since (aegis-0upyu).
+    ///
+    /// Distinct from [`RuleSetState::Degraded`] for exactly the reason `Empty`
+    /// is distinct from it: "enforcing an unconfirmed rule set" and "enforcing
+    /// nothing" are opposite operational facts that a single red state would
+    /// merge. This one does NOT exit non-zero — the guard is working.
+    Stale,
+    /// The graph could not be reached (or its answer did not decode) AND no
+    /// cache could be served. The guard FAILS OPEN in this state, so it is a
+    /// failure surface, not a note.
     Degraded,
 }
 
@@ -221,6 +245,7 @@ impl RuleSetState {
             RuleSetState::Off => "off",
             RuleSetState::Loaded => "loaded",
             RuleSetState::Empty => "empty",
+            RuleSetState::Stale => "stale",
             RuleSetState::Degraded => "degraded",
         }
     }
@@ -230,6 +255,13 @@ impl RuleSetStatus {
     pub(super) fn state(&self) -> RuleSetState {
         if !self.graph_enabled {
             return RuleSetState::Off;
+        }
+        // A live failure that the cache answered is STALE, not degraded. Before
+        // the durable cache existed these were the same event; conflating them
+        // now would make `status` assert the guard fails open on every edit at
+        // exactly the moments it does not.
+        if self.error.is_some() && self.cache_age_secs.is_some() {
+            return RuleSetState::Stale;
         }
         match (self.projected, &self.error) {
             (_, Some(_)) => RuleSetState::Degraded,
@@ -256,6 +288,7 @@ pub(super) fn measure_rule_set(config: &HankConfig) -> RuleSetStatus {
         graph_enabled: false,
         digest: None,
         attempts: 0,
+        cache_age_secs: None,
     };
 
     #[cfg(feature = "quipu")]
@@ -283,6 +316,28 @@ pub(super) fn measure_rule_set(config: &HankConfig) -> RuleSetStatus {
                     if attempt < PROJECTION_ATTEMPTS {
                         std::thread::sleep(PROJECTION_BACKOFF);
                     }
+                }
+            }
+        }
+        // Every live attempt failed. Ask the SAME question the guard now asks
+        // (`ProjectionRegistry::refresh_or_cached`): is there a servable cache?
+        // If there is, the guard is still enforcing, and reporting `degraded`
+        // here would tell an operator the fleet is unguarded while it is not.
+        // The live error is KEPT, because "why could we not confirm this" is
+        // the actionable half — the cache is the mitigation, not the fix.
+        if st.error.is_some() {
+            if let Some(path) = crate::projection_cache::cache_path() {
+                let now = crate::projection_cache::now_secs();
+                if let Ok(cached) = crate::projection_cache::load_servable(
+                    &path,
+                    &config.quipu.endpoint,
+                    config.quipu.projection_cache_ttl_secs,
+                    now,
+                ) {
+                    st.cache_age_secs = Some(cached.age_secs(now));
+                    st.text = cached.text_rules.len();
+                    st.structural = cached.policies.len();
+                    st.projected = Some(st.text + st.structural);
                 }
             }
         }
@@ -376,6 +431,30 @@ fn print_rule_set_status(config: &HankConfig, st: &RuleSetStatus) {
         // The SAME path the guard takes (hook::rule_planes::governed_check), so
         // this can never report a rule set the guard would not use.
         match (st.projected, &st.error) {
+            // Live projection failed but the DURABLE cache answered: rules ARE
+            // in force. Reporting COULD NOT TELL here would be the false
+            // direction — it would tell an operator the fleet is unguarded at
+            // the moments it is guarded, which is the same class of error as
+            // the one the cache was built to fix (aegis-0upyu).
+            (_, Some(e)) if st.cache_age_secs.is_some() => {
+                let age = st.cache_age_secs.unwrap_or_default();
+                println!(
+                    "  rule set    : {} — {} projected from the LAST-KNOWN cache, \
+                     confirmed {age}s ago ({} structural, {} text) + {local} local",
+                    "STALE".yellow().bold(),
+                    st.projected.unwrap_or_default(),
+                    st.structural,
+                    st.text,
+                );
+                // The consequence, stated the same way the degraded branch
+                // states its own: what IS true, then what is unconfirmed.
+                println!(
+                    "  {} the guard is ENFORCING these rules, but could not confirm them \
+                     against {} ({e}) — a retired rule could still be firing",
+                    "⚠".yellow().bold(),
+                    config.quipu.endpoint,
+                );
+            }
             (_, Some(e)) => {
                 // Fail LOUD, same discipline as the guard's fail-open: a rule
                 // set we could not fetch is never reported as a rule set we do
@@ -434,4 +513,83 @@ fn print_rule_set_status(config: &HankConfig, st: &RuleSetStatus) {
         "  rule provenance: unsigned live projection — the signed resident cache \
          does not exist yet, so rules are trusted on transport alone"
     );
+}
+
+#[cfg(all(test, feature = "quipu"))]
+mod rule_set_state_test {
+    //! Test names shout the word the assertion turns on — the same convention,
+    //! and the same scoped allow, as `hook::pre_edit::pre_edit_test`. Here the
+    //! shouted words ARE the finding: STALE and DEGRADED are the two states
+    //! this module exists to keep apart.
+    #![allow(non_snake_case)]
+    use super::*;
+
+    fn status(projected: Option<usize>, error: Option<&str>, cache: Option<u64>) -> RuleSetStatus {
+        RuleSetStatus {
+            local: 0,
+            projected,
+            structural: 0,
+            text: 0,
+            error: error.map(str::to_string),
+            graph_enabled: true,
+            digest: None,
+            attempts: 1,
+            cache_age_secs: cache,
+        }
+    }
+
+    /// The distinction the durable cache exists to preserve (aegis-0upyu),
+    /// carried onto the surface `st doctor` gates on: a live-projection failure
+    /// that the cache ANSWERED is not the state in which the guard fails open.
+    /// Reporting it as `degraded` would tell an operator the fleet is unguarded
+    /// at precisely the moments it is guarded.
+    #[test]
+    fn a_failed_projection_with_a_servable_cache_is_STALE_not_DEGRADED() {
+        let st = status(Some(7), Some("timed out"), Some(30));
+        assert_eq!(st.state(), RuleSetState::Stale);
+        assert_ne!(
+            st.state(),
+            RuleSetState::Degraded,
+            "the guard is enforcing; only a non-enforcing plane is degraded"
+        );
+    }
+
+    /// ...and the same failure WITHOUT a cache stays degraded. This is the half
+    /// that must not be softened: no cache means no rules, which means the guard
+    /// really is failing open.
+    #[test]
+    fn a_failed_projection_with_no_cache_is_still_DEGRADED() {
+        assert_eq!(
+            status(None, Some("timed out"), None).state(),
+            RuleSetState::Degraded
+        );
+    }
+
+    /// Only `degraded` exits non-zero. `stale` must not, or every slow-quipu
+    /// minute would fail an `st doctor` gate on a fleet that is enforcing
+    /// correctly — and a gate that cries wolf gets switched off.
+    #[test]
+    fn only_DEGRADED_is_the_non_zero_exit_state() {
+        assert!(status(Some(7), Some("timed out"), Some(30)).state() != RuleSetState::Degraded);
+        assert!(status(None, Some("timed out"), None).state() == RuleSetState::Degraded);
+        assert!(status(Some(0), None, None).state() != RuleSetState::Degraded);
+        assert!(status(Some(3), None, None).state() != RuleSetState::Degraded);
+    }
+
+    /// The states stay distinguishable by NAME on the JSON surface — a consumer
+    /// that gates on the string must be able to tell all five apart.
+    #[test]
+    fn every_state_has_its_own_name() {
+        let names = [
+            RuleSetState::Off.as_str(),
+            RuleSetState::Loaded.as_str(),
+            RuleSetState::Empty.as_str(),
+            RuleSetState::Stale.as_str(),
+            RuleSetState::Degraded.as_str(),
+        ];
+        let mut sorted = names.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), names.len(), "two states share a name");
+    }
 }

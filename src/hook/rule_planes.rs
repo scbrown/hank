@@ -203,17 +203,64 @@ pub(super) fn governed_check(
     }
     let introduced = introduced_text(input)?;
 
+    // Project from quipu, falling back to the DURABLE last-known catalogue when
+    // the live query cannot complete (aegis-0upyu). Before the cache existed
+    // this was a bare `refresh()` whose only failure branch was `fail_open`, and
+    // it fired on 5.2% of all pre-edit invocations — 19% on one measured day —
+    // because quipu serves /query effectively one at a time while every agent
+    // issues one per edit. Loading the graph disabled the guard that reads the
+    // graph, so the guard was least available exactly when it was most needed.
+    //
+    // A cache hit still ENFORCES; it is only STALE, and every verdict below
+    // declares that plus the cache's age. Only a projection failure with no
+    // servable cache degrades to allow.
     let mut registry = crate::project::ProjectionRegistry::new(&config.quipu.endpoint);
-    if let Err(e) = registry.refresh() {
-        return Some(
-            fail_open(
-                input,
-                "projection",
-                &format!("could not project governed policy from quipu: {e}"),
-            )
-            .into(),
-        );
-    }
+    let cache_path = crate::projection_cache::cache_path();
+    let now = crate::projection_cache::now_secs();
+    let source = match registry.refresh_or_cached(
+        cache_path.as_deref(),
+        config.quipu.projection_cache_ttl_secs,
+        now,
+    ) {
+        Ok(source) => source,
+        Err(reason) => {
+            return Some(
+                fail_open(
+                    input,
+                    "projection",
+                    &format!("could not project governed policy from quipu: {reason}"),
+                )
+                .into(),
+            );
+        }
+    };
+    // `served_from_cache` is its OWN record kind and must never be folded into
+    // `fail_open`. They are different events: one is the guard enforcing
+    // last-known policy, the other is the guard not running. Collapsing them is
+    // the ambiguity aegis-tv9ri removed from the sibling hook, and it is what
+    // would let the aegis-mqnl advise-soak count unguarded edits as clean ones
+    // a second time.
+    let cache_age = match &source {
+        crate::project::ProjectionSource::Live => None,
+        crate::project::ProjectionSource::Cache { age_secs, error } => {
+            // stderr always, on the same reasoning as every other degradation
+            // here: the guard did its job, and the operator still needs to know
+            // it did so on a catalogue it could not confirm.
+            eprintln!(
+                "hank: governed policy served from CACHE ({age_secs}s old) — \
+                 live projection failed: {error}"
+            );
+            crate::metrics::emit(
+                "served_from_cache",
+                &[
+                    ("age_secs", (*age_secs).into()),
+                    ("ttl_secs", config.quipu.projection_cache_ttl_secs.into()),
+                    ("reason", error.clone().into()),
+                ],
+            );
+            Some(*age_secs)
+        }
+    };
 
     // A projected rule set that does not compile is a broken sync; fail open
     // loudly — both planes, same discipline.
@@ -358,10 +405,19 @@ pub(super) fn governed_check(
                     .unwrap_or_else(|| "unresolved".to_string())
                     .into(),
             ),
+            // WHICH catalogue said so. A soak that groups governed firings
+            // without this cannot tell a verdict from the current policy set
+            // from one computed against a cached catalogue, and those are not
+            // equally good evidence about the current policy.
+            (
+                "policy_source",
+                if cache_age.is_some() { "cache" } else { "live" }.into(),
+            ),
+            ("policy_age_secs", cache_age.unwrap_or(0).into()),
         ],
     );
     let blocks = config.policy.mode == Mode::Enforce && any_blocking;
-    let message = rule_verdict_message_from(&messages.join("\n"), registry.freshness());
+    let message = rule_verdict_message_from(&messages.join("\n"), registry.freshness(), cache_age);
     // The same rule names the `governed` line already reports, carried onto the
     // `guard` line too (hank #77). Without this a governed deny is the one deny
     // an operator has to JOIN two spool lines to attribute — and the join is by
@@ -476,17 +532,35 @@ pub(super) fn text_plane(
 }
 
 /// Attach the FR-3 freshness declaration to an already-joined verdict body.
+///
+/// `cache_age_secs` is `Some` when the policies came from the durable cache
+/// rather than a live projection, and the AGE is stated rather than merely
+/// implied by "STALE". A reader who is told a verdict is stale can only guess
+/// whether that means seconds or a week, and those are opposite decisions:
+/// seconds-old is a slow quipu and the verdict stands, week-old means a retired
+/// rule may still be firing. Naming the number is what makes this cache
+/// falsifiable from the outside (aegis-0upyu).
 #[cfg(feature = "quipu")]
-fn rule_verdict_message_from(body: &str, freshness: Freshness) -> String {
-    let note = match freshness {
-        Freshness::Fresh => "verdict freshness: fresh (governed policy projected from quipu)",
-        Freshness::Stale => {
-            "verdict freshness: STALE — the projected policy registry could not \
-             be refreshed from quipu, so this verdict may not reflect the latest governed policy"
+fn rule_verdict_message_from(
+    body: &str,
+    freshness: Freshness,
+    cache_age_secs: Option<u64>,
+) -> String {
+    let note = match (freshness, cache_age_secs) {
+        (_, Some(age)) => format!(
+            "verdict freshness: STALE — quipu could not be projected, so this \
+             verdict was computed against the last-known governed policy, \
+             cached {age}s ago. The rules were ENFORCED; what is unconfirmed is \
+             whether they are still the current ones"
+        ),
+        (Freshness::Fresh, None) => {
+            "verdict freshness: fresh (governed policy projected from quipu)".to_string()
         }
-        Freshness::Recomputing => {
-            "verdict freshness: recomputing — the policy registry is \
-             mid-refresh"
+        (Freshness::Stale, None) => "verdict freshness: STALE — the projected policy registry could \
+             not be refreshed from quipu, so this verdict may not reflect the latest governed policy"
+            .to_string(),
+        (Freshness::Recomputing, None) => {
+            "verdict freshness: recomputing — the policy registry is mid-refresh".to_string()
         }
     };
     format!("{body}\n({note})")

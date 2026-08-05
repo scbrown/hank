@@ -44,6 +44,10 @@ pub mod project;
 #[cfg(feature = "quipu")]
 pub mod project_decode;
 pub mod project_queries;
+/// The DURABLE half of the projection cache — what lets a projection failure
+/// degrade to stale-but-enforcing instead of to unguarded (aegis-0upyu).
+#[cfg(feature = "quipu")]
+pub mod projection_cache;
 /// Phase-4 Quipu promotion: SHACL-validate a Turtle projection, then write it.
 #[cfg(feature = "quipu")]
 pub mod promote;

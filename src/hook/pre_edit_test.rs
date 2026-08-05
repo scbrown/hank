@@ -11,7 +11,25 @@
 #![allow(non_snake_case)]
 use super::*;
 
-/// A repo where `leaf` is called from three other files.
+/// A repo where `leaf` is called from three other files — HERMETIC BY
+/// CONSTRUCTION (aegis-enbzz, completed by aegis-0upyu).
+///
+/// f1ca99a made [`write_policy`] hermetic, which covered every fixture that
+/// declares a policy. It could not cover the fixtures that declare NO config at
+/// all: those still fell through to the host-level `~/.config/bobbin/config.toml`,
+/// which on a crew machine carries `[hank.quipu] enabled = true` pointed at the
+/// LIVE endpoint. Two tests were still reaching quipu over the network —
+/// `allows_when_no_policy_is_configured` and `a_config_override_scopes_the_guard`
+/// — and both FAIL on an unmodified tree whenever quipu is slow, for a reason
+/// that has nothing to do with what they assert (measured 2026-08-04: the guard
+/// timed out at 2s, failed open, and returned `Notify` where the test expected
+/// `Allow`).
+///
+/// Writing the hermetic stanza HERE rather than in each fixture is the point: a
+/// rule that says "remember to disable quipu in your fixture" is one every new
+/// test can forget, and the failure it produces is a timeout in an unrelated
+/// assertion. Every fixture built on this repo is now sealed by construction,
+/// and `write_policy` overwrites the file when a test declares its own policy.
 fn wide_repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("leaf.rs"), "fn leaf() {}\n").unwrap();
@@ -22,6 +40,16 @@ fn wide_repo() -> tempfile::TempDir {
         )
         .unwrap();
     }
+    // No policy — the ambient config still allows everything, which is what the
+    // fixtures relying on an "absent" config actually depend on. The only thing
+    // pinned is that this repo never inherits the host's live quipu.
+    let bobbin = dir.path().join(".bobbin");
+    std::fs::create_dir_all(&bobbin).unwrap();
+    std::fs::write(
+        bobbin.join("config.toml"),
+        "[hank.quipu]\nenabled = false\n",
+    )
+    .unwrap();
     dir
 }
 
@@ -385,7 +413,7 @@ fn a_ceiling_that_denies_rust_denies_python_and_typescript_too() {
 /// (no policy), so a deny here can only come from the override being read.
 #[test]
 fn a_config_override_scopes_the_guard() {
-    let dir = wide_repo(); // no `.bobbin/config.toml` — ambient allows everything
+    let dir = wide_repo(); // ambient config declares no policy — allows everything
     let scope_file = dir.path().join("elsewhere").join("scope.toml");
     std::fs::create_dir_all(scope_file.parent().unwrap()).unwrap();
     std::fs::write(
