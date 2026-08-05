@@ -95,9 +95,20 @@ fn status_json_advertises_only_implemented_tiers() {
     // directions — advertising it without the engine repeats the empty-feature
     // lie, and omitting it WITH the engine sends a consumer looking for a tier
     // this binary really serves.
+    // Pin the graph plane OFF (aegis-0upyu). This test is about which TIERS the
+    // build advertises, which has nothing to do with the graph — but bare
+    // `status` layers the developer's `~/.config/bobbin/config.toml`, which on
+    // this fleet points at a live endpoint, and `status` EXITS 3 when it cannot
+    // project (aegis-hac0). So `.success()` here was really asserting that a
+    // shared service answered three times within ~2s each, and the test failed
+    // with `code=3` and an empty stderr whenever it did not.
+    let dir = tempfile::tempdir().unwrap();
+    let pinned = dir.path().join("pinned.toml");
+    std::fs::write(&pinned, "[hank.quipu]\nenabled = false\n").unwrap();
     let out = Command::cargo_bin("hank")
         .unwrap()
-        .args(["status", "--json"])
+        .args(["status", "--json", "--config"])
+        .arg(&pinned)
         .assert()
         .success()
         .get_output()
