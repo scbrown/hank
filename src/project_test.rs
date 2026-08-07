@@ -8,6 +8,17 @@ use super::*;
 use crate::constraint::{ConstraintClass, VerificationPoint};
 use crate::rules::MatchType;
 
+#[test]
+fn text_projection_explicitly_traverses_text_rule_subclasses() {
+    // Quipu's asserted-only type queries intentionally withhold subclass
+    // inference. A plain `a aegis:TextRule` therefore drops every concrete
+    // rule class; keep the traversal in the wire query, not as a server default.
+    assert!(
+        TEXT_POLICY_QUERY.contains("a/rdfs:subClassOf* aegis:TextRule"),
+        "the text-rule projection must include concrete TextRule subclasses"
+    );
+}
+
 /// A standard SPARQL-results JSON body with the two shipped policies.
 fn catalog_json() -> String {
     serde_json::json!({

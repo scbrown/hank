@@ -68,19 +68,17 @@ SELECT ?policy ?name ?language ?query ?pattern ?matchType ?gate ?effect
 /// which is the reason to fix the shape rather than mint new rules under a name
 /// that would lie about what they are.
 ///
-/// ORDERING IS LOAD-BEARING, AND IT IS THE GRAPH FIRST. This query returns rows
-/// only because `aegis:InternalIdentifierPattern rdfs:subClassOf aegis:TextRule`
-/// is asserted in quipu AND quipu honours subClassOf on `rdf:type` — both
-/// verified against the live graph before this line changed (the widened query
-/// returns the same 7 rules as the narrow one). Ship this query into a graph
-/// missing that triple and the catalogue silently empties: the projection is
-/// unaware of the difference between "no rules" and "no rules I can see", which
-/// is the failure this whole comment exists to stop recurring.
+/// ORDERING IS LOAD-BEARING, AND IT IS THE GRAPH FIRST. The subtype edge must
+/// exist before a concrete text-rule class can project. Quipu deliberately
+/// withholds implicit subclass inference for a plain `a TextRule` query, so the
+/// query traverses `rdfs:subClassOf*` explicitly rather than relying on a server
+/// inference default. Without either the edge or the explicit traversal, the
+/// catalogue silently empties — the failure this comment exists to prevent.
 pub const TEXT_POLICY_QUERY: &str = "\
 PREFIX aegis: <http://aegis.gastown.local/ontology/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 SELECT ?s ?label ?regex ?class ?tier ?exempt ?rationale WHERE {
-  ?s a aegis:TextRule ;
+  ?s a/rdfs:subClassOf* aegis:TextRule ;
      aegis:regex ?regex ;
      aegis:enforcementTier ?tier .
   OPTIONAL { ?s rdfs:label ?label }
