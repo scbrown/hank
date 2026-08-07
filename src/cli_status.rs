@@ -314,6 +314,11 @@ impl RuleSetStatus {
             (_, Some(_)) => RuleSetState::Degraded,
             (Some(0), None) => RuleSetState::Empty,
             (Some(_), None) => RuleSetState::Loaded,
+            // Defensive only: when the graph plane is enabled, the retry loop
+            // below always records either `projected` on success or `error` on
+            // failure. Keep this loud fallback rather than pretending an
+            // impossible no-result is healthy if a future refactor violates
+            // that invariant.
             (None, None) => RuleSetState::Degraded,
         }
     }
