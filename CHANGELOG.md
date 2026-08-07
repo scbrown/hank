@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-08-07
+
+### Added
+
+- *(state)* The game-state harness — FR-35..FR-39 behind `game-state`([a19759e](https://github.com/scbrown/hank/commit/a19759e581e2ea20397cba19ef88367dc736f0e6))
+- *(hook)* Pre-bash records that it RAN, not only that it emitted([6b49298](https://github.com/scbrown/hank/commit/6b49298cde0c928ad424f5309acb52a7928e0713))
+- *(verdict)* Emit built blockers for failed checks([4e23ddd](https://github.com/scbrown/hank/commit/4e23ddd429d336a4b2e919e8366e909053a3fe5f))
+
+### Documentation
+
+- *(spec)* Note the bounded-path gap under 9.3's archaeology claim([45c7b66](https://github.com/scbrown/hank/commit/45c7b660f37a21550b19076f28e3bc3857142c23))
+- *(promote)* State the dump-retention bound precisely([ed95a34](https://github.com/scbrown/hank/commit/ed95a34c1e4b96d64e8014bcbb953c88ffc59e2a))
+- *(status)* Explain defensive rule state fallback([ee5e8e6](https://github.com/scbrown/hank/commit/ee5e8e6c93dad19729df11d09d734da8c949ba45))
+
+### Fixed
+
+- *(release)* The binary job could not fire for a release-plz tag([393447b](https://github.com/scbrown/hank/commit/393447b181c16b71543b8cab6e22f82baf517a90))
+- *(export)* Percent-encode [ and ] in symbol IRIs — a raw bracket makes the whole promotion unparseable([8898cb8](https://github.com/scbrown/hank/commit/8898cb82ee2726b354c55a8724fb8ceb572a85c8))
+- *(promote)* A refused promotion must name the node and keep the payload([30be33c](https://github.com/scbrown/hank/commit/30be33cc2835e632a45a9dfb00aa53ced2fc06ce))
+- *(export)* Collapse symbols sharing an IRI, and SAY which([bcc0a2b](https://github.com/scbrown/hank/commit/bcc0a2b27033dde8c146ded5b87a14650b46f9d2))
+- *(scrub)* Remove 38 internal identifiers and add the self-scan that was missing([8538d5d](https://github.com/scbrown/hank/commit/8538d5dc62f5e352950632578771828f5e799b10))
+- *(scrub)* Stop the ratchet naming real operators, and generalise it([57ef0fe](https://github.com/scbrown/hank/commit/57ef0fe3ad60f53fa6cac1c4a0ecb9db71b9b75a))
+- *(export)* Every emitted entity carries rdfs:label([18529d8](https://github.com/scbrown/hank/commit/18529d846cff21d7dc65208b5651258a0a0a646f))
+- *(promote)* A configured endpoint must not authorize a write([cc2c213](https://github.com/scbrown/hank/commit/cc2c213d3b6ec328ed19fa6326c1f42600e4305a))
+- *(guard)* The projection cache did not persist, so 1 in 5 edits went unguarded([7d55aff](https://github.com/scbrown/hank/commit/7d55aff3f00016d3c0287a52ecc53d81345e3a70))
+- *(status)* Report the languages the build can parse([37a7fb2](https://github.com/scbrown/hank/commit/37a7fb2946f58a4da7b7a03b6b6c05c7ec6a688c))
+- *(mcp)* Restore the mcp+quipu build — Conforms arm was never added([e15bba7](https://github.com/scbrown/hank/commit/e15bba7fdcae450e8ba45c6047dcd7d440b6bf77))
+- *(extract)* Never ingest vendored or minified bundles([da50919](https://github.com/scbrown/hank/commit/da50919a9dca11107112f02cd5cdbe418f19d862))
+- *(ci)* Ratchet the file-size limit so the check stops being always-red([f6b7414](https://github.com/scbrown/hank/commit/f6b7414c7f94e8bb929e53b15ec8dee51c81219a))
+- *(promote)* Carry each chunk's type declarations with it([0fe9b28](https://github.com/scbrown/hank/commit/0fe9b2813b7503d79f5307ae9d6afe4468677f20))
+- *(policy)* Expose workspace mode lowering([ab49fc5](https://github.com/scbrown/hank/commit/ab49fc56f3f94df31b5cb2d7eb4bf35d78704c2c))
+
+### Testing
+
+- *(pre-edit)* Fixtures must not inherit the host's live quipu endpoint([f1ca99a](https://github.com/scbrown/hank/commit/f1ca99a7291dd356c561fc90fa1afca51d666dee))
+- Cargo-invoked processes must not write hank's REAL state([b95525c](https://github.com/scbrown/hank/commit/b95525c34b35fd014e13e0a731d5b52f9a2a6dd5))
+- Seal the last three fixtures that reached the live graph([1fd9d20](https://github.com/scbrown/hank/commit/1fd9d204095b5a95d1cda3b075497079c1d4ebb8))
+- Pin the graph plane off in the tier-advertisement test([2c162a2](https://github.com/scbrown/hank/commit/2c162a223e2e8466f2693f00ad3b44ef66867d79))
+- Session ids must not collide, or tests suppress each other's fail-open notice([09d9717](https://github.com/scbrown/hank/commit/09d971719572d840620c0427aca87049bbbff575))
 ## [0.5.0] - 2026-08-03
 
 ### Added
