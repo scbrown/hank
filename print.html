@@ -866,6 +866,8 @@ reading. So the bound is distinct failing commits, not runs.</p>
 script gates on — <strong>the state of the policy rule plane</strong>.</p>
 <pre><code class="language-console">$ hank status
   policy      : mode=advise  scope=none for this tenant
+  mode source : ~/.config/bobbin/config.toml
+  tamper state: TAMPER-EVIDENT, NOT TAMPER-PROOF — a local agent can alter policy; a clean report is no evidence that tampering was prevented
   rule set    : 7 projected from quipu (0 structural, 7 text) + 0 local
   rule digest : sha256:3fb9f179b9229755 (unsigned)
 </code></pre>
@@ -876,10 +878,17 @@ enforcement (rule identity, pattern, tier, exemptions), so a rationale typo does
 not churn it. It is <strong>not</strong> a version — there is no signed rule set yet, and
 <code>verification</code> reports <code>unsigned</code> to say so rather than implying provenance
 hank does not have.</p>
+<p><code>mode source</code> identifies the layer that set the effective mode. If a
+workspace-writable <code>.bobbin/config.toml</code> lowers a user policy (for example,
+<code>enforce</code> to <code>off</code>), status calls it out as <strong>LOWERED</strong> and exits non-zero. This
+does not claim that a local agent was prevented from changing a local file: the
+surface is deliberately <strong>tamper-evident, not tamper-proof</strong>. Read a clean
+report as “no evidence of tampering”, never as proof it was prevented.</p>
 <h3 id="exit-codes"><a class="header" href="#exit-codes">Exit codes</a></h3>
 <div class="table-wrapper"><table><thead><tr><th>Code</th><th>Meaning</th></tr></thead><tbody>
 <tr><td><code>0</code></td><td>Rule plane <code>loaded</code>, <code>empty</code>, or <code>off</code></td></tr>
 <tr><td><code>3</code></td><td>Rule plane <strong><code>degraded</code></strong> — the rules could not be projected</td></tr>
+<tr><td><code>4</code></td><td>Workspace config lowered the user's policy mode</td></tr>
 </tbody></table>
 </div>
 <p>Exit <code>3</code> is the one that matters. In that state the guard <strong>fails open</strong> on
