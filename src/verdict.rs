@@ -114,11 +114,11 @@ pub fn verdict_turtle(
     // A stable IRI-safe id from the signature, so re-promoting the same verdict is
     // idempotent by content.
     let id = &signature[..signature.len().min(32)];
-    format!(
-        "@prefix aegis: <http://aegis.gastown.local/ontology/> .\n\
-         @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
-         aegis:verdict_{id} a aegis:Verdict ;\n\
+    let verification = format!(
+        "aegis:verdict_{id} a aegis:Verdict, aegis:Verification ;\n\
          \x20   rdfs:label \"{label}\" ;\n\
+         \x20   aegis:sourceKind \"observed\" ;\n\
+         \x20   aegis:falsifier \"predicate `{predicate}` evaluates satisfied for target `{target}` against evidence {hash}\" ;\n\
          \x20   aegis:predicateId \"{predicate}\" ;\n\
          \x20   aegis:targetRef \"{target}\" ;\n\
          \x20   aegis:outcome \"{outcome}\" ;\n\
@@ -134,6 +134,23 @@ pub fn verdict_turtle(
         verifier = VERIFIER,
         tier = TIER,
         freshness = freshness_label(freshness),
+    );
+    let blocker = if satisfied {
+        String::new()
+    } else {
+        format!(
+            "aegis:blocker_{id} a aegis:Blocker ;\n\
+             \x20   rdfs:label \"{label} is unsatisfied\" ;\n\
+             \x20   aegis:sourceKind \"observed\" ;\n\
+             \x20   aegis:blockerEvidence \"built\" ;\n\
+             \x20   aegis:demonstratedBy aegis:verdict_{id} .\n",
+            label = escape(&format!("{policy_name} @ {target_ref}")),
+        )
+    };
+    format!(
+        "@prefix aegis: <http://aegis.gastown.local/ontology/> .\n\
+         @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+         {verification}{blocker}\n",
     )
 }
 
@@ -230,7 +247,9 @@ mod tests {
         );
         // Every VerdictShape-required field is present.
         for field in [
-            "a aegis:Verdict",
+            "a aegis:Verdict, aegis:Verification",
+            "aegis:sourceKind \"observed\"",
+            "aegis:falsifier \"predicate `no-ticket-in-comment` evaluates satisfied",
             "aegis:predicateId \"no-ticket-in-comment\"",
             "aegis:targetRef \"src/a.rs\"",
             "aegis:outcome \"unsatisfied\"",
@@ -238,12 +257,35 @@ mod tests {
             "aegis:verifier \"hank\"",
             "aegis:signature \"",
             "aegis:tier \"tree-sitter\"",
+            "aegis:blockerEvidence \"built\"",
+            "aegis:demonstratedBy aegis:verdict_",
         ] {
             assert!(
                 ttl.contains(field),
                 "verdict Turtle missing `{field}`:\n{ttl}"
             );
         }
+    }
+
+    #[test]
+    fn satisfied_verdict_is_a_verification_but_never_a_blocker() {
+        let kp = keypair();
+        let ttl = verdict_turtle(
+            &kp,
+            "no-ticket-in-comment",
+            "src/a.rs",
+            true,
+            "// no ticket",
+            crate::types::Freshness::Fresh,
+        );
+        assert!(ttl.contains("a aegis:Verdict, aegis:Verification"));
+        assert!(
+            ttl.contains("aegis:falsifier \"predicate `no-ticket-in-comment` evaluates satisfied")
+        );
+        assert!(
+            !ttl.contains("a aegis:Blocker"),
+            "a passing Hank check is verification evidence, not a blocker: {ttl}"
+        );
     }
 
     #[test]
