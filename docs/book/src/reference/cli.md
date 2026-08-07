@@ -145,6 +145,8 @@ script gates on — **the state of the policy rule plane**.
 ```console
 $ hank status
   policy      : mode=advise  scope=none for this tenant
+  mode source : ~/.config/bobbin/config.toml
+  tamper state: TAMPER-EVIDENT, NOT TAMPER-PROOF — a local agent can alter policy; a clean report is no evidence that tampering was prevented
   rule set    : 7 projected from quipu (0 structural, 7 text) + 0 local
   rule digest : sha256:3fb9f179b9229755 (unsigned)
 ```
@@ -157,12 +159,20 @@ not churn it. It is **not** a version — there is no signed rule set yet, and
 `verification` reports `unsigned` to say so rather than implying provenance
 hank does not have.
 
+`mode source` identifies the layer that set the effective mode. If a
+workspace-writable `.bobbin/config.toml` lowers a user policy (for example,
+`enforce` to `off`), status calls it out as **LOWERED** and exits non-zero. This
+does not claim that a local agent was prevented from changing a local file: the
+surface is deliberately **tamper-evident, not tamper-proof**. Read a clean
+report as “no evidence of tampering”, never as proof it was prevented.
+
 ### Exit codes
 
 | Code | Meaning |
 |---|---|
 | `0` | Rule plane `loaded`, `empty`, or `off` |
 | `3` | Rule plane **`degraded`** — the rules could not be projected |
+| `4` | Workspace config lowered the user's policy mode |
 
 Exit `3` is the one that matters. In that state the guard **fails open** on
 every edit: nothing is enforced, and before this had an exit code the condition

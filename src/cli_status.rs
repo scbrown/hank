@@ -9,6 +9,7 @@ impl Cli {
     pub(super) fn status(&self) -> anyhow::Result<()> {
         let root = std::env::current_dir()?;
         let config = self.load_config(&root)?;
+        let mode_provenance = HankConfig::policy_mode_provenance(&root, config.policy.mode)?;
         let tenant = self.tenant.as_deref().unwrap_or("(single-tenant)");
         // Resolve the configured base ref to a concrete commit (None outside a
         // repo / unresolved ref — degrade, never fail).
@@ -32,6 +33,7 @@ impl Cli {
                 "languages": crate::extract::languages(),
                 "quipu": { "enabled": config.quipu.enabled, "branch_model": config.quipu.branch_model },
                 "policy": policy,
+                "policy_mode_provenance": mode_provenance,
                 // Whether guard records will carry their subject (hank #77). An
                 // operator has to be able to confirm this from OUTSIDE the
                 // process: "recording is on" believed but untrue looks exactly
@@ -113,7 +115,7 @@ impl Cli {
                     crate::audit::PathRecording::Absolute => "absolute",
                 }
             );
-            print_policy_status(&policy);
+            print_policy_status(&policy, &mode_provenance);
             print_rule_set_status(&config, &rule_set);
         }
 
@@ -133,6 +135,9 @@ impl Cli {
         if rule_set.state() == RuleSetState::Degraded {
             std::process::exit(EXIT_RULE_SET_DEGRADED);
         }
+        if mode_provenance.lowered_by_project {
+            std::process::exit(EXIT_POLICY_MODE_LOWERED);
+        }
         Ok(())
     }
 }
@@ -145,13 +150,19 @@ impl Cli {
 /// did not run". The whole point is that the two stop looking alike.
 pub(super) const EXIT_RULE_SET_DEGRADED: i32 = 3;
 
+/// `hank status` exit code when a workspace lowers the user's policy mode.
+pub(super) const EXIT_POLICY_MODE_LOWERED: i32 = 4;
+
 /// Render the policy section of `hank status`.
 ///
 /// Shows the enforcement mode, whether a scope applies to this tenant and its
 /// ceilings, and — loudly — two states an operator must never learn from
 /// silence: an `enforce` mode with no scope for the tenant (armed-looking, inert),
 /// and the absence of a signed rule set (aegis-hac0).
-fn print_policy_status(policy: &crate::policy::PolicyStatus) {
+fn print_policy_status(
+    policy: &crate::policy::PolicyStatus,
+    provenance: &crate::config::PolicyModeProvenance,
+) {
     let scope = match &policy.scope {
         Some(s) => {
             let ceiling = |c: Option<usize>| c.map_or_else(|| "—".to_string(), |n| n.to_string());
@@ -166,6 +177,18 @@ fn print_policy_status(policy: &crate::policy::PolicyStatus) {
         None => "none for this tenant".to_string(),
     };
     println!("  policy      : mode={}  scope={scope}", policy.mode);
+    println!("  mode source : {}", provenance.source);
+    println!(
+        "  tamper state: TAMPER-EVIDENT, NOT TAMPER-PROOF — a local agent can alter policy; a clean report is no evidence that tampering was prevented"
+    );
+    if provenance.lowered_by_project {
+        println!(
+            "  {} policy mode was LOWERED from {} to {} by workspace config — refusing healthy status",
+            "⚠".red().bold(),
+            provenance.user_mode.expect("lowered mode requires a user mode"),
+            provenance.effective,
+        );
+    }
 
     if policy.enforcing_without_scope {
         println!(

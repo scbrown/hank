@@ -100,6 +100,32 @@ fn a_project_config_overrides_the_same_key() {
     assert_eq!(config.base_ref, "main");
 }
 
+#[test]
+fn policy_mode_provenance_names_a_workspace_lowering() {
+    let user = tempfile::tempdir().unwrap();
+    let user_config = user.path().join("config.toml");
+    std::fs::write(&user_config, "[hank.policy]\nmode = \"enforce\"\n").unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let bobbin = project.path().join(".bobbin");
+    std::fs::create_dir_all(&bobbin).unwrap();
+    std::fs::write(
+        bobbin.join("config.toml"),
+        "[hank.policy]\nmode = \"off\"\n",
+    )
+    .unwrap();
+
+    let effective = HankConfig::load_layered(Some(&user_config), project.path()).unwrap();
+    let provenance = policy_mode_provenance_from_paths(
+        Some(&user_config),
+        &bobbin.join("config.toml"),
+        effective.policy.mode,
+    )
+    .unwrap();
+    assert!(provenance.lowered_by_project);
+    assert_eq!(provenance.user_mode, Some(crate::policy::Mode::Enforce));
+    assert_eq!(provenance.effective, crate::policy::Mode::Off);
+}
+
 /// A scope narrowed by the user config must not be widened by a workspace
 /// appending to it — arrays replace, they do not accumulate.
 #[test]

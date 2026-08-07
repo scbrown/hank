@@ -11,6 +11,19 @@ use std::path::{Path, PathBuf};
 
 use crate::errors::{Error, Result};
 
+/// Where the effective policy mode was explicitly set.
+#[derive(Debug, Clone, Serialize)]
+pub struct PolicyModeProvenance {
+    /// The mode used by the guard after configuration layering.
+    pub effective: crate::policy::Mode,
+    /// The layer that explicitly supplied the effective mode.
+    pub source: String,
+    /// The user-level mode, when the user explicitly set one.
+    pub user_mode: Option<crate::policy::Mode>,
+    /// Whether a workspace explicitly lowered the user's mode.
+    pub lowered_by_project: bool,
+}
+
 /// Top-level Hank configuration (the `[hank]` table).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -235,6 +248,21 @@ impl HankConfig {
         Self::load_layered(user_config_path().as_deref(), root)
     }
 
+    /// Identify the config layer that supplied the effective policy mode.
+    ///
+    /// This intentionally reads the raw layers as well as the merged result:
+    /// the merged `PolicyConfig` can say `off`, but cannot say whether that was
+    /// the safe default, an operator choice, or a workspace overriding a more
+    /// restrictive user policy.
+    pub fn policy_mode_provenance(
+        root: &Path,
+        effective: crate::policy::Mode,
+    ) -> Result<PolicyModeProvenance> {
+        let user = user_config_path();
+        let project = root.join(".bobbin").join("config.toml");
+        policy_mode_provenance_from_paths(user.as_deref(), &project, effective)
+    }
+
     /// Resolve configuration honouring an explicit `--config` override.
     ///
     /// `Some(path)` **replaces** discovery: FR-29 ranks a flag above project and
@@ -304,6 +332,32 @@ impl HankConfig {
     }
 }
 
+fn policy_mode_provenance_from_paths(
+    user: Option<&Path>,
+    project: &Path,
+    effective: crate::policy::Mode,
+) -> Result<PolicyModeProvenance> {
+    let user_mode = user.map(explicit_policy_mode).transpose()?.flatten();
+    let project_mode = explicit_policy_mode(project)?;
+    let source = if project_mode.is_some() {
+        project.display().to_string()
+    } else if user_mode.is_some() {
+        user.expect("user mode requires a path")
+            .display()
+            .to_string()
+    } else {
+        "compiled default".to_string()
+    };
+    let lowered_by_project =
+        user_mode.is_some_and(|user| effective.is_lower_than(user)) && project_mode.is_some();
+    Ok(PolicyModeProvenance {
+        effective,
+        source,
+        user_mode,
+        lowered_by_project,
+    })
+}
+
 /// Deep-merge `overlay` onto `base`: tables merge key-by-key, everything else
 /// is replaced outright.
 ///
@@ -323,6 +377,34 @@ fn merge(base: toml::Value, overlay: toml::Value) -> toml::Value {
             toml::Value::Table(base)
         }
         (_, overlay) => overlay,
+    }
+}
+
+fn explicit_policy_mode(path: &Path) -> Result<Option<crate::policy::Mode>> {
+    let Some(table) = read_hank_table(path)? else {
+        return Ok(None);
+    };
+    let Some(mode) = table
+        .get("policy")
+        .and_then(toml::Value::as_table)
+        .and_then(|policy| policy.get("mode"))
+    else {
+        return Ok(None);
+    };
+    let Some(mode) = mode.as_str() else {
+        return Err(Error::Config(format!(
+            "{}: [hank.policy].mode must be a string",
+            path.display()
+        )));
+    };
+    match mode {
+        "off" => Ok(Some(crate::policy::Mode::Off)),
+        "advise" => Ok(Some(crate::policy::Mode::Advise)),
+        "enforce" => Ok(Some(crate::policy::Mode::Enforce)),
+        _ => Err(Error::Config(format!(
+            "{}: invalid [hank.policy].mode `{mode}`",
+            path.display()
+        ))),
     }
 }
 

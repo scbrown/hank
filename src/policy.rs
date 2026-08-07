@@ -40,6 +40,20 @@ pub enum Mode {
 }
 
 impl Mode {
+    /// Whether this mode weakens enforcement relative to `other`.
+    #[must_use]
+    pub fn is_lower_than(self, other: Self) -> bool {
+        self.rank() < other.rank()
+    }
+
+    const fn rank(self) -> u8 {
+        match self {
+            Self::Off => 0,
+            Self::Advise => 1,
+            Self::Enforce => 2,
+        }
+    }
+
     /// The lowercase name, matching the `[hank.policy] mode` config value.
     #[must_use]
     pub fn as_str(self) -> &'static str {
