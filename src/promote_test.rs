@@ -55,6 +55,65 @@ fn empty_bearer_token_is_unset_not_a_credential() {
     );
 }
 
+#[test]
+fn snapshot_write_names_one_atomic_replacement_envelope() {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut sock, _) = listener.accept().unwrap();
+        let mut bytes = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            let n = sock.read(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buf[..n]);
+            let Some(split) = bytes.windows(4).position(|w| w == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&bytes[..split]);
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .and_then(|v| v.trim().parse::<usize>().ok())
+                })
+                .unwrap();
+            if bytes.len() >= split + 4 + length {
+                break;
+            }
+        }
+        let split = bytes.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes[split + 4..]).unwrap();
+        let response = b"{\"count\":1,\"tx_id\":null}";
+        write!(
+            sock,
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+            response.len()
+        )
+        .unwrap();
+        sock.write_all(response).unwrap();
+        body
+    });
+
+    let result = write_knot_snapshot(
+        &format!("http://{addr}"),
+        CONFORMING,
+        "fixture source",
+        "code:fixture",
+    )
+    .unwrap();
+    assert_eq!(result.count, 1);
+    let body = server.join().unwrap();
+    assert_eq!(body["replace_snapshot"], true);
+    assert_eq!(body["snapshot"], "code:fixture");
+    assert_eq!(body["source"], "fixture source");
+    assert_eq!(body["turtle"], CONFORMING);
+}
+
 // A promotion whose shape is correct: an IRI-valued `calls`, a known tier.
 // The conforming fixture mirrors what the emitter ACTUALLY produces — a
 // symbol carries name + definedIn, and its module carries filePath + repo +

@@ -18,6 +18,7 @@ impl Cli {
         to: Option<&str>,
         repo: Option<&str>,
         dry_run: bool,
+        replace_snapshot: bool,
     ) -> anyhow::Result<()> {
         // `--to` IS THE AUTHORIZATION, and it is the only one (aegis-o2h97).
         //
@@ -96,7 +97,7 @@ impl Cli {
         // its done-marker over the void). Say so and refuse (exit 2, the
         // could-not-promote code), so a marker-disciplined caller retries
         // instead of booking emptiness as done.
-        if !turtle.contains("bobbin:CodeModule") {
+        if !replace_snapshot && !turtle.contains("bobbin:CodeModule") {
             eprintln!(
                 "hank promote: extracted NOTHING from {} — no parseable source                  files under this tree for the grammars in this build. Refusing                  to promote an empty graph as success. (Is the language behind                  the `langs-extra` feature? Is the path right?)",
                 path.display()
@@ -112,6 +113,9 @@ impl Cli {
         let source = format!("hank promote {repo}@{resolved} (cli)");
         let outcome = match (dry_run, &endpoint) {
             (true, ep) => crate::promote::dry_run(ep.as_deref(), &turtle, &source)?,
+            (false, Some(ep)) if replace_snapshot => {
+                crate::promote::promote_snapshot(ep, &turtle, &source, &format!("code:{repo}"))?
+            }
             (false, Some(ep)) => crate::promote::promote(ep, &turtle, &source)?,
             // Unreachable: the resolution above bails on a write with no target.
             // Spelled as a refusal rather than an `expect` so that if that match
@@ -146,6 +150,7 @@ impl Cli {
         _to: Option<&str>,
         _repo: Option<&str>,
         _dry_run: bool,
+        _replace_snapshot: bool,
     ) -> anyhow::Result<()> {
         self.planned(
             "promote",

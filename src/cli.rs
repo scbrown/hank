@@ -220,6 +220,11 @@ enum Commands {
         /// Answers "would this promotion conform?" without touching the graph.
         #[arg(long)]
         dry_run: bool,
+        /// Replace the complete per-repository code snapshot atomically. This
+        /// is explicit because it authorizes absence (including an empty tree)
+        /// to retract facts from the prior snapshot.
+        #[arg(long)]
+        replace_snapshot: bool,
         /// Repository name to attribute promoted entities to. Defaults to the
         /// `origin` remote's repo name; with no origin, promotion refuses rather
         /// than deriving identity from the directory name (a worktree's dir name
@@ -415,7 +420,7 @@ impl Cli {
                     // from `promote`. It is a write, so honour the guard first.
                     Some(_) => {
                         self.load_config(path)?.write_guard("promotion")?;
-                        self.promote(path, "HEAD", to.as_deref(), repo.as_deref(), false)
+                        self.promote(path, "HEAD", to.as_deref(), repo.as_deref(), false, false)
                     }
                     None => cli_cmds::export(path, repo.as_deref()),
                 }
@@ -443,6 +448,7 @@ impl Cli {
                 commit,
                 to,
                 dry_run,
+                replace_snapshot,
                 repo,
                 path,
             } => {
@@ -455,7 +461,14 @@ impl Cli {
                 // change to what `read_only` MEANS, and this arm is not the place to
                 // make it silently. Tracked on aegis-o2h97.
                 self.load_config(path)?.write_guard("promotion")?;
-                self.promote(path, commit, to.as_deref(), repo.as_deref(), *dry_run)
+                self.promote(
+                    path,
+                    commit,
+                    to.as_deref(),
+                    repo.as_deref(),
+                    *dry_run,
+                    *replace_snapshot,
+                )
             }
         }
     }

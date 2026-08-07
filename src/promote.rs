@@ -250,13 +250,40 @@ fn normalize_token(raw: Option<String>) -> Option<String> {
 /// `/knot`. NEVER defaulted to a hardcoded host — a promotion that silently picks a
 /// graph is how facts land in the wrong one.
 pub fn write_knot(endpoint: &str, turtle: &str, source: &str) -> Result<KnotResult> {
+    write_knot_request(endpoint, turtle, source, None)
+}
+
+/// Atomically replace one stable producer snapshot through `/knot`.
+pub fn write_knot_snapshot(
+    endpoint: &str,
+    turtle: &str,
+    source: &str,
+    snapshot: &str,
+) -> Result<KnotResult> {
+    write_knot_request(endpoint, turtle, source, Some(snapshot))
+}
+
+fn write_knot_request(
+    endpoint: &str,
+    turtle: &str,
+    source: &str,
+    snapshot: Option<&str>,
+) -> Result<KnotResult> {
     let url = format!("{}/knot", endpoint.trim_end_matches('/'));
     let auth = quipu_auth_token();
     // Provenance on every write (promotion tail item 4): quipu records actor +
     // source per transaction; an anonymous writer is unauditable, and hank was
     // the only anonymous one left.
-    let body =
-        serde_json::json!({ "turtle": turtle, "actor": "hank", "source": source }).to_string();
+    let mut body = serde_json::json!({
+        "turtle": turtle,
+        "actor": "hank",
+        "source": source
+    });
+    if let Some(key) = snapshot {
+        body["replace_snapshot"] = serde_json::Value::Bool(true);
+        body["snapshot"] = serde_json::Value::String(key.to_string());
+    }
+    let body = body.to_string();
 
     // Quipu is known to flap (transient 503 "no available server", recovering in
     // seconds). Ride through TRANSIENT failures — 5xx and transport errors — with
@@ -866,6 +893,39 @@ pub fn promote(endpoint: &str, turtle: &str, source: &str) -> Result<Promotion> 
         }
     }
     Ok(Promotion::Wrote(summary))
+}
+
+/// Validate and atomically replace a complete producer snapshot.
+///
+/// Snapshot writes deliberately use one request rather than the additive
+/// chunk path: Quipu accepts bounded 64 MiB bodies, and replacement must never
+/// expose a half-old/half-new graph or retract the first chunk when posting the
+/// second. A transport failure leaves the prior snapshot current.
+pub fn promote_snapshot(
+    endpoint: &str,
+    turtle: &str,
+    source: &str,
+    snapshot: &str,
+) -> Result<Promotion> {
+    match prepare(turtle, source)? {
+        Prepared::Refused(refusal) => Ok(refusal),
+        Prepared::Ready(_) => {
+            let knot = write_knot_snapshot(endpoint, turtle, source, snapshot).map_err(|e| {
+                let dump = dump_payload(turtle, source);
+                Error::Promote(with_payload(
+                    format!(
+                        "atomic snapshot replacement failed; prior snapshot remains current: {e}"
+                    ),
+                    dump.as_deref(),
+                ))
+            })?;
+            Ok(Promotion::Wrote(WriteSummary {
+                count: knot.count,
+                tx_ids: knot.tx_id.into_iter().collect(),
+                chunks: 1,
+            }))
+        }
+    }
 }
 
 /// The result of a full promotion: it either wrote, or refused whole.
