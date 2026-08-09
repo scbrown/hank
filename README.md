@@ -1,3 +1,16 @@
+# ⚰️ This project has moved: hank is now yupana
+
+> **hank has been renamed to
+> [yupana](https://github.com/scbrown/yupana)** — the Andean abacus,
+> the calculating instrument used alongside quipus. All development
+> continues there with full history preserved; this repository is
+> retained as a tombstone so existing links and clones keep resolving.
+> The migration map for downstream projects is
+> [`docs/rename-from-hank.md`](https://github.com/scbrown/yupana/blob/main/docs/rename-from-hank.md)
+> in yupana.
+
+---
+
 <p align="center">
   <img src="assets/logo.svg" width="200" alt="Hank logo — a coiled skein of yarn with graph nodes"/>
 </p>
