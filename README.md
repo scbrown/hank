@@ -9,6 +9,10 @@
 > [`docs/rename-from-hank.md`](https://github.com/scbrown/yupana/blob/main/docs/rename-from-hank.md)
 > in yupana.
 
+The transition releases are v0.6.2 and v0.6.3. Their command is still `hank`;
+use the migration map rather than inferring that an existing installation has
+already acquired a `yupana` executable.
+
 ---
 
 <p align="center">
@@ -172,6 +176,12 @@ they do things neither does alone:
   [The Enforcement Trace](docs/book/src/reference/enforcement-trace.md) for the
   record, and [SARC Conformance](docs/book/src/design/sarc-conformance.md) for what
   the pair does and does not yet close.
+- **Turn-boundary grounding advice.** NeuralAmplifier-scoped edits can bind a
+  content-addressed `grounding_id`, faction, and worldview hash into the existing
+  constraint/action trace. Resolution is local-cache-only on the edit hot path;
+  missing, stale, unresolved, empty, and transport-error states remain advice,
+  never fabricated success or an automatic block. See
+  [The Enforcement Trace](docs/book/src/reference/enforcement-trace.md#turn-boundary-grounding-evidence).
 
 ## 🚀 Quick Start
 
@@ -219,6 +229,13 @@ hank completions bash > hank.bash
 
 Hank shares the stack's `.bobbin/config.toml` under a `[hank]` table — see the
 [configuration reference](docs/book/src/reference/config.md).
+
+For agent integrations, prefer the `hank_*` MCP tools exposed by `hank serve`
+when they are provisioned. Use the installed `hank` CLI second for direct local
+analysis (`impact`, `callers`, `changed`, and `verify`). Streamable HTTP via
+`hank serve --http` is the documented transport fallback; it exposes the same
+MCP contract rather than a separate ad-hoc REST API. During the rename window,
+follow the installed binary's `--version` output rather than repository intent.
 
 ## 🌳 Supported Languages
 

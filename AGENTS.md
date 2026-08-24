@@ -1,4 +1,4 @@
-# hank - Agent Instructions
+# Hank / Yupana - Agent Instructions
 
 ## Project Overview
 
@@ -11,6 +11,24 @@ serves it over MCP/HTTP. See `docs/hank-spec.md` for the full design and
 Sibling repos: [`scbrown/bobbin`](https://github.com/scbrown/bobbin) (fusion +
 serving) and [`scbrown/quipu`](https://github.com/scbrown/quipu) (governed
 bitemporal graph). Keep Hank's stack coherent with theirs.
+
+This repository is the Hank tombstone; active development has moved to
+[`scbrown/yupana`](https://github.com/scbrown/yupana). Do not rename commands or
+claim a new release from repository intent alone: verify the deployed artifact.
+
+## Tool access order
+
+Use provisioned `hank_*` MCP tools first for structural impact, callers,
+changed-entity, and verification queries. Use the installed `hank` CLI second
+for local/offline work. If an MCP client must connect over the network, use the
+documented streamable-HTTP transport from `hank serve --http`; Hank does not
+have a parallel ad-hoc REST API whose paths can be guessed from tool names.
+
+When committed knowledge or policy context is needed, use configured Quipu MCP
+tools before Quipu's CLI, with raw HTTP only as its documented fallback.
+Turn-boundary NeuralAmplifier grounding is content-addressed and resolved from
+the local cache on the hot path; never add a synchronous graph/network lookup
+to an edit hook.
 
 ## Conventions
 
