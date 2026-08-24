@@ -1,18 +1,53 @@
-# ⚰️ This project has moved: hank is now yupana
+# ⚰️ This repository is ARCHIVED. Development is at [yupana](https://github.com/scbrown/yupana).
 
-> **hank has been renamed to
-> [yupana](https://github.com/scbrown/yupana)** — the Andean abacus,
-> the calculating instrument used alongside quipus. All development
-> continues there with full history preserved; this repository is
-> retained as a tombstone so existing links and clones keep resolving.
+> **hank is now [yupana](https://github.com/scbrown/yupana)** — the Andean abacus, the
+> calculating instrument used alongside quipus. This repository is read-only. Do not open
+> issues or pull requests here — open them in yupana.
+>
 > The migration map for downstream projects is
 > [`docs/rename-from-hank.md`](https://github.com/scbrown/yupana/blob/main/docs/rename-from-hank.md)
 > in yupana.
 
-The transition releases are v0.6.2 and v0.6.3. Their command is still `hank`;
-use the migration map rather than inferring that an existing installation has
-already acquired a `yupana` executable.
+### Two things this notice used to get wrong
 
+It previously said "all development continues there with full history preserved" and that
+this repo was retained "so existing links and clones keep resolving". Both were more
+optimistic than the facts, and both were wrong in the direction that stops a reader
+checking:
+
+1. **There is no automatic redirect from this URL to yupana.** yupana is a *separate*
+   repository (created 2026-08-09), not the result of GitHub's rename operation — which is
+   why this repository still exists at its own name at all. GitHub mints a redirect when a
+   repo is *renamed*; that never happened here, so a link or a `git remote` pointing at
+   `scbrown/hank` resolves **here**, to the archive, and does not forward. Downstream
+   remotes must be repointed by hand.
+2. **The two lines diverged for two weeks and were reconciled by hand, not by fast-forward.**
+   Both repositories were worked in parallel from 2026-08-09 to 2026-08-24. yupana carries
+   ~40 commits this repository never had; this repository carried 11 that yupana never had.
+   Those were reconciled into yupana on 2026-08-24 with one deliberate exception, recorded
+   below.
+
+### What is here and not (yet) in yupana
+
+`feat: bind local grounding evidence into advice traces` (`f4ccba2`) is the only substantive
+commit not carried across. It collides by *filename* with an unrelated feature of the same
+name in yupana — both repositories independently grew a `src/grounding.rs`, for different
+things — so it needs a hand port under a distinct module rather than a cherry-pick. Its
+content is preserved here in full: an archived repository stays public and cloneable, so
+`git fetch https://github.com/scbrown/hank.git main && git show f4ccba2` keeps working.
+
+Carried across and live in yupana: `820acab`, `44771b8`, `62c9174`, and `e8ed710` (adapted —
+the env prefix moved with the rename). Deliberately not carried: the three release chores
+for the `hank` crate, this repository's own file-size baseline, and these tombstone edits.
+
+### Releases
+
+**v0.6.1, v0.6.2 and v0.6.3 exist only here** and their command is still `hank`. yupana's
+binary is named `yupana` (`[[bin]] name = "yupana"`), and its state directory moves with it
+(`~/.local/state/hank/` → `~/.local/state/yupana/`). If you script around either, resolve
+`yupana` first and fall back to `hank` rather than assuming: the two names are both live in
+the wild right now, and every check that reaches for one by name fails *quietly* when it
+finds the other.
 ---
 
 <p align="center">
