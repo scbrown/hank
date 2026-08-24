@@ -28,6 +28,7 @@ pub mod export;
 pub mod extract;
 pub mod git;
 pub mod graph;
+pub mod grounding;
 pub mod hook;
 pub mod hosting;
 #[cfg(feature = "mcp")]

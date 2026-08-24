@@ -150,7 +150,7 @@ impl Cli {
 /// did not run". The whole point is that the two stop looking alike.
 pub(super) const EXIT_RULE_SET_DEGRADED: i32 = 3;
 
-/// `hank status` exit code when a workspace lowers the user's policy mode.
+/// `hank status` exit code when a workspace attempts to lower the user's mode.
 pub(super) const EXIT_POLICY_MODE_LOWERED: i32 = 4;
 
 /// Render the policy section of `hank status`.
@@ -183,7 +183,7 @@ fn print_policy_status(
     );
     if provenance.lowered_by_project {
         println!(
-            "  {} policy mode was LOWERED from {} to {} by workspace config — refusing healthy status",
+            "  {} workspace config attempted to LOWER policy mode below {} — effective mode remains {}; refusing healthy status",
             "⚠".red().bold(),
             provenance.user_mode.expect("lowered mode requires a user mode"),
             provenance.effective,

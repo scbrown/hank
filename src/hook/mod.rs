@@ -58,6 +58,10 @@ pub struct HookInput {
     /// The tool's arguments.
     #[serde(default)]
     pub tool_input: ToolInput,
+    /// Turn-boundary grounding reference injected by the harness, when this is
+    /// a NeuralAmplifier-scoped action.
+    #[serde(default)]
+    pub grounding: Option<crate::grounding::GroundingRef>,
 }
 
 /// The tool arguments Hank reads, across `Edit` / `Write` / `MultiEdit`.

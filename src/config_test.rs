@@ -95,7 +95,7 @@ fn a_project_config_overrides_the_same_key() {
     .unwrap();
 
     let config = HankConfig::load_layered(Some(&user_config), project.path()).unwrap();
-    assert_eq!(config.policy.mode, crate::policy::Mode::Off);
+    assert_eq!(config.policy.mode, crate::policy::Mode::Enforce);
     // Untouched keys from the user config survive the override.
     assert_eq!(config.base_ref, "main");
 }
@@ -123,7 +123,8 @@ fn policy_mode_provenance_names_a_workspace_lowering() {
     .unwrap();
     assert!(provenance.lowered_by_project);
     assert_eq!(provenance.user_mode, Some(crate::policy::Mode::Enforce));
-    assert_eq!(provenance.effective, crate::policy::Mode::Off);
+    assert_eq!(provenance.effective, crate::policy::Mode::Enforce);
+    assert_eq!(provenance.source, user_config.display().to_string());
 }
 
 /// A scope narrowed by the user config must not be widened by a workspace

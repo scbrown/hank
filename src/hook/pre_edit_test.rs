@@ -11,6 +11,56 @@
 #![allow(non_snake_case)]
 use super::*;
 
+#[test]
+fn grounding_binding_survives_decision_into_the_existing_trace_envelope() {
+    let reference = crate::grounding::GroundingRef {
+        scope: Some("na".into()),
+        grounding_id: Some(
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+        ),
+        faction_id: Some("raptors".into()),
+        worldview_sha256: Some("sha256:worldview".into()),
+    };
+    let mut decision: Decision = Outcome::Allow.into();
+    apply_grounding(
+        &mut decision,
+        &reference,
+        &crate::grounding::GroundingState::Used,
+    );
+
+    assert_eq!(decision.outcome, Outcome::Allow);
+    let trace = crate::trace::to_json(&decision.constraints);
+    assert_eq!(trace[0]["id"], "na-turn-grounding");
+    assert_eq!(trace[0]["outcome"], "satisfied");
+    assert_eq!(trace[0]["grounding_id"], reference.grounding_id.unwrap());
+    assert_eq!(trace[0]["faction_id"], "raptors");
+    assert_eq!(trace[0]["worldview_sha256"], "sha256:worldview");
+    assert_eq!(trace[0]["grounding_outcome"], "used");
+}
+
+#[test]
+fn grounding_advice_never_upgrades_to_enforcement() {
+    let reference = crate::grounding::GroundingRef {
+        scope: Some("na".into()),
+        ..crate::grounding::GroundingRef::default()
+    };
+    let mut decision: Decision = Outcome::Allow.into();
+    apply_grounding(
+        &mut decision,
+        &reference,
+        &crate::grounding::GroundingState::Missing,
+    );
+    assert!(matches!(decision.outcome, Outcome::Notify(_)));
+    assert_eq!(
+        decision.constraints[0].outcome,
+        crate::trace::Outcome::Unknown
+    );
+    assert_eq!(
+        decision.constraints[0].response,
+        crate::trace::Response::Warned
+    );
+}
+
 /// A repo where `leaf` is called from three other files — HERMETIC BY
 /// CONSTRUCTION (aegis-enbzz, completed by aegis-0upyu).
 ///
@@ -147,7 +197,11 @@ fn allows_when_mode_is_off_despite_a_scope() {
         "[hank.policy]\nmode = \"off\"\n[hank.policy.scopes.t]\nmax_impacted_symbols = 0\n",
     );
     let payload = edit_payload(dir.path(), "leaf.rs", "fn leaf() {}");
-    assert_eq!(guard(&payload, dir.path(), Some("t"), None), Outcome::Allow);
+    let explicit = dir.path().join(".bobbin/config.toml");
+    assert_eq!(
+        guard(&payload, dir.path(), Some("t"), Some(&explicit)),
+        Outcome::Allow
+    );
 }
 
 #[test]

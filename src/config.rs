@@ -323,12 +323,21 @@ impl HankConfig {
             });
         }
 
-        match merged {
-            None => Ok(Self::default()),
+        let mut config: Self = match merged {
+            None => Self::default(),
             Some(value) => value
                 .try_into()
-                .map_err(|e| Error::Config(format!("[hank]: {e}"))),
+                .map_err(|e| Error::Config(format!("[hank]: {e}")))?,
+        };
+        let user_mode = user.map(explicit_policy_mode).transpose()?.flatten();
+        let project_mode = explicit_policy_mode(&project)?;
+        if user_mode
+            .zip(project_mode)
+            .is_some_and(|(user, project)| project.is_lower_than(user))
+        {
+            config.policy.mode = user_mode.expect("checked above");
         }
+        Ok(config)
     }
 }
 
@@ -339,17 +348,18 @@ fn policy_mode_provenance_from_paths(
 ) -> Result<PolicyModeProvenance> {
     let user_mode = user.map(explicit_policy_mode).transpose()?.flatten();
     let project_mode = explicit_policy_mode(project)?;
-    let source = if project_mode.is_some() {
-        project.display().to_string()
-    } else if user_mode.is_some() {
+    let lowered_by_project = user_mode
+        .zip(project_mode)
+        .is_some_and(|(user, project)| project.is_lower_than(user));
+    let source = if lowered_by_project || project_mode.is_none() && user_mode.is_some() {
         user.expect("user mode requires a path")
             .display()
             .to_string()
+    } else if project_mode.is_some() {
+        project.display().to_string()
     } else {
         "compiled default".to_string()
     };
-    let lowered_by_project =
-        user_mode.is_some_and(|user| effective.is_lower_than(user)) && project_mode.is_some();
     Ok(PolicyModeProvenance {
         effective,
         source,

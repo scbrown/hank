@@ -71,7 +71,20 @@ pub fn run_pre_bash() -> anyhow::Result<()> {
     record_invocation(&buf, cmd.is_some());
 
     if let Some(cmd) = cmd {
-        record(&action::resolve(&cmd));
+        let input = crate::hook::HookInput::parse(&buf);
+        let grounding = input
+            .as_ref()
+            .and_then(|i| i.grounding.as_ref())
+            .map(|reference| {
+                let state = crate::grounding::assess(
+                    Some(reference),
+                    crate::grounding::cache_dir().as_deref(),
+                    crate::grounding::now_secs(),
+                    crate::grounding::max_age_secs(),
+                );
+                (reference, state)
+            });
+        record(&action::resolve(&cmd), grounding);
     }
     Ok(())
 }
@@ -136,7 +149,23 @@ pub fn command_of(payload: &str) -> Option<String> {
 }
 
 /// Emit one `action` record. Fail-silent via the spool's own contract.
-fn record(a: &action::Action) {
+fn record(
+    a: &action::Action,
+    grounding: Option<(
+        &crate::grounding::GroundingRef,
+        crate::grounding::GroundingState,
+    )>,
+) {
+    crate::metrics::emit("action", &action_fields(a, grounding));
+}
+
+fn action_fields<'a>(
+    a: &'a action::Action,
+    grounding: Option<(
+        &'a crate::grounding::GroundingRef,
+        crate::grounding::GroundingState,
+    )>,
+) -> Vec<(&'a str, serde_json::Value)> {
     let mut fields: Vec<(&str, serde_json::Value)> =
         vec![("target_class", a.target_class.as_str().into())];
     if let Some(v) = &a.verb {
@@ -145,7 +174,38 @@ fn record(a: &action::Action) {
     if let Some(t) = &a.target {
         fields.push(("target", t.clone().into()));
     }
-    crate::metrics::emit("action", &fields);
+    if let Some((reference, state)) = grounding {
+        let outcome = match &state {
+            crate::grounding::GroundingState::Used => crate::trace::Outcome::Satisfied,
+            crate::grounding::GroundingState::Empty => crate::trace::Outcome::Unsatisfied,
+            _ => crate::trace::Outcome::Unknown,
+        };
+        let response = if state.advice().is_some() {
+            crate::trace::Response::Warned
+        } else {
+            crate::trace::Response::NoAction
+        };
+        let evaluation =
+            crate::trace::ConstraintEvaluation::new("na-turn-grounding", outcome, response)
+                .placed(
+                    Some(crate::constraint::ConstraintClass::Soft),
+                    Some(crate::constraint::VerificationPoint::Pag),
+                )
+                .hosted_at(crate::hosting::HANK_HOSTS_AT)
+                .grounded(reference, &state);
+        fields.push(("constraints", crate::trace::to_json(&[evaluation])));
+        fields.push(("grounding_outcome", state.as_str().into()));
+        if let Some(id) = &reference.grounding_id {
+            fields.push(("grounding_id", id.clone().into()));
+        }
+        if let Some(faction) = &reference.faction_id {
+            fields.push(("faction_id", faction.clone().into()));
+        }
+        if let Some(worldview) = &reference.worldview_sha256 {
+            fields.push(("worldview_sha256", worldview.clone().into()));
+        }
+    }
+    fields
 }
 
 #[cfg(test)]
@@ -208,6 +268,41 @@ mod tests {
         let a = action::resolve("frobnicate --wibble");
         assert_eq!(a.target_class.as_str(), "unknown");
         assert!(a.verb.is_none());
+    }
+
+    #[test]
+    fn action_trace_binds_the_known_grounding_answer() {
+        let reference = crate::grounding::GroundingRef {
+            scope: Some("na".into()),
+            grounding_id: Some(
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            ),
+            faction_id: Some("raptors".into()),
+            worldview_sha256: Some("sha256:worldview".into()),
+        };
+        let action = action::resolve("ssh deploy@build-01 uptime");
+        let fields = action_fields(
+            &action,
+            Some((&reference, crate::grounding::GroundingState::Used)),
+        );
+        let field = |name| fields.iter().find(|(key, _)| *key == name).map(|(_, v)| v);
+        assert_eq!(
+            field("grounding_id").and_then(serde_json::Value::as_str),
+            reference.grounding_id.as_deref()
+        );
+        assert_eq!(
+            field("faction_id").and_then(serde_json::Value::as_str),
+            reference.faction_id.as_deref()
+        );
+        assert_eq!(
+            field("worldview_sha256").and_then(serde_json::Value::as_str),
+            reference.worldview_sha256.as_deref()
+        );
+        assert_eq!(
+            field("grounding_outcome").and_then(serde_json::Value::as_str),
+            Some("used")
+        );
+        assert_eq!(field("constraints").unwrap()[0]["outcome"], "satisfied");
     }
 }
 

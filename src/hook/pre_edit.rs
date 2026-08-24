@@ -17,11 +17,14 @@ use std::time::{Duration, Instant};
 
 #[path = "decision.rs"]
 mod decision;
+#[path = "pre_edit_helpers.rs"]
+mod helpers;
 #[cfg(feature = "quipu")]
 #[path = "verdicts.rs"]
 mod verdicts;
 
 use decision::Decision;
+use helpers::{decide, fail_open, introduced_text};
 
 use super::measure::{measure_within, relative};
 use super::{deny_envelope, first_notice_for_session, system_message, HookInput};
@@ -92,12 +95,21 @@ fn guard_recorded(
 ) -> (Outcome, Vec<(&'static str, serde_json::Value)>) {
     let started = Instant::now();
     let mut decision = guard_inner(input_json, default_root, tenant, config_override);
+    let input = HookInput::parse(input_json);
+    if let Some(reference) = input.as_ref().and_then(|i| i.grounding.as_ref()) {
+        let state = crate::grounding::assess(
+            Some(reference),
+            crate::grounding::cache_dir().as_deref(),
+            crate::grounding::now_secs(),
+            crate::grounding::max_age_secs(),
+        );
+        apply_grounding(&mut decision, reference, &state);
+    }
     let result = match &decision.outcome {
         Outcome::Allow => "allow",
         Outcome::Deny(_) => "deny",
         Outcome::Notify(_) => "notify",
     };
-    let input = HookInput::parse(input_json);
     let file_path = input.as_ref().and_then(|i| i.tool_input.file_path.clone());
     let ext = file_path
         .as_ref()
@@ -206,6 +218,45 @@ fn guard_recorded(
     );
 
     (decision.outcome, fields)
+}
+
+/// Compose grounding advice with an existing decision without weakening it.
+fn apply_grounding(
+    decision: &mut Decision,
+    reference: &crate::grounding::GroundingRef,
+    state: &crate::grounding::GroundingState,
+) {
+    if *state == crate::grounding::GroundingState::NotApplicable {
+        return;
+    }
+    let outcome = match state {
+        crate::grounding::GroundingState::Used => crate::trace::Outcome::Satisfied,
+        crate::grounding::GroundingState::Empty => crate::trace::Outcome::Unsatisfied,
+        _ => crate::trace::Outcome::Unknown,
+    };
+    let response = if state.advice().is_some() {
+        crate::trace::Response::Warned
+    } else {
+        crate::trace::Response::NoAction
+    };
+    decision.constraints.push(
+        crate::trace::ConstraintEvaluation::new("na-turn-grounding", outcome, response)
+            .placed(
+                Some(crate::constraint::ConstraintClass::Soft),
+                Some(crate::constraint::VerificationPoint::Pag),
+            )
+            .hosted_at(crate::hosting::HANK_HOSTS_AT)
+            .grounded(reference, state),
+    );
+    if let Some(advice) = state.advice() {
+        match &mut decision.outcome {
+            Outcome::Allow => decision.outcome = Outcome::Notify(advice),
+            Outcome::Notify(existing) | Outcome::Deny(existing) => {
+                existing.push('\n');
+                existing.push_str(&advice);
+            }
+        }
+    }
 }
 
 /// The decision itself. Pure apart from reading the repo, so it is directly
@@ -437,55 +488,6 @@ use rule_planes::rule_check;
 // sits beside this module rather than beside the plane it tests.
 #[cfg(all(test, feature = "quipu"))]
 use rule_planes::text_plane;
-
-/// The text an edit INTRODUCES: the full `Write` content, else the `new_string`s
-/// of an `Edit`/`MultiEdit` joined by newlines. `None` when the payload adds no
-/// text (e.g. a pure deletion), in which case there is nothing for a rule to see.
-fn introduced_text(input: &HookInput) -> Option<String> {
-    if let Some(content) = &input.tool_input.content {
-        return Some(content.clone());
-    }
-    let mut parts: Vec<&str> = Vec::new();
-    if let Some(new) = input.tool_input.new_string.as_deref() {
-        parts.push(new);
-    }
-    for edit in &input.tool_input.edits {
-        if let Some(new) = edit.new_string.as_deref() {
-            parts.push(new);
-        }
-    }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("\n"))
-    }
-}
-
-/// Turn a violation into an outcome according to the enforcement mode.
-fn decide(mode: Mode, message: String) -> Outcome {
-    match mode {
-        Mode::Enforce => Outcome::Deny(message),
-        // Advise: report what would have been denied, but never block.
-        Mode::Advise => Outcome::Notify(format!("hank (advise, not blocking): {message}")),
-        Mode::Off => Outcome::Allow,
-    }
-}
-
-/// Degrade to "allow", loudly. Writes the stderr line the contract requires and,
-/// once per session, a user-visible notice — because a hook's stderr is
-/// surfaced only on exit `2`, so stderr alone would be silent in practice.
-fn fail_open(input: &HookInput, kind: &str, reason: &str) -> Outcome {
-    eprintln!("hank: policy guard failed open: {reason}");
-    // The metric that separates "allowed clean" from "allowed because the
-    // check could not run" — the two must never share a label (aegis-0nng).
-    crate::metrics::emit("fail_open", &[("fail_kind", kind.into())]);
-    if first_notice_for_session(input.session_id.as_deref(), kind) {
-        return Outcome::Notify(format!(
-            "hank: policy guard failed open ({reason}) — edits are UNGUARDED this session."
-        ));
-    }
-    Outcome::Allow
-}
 
 #[cfg(test)]
 #[path = "pre_edit_test.rs"]
