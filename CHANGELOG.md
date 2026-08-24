@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.3] - 2026-08-24
+
+### Fixed
+
+- *(hook)* Bound and isolate fail-open marker state
+
 ## [0.6.2] - 2026-08-24
 
 ### Added
