@@ -33,3 +33,4 @@
 HANK_METRICS_PATH = { value = "target/test-state/metrics.jsonl", relative = true }
 HANK_VERDICT_PATH = { value = "target/test-state/verdicts.jsonl", relative = true }
 HANK_PROJECTION_CACHE_PATH = { value = "target/test-state/projection.json", relative = true }
+HANK_FAILOPEN_MARKER_DIR = { value = "target/test-state/failopen", relative = true }
