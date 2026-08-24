@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.2] - 2026-08-24
+
+### Added
+
+- *(graph)* Replace code graph snapshots atomically
+
+### Fixed
+
+- *(policy)* Traverse text rule subclasses
+- *(ci)* Restore a green ratcheted quality gate
+
+### Documentation
+
+- Record the Hank to Yupana binary rename
+
 ## [0.6.1] - 2026-08-07
 
 ### Miscellaneous
